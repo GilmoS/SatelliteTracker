@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: satellite_tracker_db
+    environment:
+      POSTGRES_DB: satellite_tracker
+      POSTGRES_USER: satellite_user
+      POSTGRES_PASSWORD: satellite_pass_dev
+    ports:
+      - "5435:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
