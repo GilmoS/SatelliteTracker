@@ -1,9 +1,9 @@
-﻿using System;
+using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace SatelliteTracker.API.Migrations
+namespace SatelliteTracker.Database.Migrations
 {
     /// <inheritdoc />
     public partial class InitialCreate : Migration
@@ -154,20 +154,11 @@ namespace SatelliteTracker.API.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropTable(
-                name: "Notes");
-
-            migrationBuilder.DropTable(
-                name: "Settings");
-
-            migrationBuilder.DropTable(
-                name: "Passes");
-
-            migrationBuilder.DropTable(
-                name: "TleRecords");
-
-            migrationBuilder.DropTable(
-                name: "Satellites");
+            migrationBuilder.DropTable(name: "Notes");
+            migrationBuilder.DropTable(name: "Settings");
+            migrationBuilder.DropTable(name: "Passes");
+            migrationBuilder.DropTable(name: "TleRecords");
+            migrationBuilder.DropTable(name: "Satellites");
         }
     }
 }
