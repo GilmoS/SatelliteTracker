@@ -1,5 +1,5 @@
 using Microsoft.EntityFrameworkCore;
-using SatelliteTracker.API.Modules.Database;
+using SatelliteTracker.Database;
 
 var builder = WebApplication.CreateBuilder(args);
 
