@@ -29,8 +29,11 @@ public static class PassPredictor
 
             if (!inPass && elev >= minElevationDeg)
             {
-                // Refine AOS to 1-second precision
-                DateTime aosRefined = RefineTime(tle, obs, t.AddSeconds(-coarseStepSeconds), t, minElevationDeg, rising: true);
+                // Refine AOS to 1-second precision, not before fromUtc
+                DateTime searchStart = t.AddSeconds(-coarseStepSeconds);
+                if (searchStart < fromUtc) searchStart = fromUtc;
+                DateTime aosRefined = searchStart == t ? t
+                    : RefineTime(tle, obs, searchStart, t, minElevationDeg, rising: true);
                 var aosLook = GetLookAngles(tle, obs, aosRefined);
                 aosTime = aosRefined;
                 aosAzimuth = aosLook.Azimuth;

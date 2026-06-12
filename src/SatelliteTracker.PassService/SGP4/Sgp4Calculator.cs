@@ -72,27 +72,33 @@ public static class Sgp4Calculator
     public static LookAngles CalculateLookAngles(PositionVelocity satPv, ObserverPosition obs, DateTime utcTime)
     {
         double thetaGst = GreenwichSiderealTime(utcTime);
+        double sinGst = Math.Sin(thetaGst);
+        double cosGst = Math.Cos(thetaGst);
 
-        double obsLng = Math.Atan2(obs.Y, obs.X);
-        double obsLat = Math.Atan2(obs.Z,
-            Math.Sqrt(obs.X * obs.X + obs.Y * obs.Y) * (1 - Sgp4Constants.EarthEccentricitySquared));
+        // Rotate observer from ECEF to ECI (Z-rotation by GST)
+        double obsEciX = obs.X * cosGst - obs.Y * sinGst;
+        double obsEciY = obs.X * sinGst + obs.Y * cosGst;
+        double obsEciZ = obs.Z;
 
         // Range vector in ECI
-        double rx = satPv.X - obs.X;
-        double ry = satPv.Y - obs.Y;
-        double rz = satPv.Z - obs.Z;
+        double rx = satPv.X - obsEciX;
+        double ry = satPv.Y - obsEciY;
+        double rz = satPv.Z - obsEciZ;
         double range = Math.Sqrt(rx * rx + ry * ry + rz * rz);
 
-        // Convert to SEZ (South-East-Zenith) topocentric
+        // Observer's ECI longitude and geocentric latitude
+        double obsLon = Math.Atan2(obsEciY, obsEciX);
+        double obsLat = Math.Atan2(obs.Z, Math.Sqrt(obs.X * obs.X + obs.Y * obs.Y));
+
         double sinLat = Math.Sin(obsLat);
         double cosLat = Math.Cos(obsLat);
-        double sinLng = Math.Sin(obsLng + thetaGst);
-        double cosLng = Math.Cos(obsLng + thetaGst);
+        double sinLon = Math.Sin(obsLon);
+        double cosLon = Math.Cos(obsLon);
 
-        // Rotate from ECI to SEZ
-        double south  = sinLat * cosLng * rx + sinLat * sinLng * ry - cosLat * rz;
-        double east   = -sinLng * rx + cosLng * ry;
-        double zenith =  cosLat * cosLng * rx + cosLat * sinLng * ry + sinLat * rz;
+        // Rotate range vector to SEZ (South-East-Zenith) topocentric frame
+        double south  = sinLat * cosLon * rx + sinLat * sinLon * ry - cosLat * rz;
+        double east   = -sinLon * rx + cosLon * ry;
+        double zenith =  cosLat * cosLon * rx + cosLat * sinLon * ry + sinLat * rz;
 
         double elevation = Math.Asin(zenith / range) * Deg;
         double azimuth = Math.Atan2(-east, south) * Deg;
