@@ -1,16 +1,40 @@
 using Microsoft.EntityFrameworkCore;
 using SatelliteTracker.Database;
+using SatelliteTracker.Database.Repositories;
+using SatelliteTracker.PassService.Services;
+using SatelliteTracker.TLEService.Client;
+using SatelliteTracker.TLEService.Jobs;
+using SatelliteTracker.TLEService.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Database configuration: The AddDbContext method is used to register the AppDbContext with the dependency injection container, allowing it to be injected into controllers and other services that require database access.
-// The UseNpgsql method is called to configure the context to use PostgreSQL as the database provider,
-// and the connection string is retrieved from the application's configuration settings using GetConnectionString("DefaultConnection").
-builder.Services.AddDbContext<AppDbContext>(options =>options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-builder.Services.AddControllers(); 
+// Repositories
+builder.Services.AddScoped<ISatelliteRepository, SatelliteRepository>();
+builder.Services.AddScoped<ITleRepository, TleRepository>();
+builder.Services.AddScoped<IPassRepository, PassRepository>();
+builder.Services.AddScoped<INoteRepository, NoteRepository>();
+builder.Services.AddScoped<ISettingsRepository, SettingsRepository>();
 
-var app = builder.Build(); 
+// Services
+builder.Services.AddScoped<ITleService, TleService>();
+builder.Services.AddScoped<IPassService, PassService>();
+
+// N2YO HTTP client (reads N2YO:ApiKey from configuration)
+builder.Services.AddHttpClient<IN2YOClient, N2YOClient>();
+
+// Background jobs
+builder.Services.AddHostedService<TleUpdateJob>();
+builder.Services.AddHostedService<PassCalculationJob>();
+
+// Caching
+builder.Services.AddMemoryCache();
+
+builder.Services.AddControllers();
+
+var app = builder.Build();
 
 app.MapControllers();
 app.Run();

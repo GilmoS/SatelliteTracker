@@ -27,6 +27,21 @@ public class NoteRepository : INoteRepository
         }
     }
 
+    public async Task<Result<Note>> GetByIdAsync(Guid id)
+    {
+        try
+        {
+            var note = await _context.Notes.FindAsync(id);
+            return note is null
+                ? Result<Note>.Failure($"Note {id} not found.")
+                : Result<Note>.Success(note);
+        }
+        catch (Exception ex)
+        {
+            return Result<Note>.Failure(ex.Message);
+        }
+    }
+
     public async Task<Result<Note>> AddAsync(Note note)
     {
         try
