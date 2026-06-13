@@ -325,9 +325,9 @@ CI runs on GitHub Actions: restore → build → test on every push/PR to main.
 
 ## Build Order (Milestones)
 
-A → Infrastructure (current)
+A → Infrastructure 
 B → TLEService + PassService + SGP4
-C → React Web Frontend
+C → React Web Frontend (current)
 D → Outlook + FCM Push Notifications
 E → Android (Kotlin) basic
 F → Sky View / ARCore
