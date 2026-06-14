@@ -4,12 +4,14 @@ using SatelliteTracker.Database.Entities;
 
 namespace SatelliteTracker.Database.Repositories;
 
+//This repository manages satellite pass data, providing methods to retrieve upcoming and historical passes, as well as adding and updating pass records.
 public class PassRepository : IPassRepository
 {
-    private readonly AppDbContext _context;
+    private readonly AppDbContext _context; // The database context used to interact with the Passes table in the database.
 
-    public PassRepository(AppDbContext context) => _context = context;
+    public PassRepository(AppDbContext context) => _context = context; // Constructor that initializes the repository with the provided database context.
 
+    // Retrieves upcoming satellite passes for a specific satellite within a given time range.
     public async Task<Result<IEnumerable<Pass>>> GetUpcomingAsync(Guid satelliteId, DateTime from, DateTime to)
     {
         try
@@ -27,6 +29,8 @@ public class PassRepository : IPassRepository
         }
     }
 
+
+    // Retrieves historical satellite passes for a specific satellite that occurred after a specified date.
     public async Task<Result<IEnumerable<Pass>>> GetHistoryAsync(Guid satelliteId, DateTime from)
     {
         try
@@ -44,14 +48,15 @@ public class PassRepository : IPassRepository
         }
     }
 
+
+    // Retrieves a specific satellite pass by its unique identifier.
     public async Task<Result<Pass>> GetByIdAsync(Guid id)
     {
         try
         {
             var pass = await _context.Passes.FindAsync(id);
-            return pass is null
-                ? Result<Pass>.Failure($"Pass {id} not found.")
-                : Result<Pass>.Success(pass);
+            // If the pass is not found, return a failure result with an appropriate message; otherwise, return a success result containing the pass.
+            return pass is null? Result<Pass>.Failure($"Pass {id} not found."): Result<Pass>.Success(pass);
         }
         catch (Exception ex)
         {
@@ -59,6 +64,8 @@ public class PassRepository : IPassRepository
         }
     }
 
+
+    // Adds a new satellite pass record to the database and returns the added pass if successful.
     public async Task<Result<Pass>> AddAsync(Pass pass)
     {
         try
@@ -73,6 +80,10 @@ public class PassRepository : IPassRepository
         }
     }
 
+
+
+    
+    // Adds multiple satellite pass records to the database and returns a success result if all passes are added successfully.
     public async Task<Result<bool>> AddRangeAsync(IEnumerable<Pass> passes)
     {
         try
@@ -87,6 +98,10 @@ public class PassRepository : IPassRepository
         }
     }
 
+
+
+    
+    // Updates an existing satellite pass record in the database and returns the updated pass if successful.
     public async Task<Result<Pass>> UpdateAsync(Pass pass)
     {
         try

@@ -2,7 +2,9 @@ using SatelliteTracker.Database.Common;
 using SatelliteTracker.Database.Entities;
 
 namespace SatelliteTracker.Database.Repositories;
-
+// This interface defines the contract for a repository that manages Pass entities in the database.
+// It includes methods for retrieving upcoming and historical passes, getting a pass by its ID, adding new passes, and updating existing passes.
+// Each method returns a Result object that indicates success or failure and contains the relevant data or error information.
 public interface IPassRepository
 {
     Task<Result<IEnumerable<Pass>>> GetUpcomingAsync(Guid satelliteId, DateTime from, DateTime to);

@@ -1,10 +1,13 @@
 namespace SatelliteTracker.Database.Entities;
 
+//This class represents a satellite pass, which is a specific instance of a satellite being visible from a location on Earth.
+//It contains information about the satellite, the TLE record used for calculations, the pass timings, and other related data.
+//This allows tracking and managing satellite passes for observation or other purposes.
 public class Pass
 {
-    public Guid Id { get; set; }
-    public Guid SatelliteId { get; set; }
-    public Guid TleId { get; set; }
+    public Guid Id { get; set; } // Primary key
+    public Guid SatelliteId { get; set; } // Foreign key to the Satellite entity
+    public Guid TleId { get; set; } // Foreign key to the TleRecord entity
     public int OrbitNumber { get; set; }
     public DateTime Aos { get; set; }
     public DateTime Los { get; set; }
@@ -13,11 +16,11 @@ public class Pass
     public decimal LosAzimuth { get; set; }
     public int DurationSec { get; set; }
     public bool NotificationSent { get; set; }
-    public DateTime? NotificationSentAt { get; set; }
-    public bool OutlookSynced { get; set; }
+    public DateTime? NotificationSentAt { get; set; } // Nullable to indicate that it may not have been sent yet
+    public bool OutlookSynced { get; set; } // Indicates whether the pass has been synced with Outlook calendar
     public DateTime CalculatedAt { get; set; }
 
-    public Satellite Satellite { get; set; } = null!;
-    public TleRecord TleRecord { get; set; } = null!;
-    public ICollection<Note> Notes { get; set; } = [];
+    public Satellite Satellite { get; set; } = null!; // Navigation property to the Satellite entity
+    public TleRecord TleRecord { get; set; } = null!;// Navigation property to the TleRecord entity
+    public ICollection<Note> Notes { get; set; } = [];// Navigation property to the collection of associated Note entities
 }

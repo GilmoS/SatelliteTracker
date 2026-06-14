@@ -4,12 +4,13 @@ using SatelliteTracker.Database.Repositories;
 
 namespace SatelliteTracker.PassService.Services;
 
+//This class represents a background job that calculates satellite passes at regular intervals.
 public sealed class PassCalculationJob : IHostedService, IDisposable
 {
-    private readonly ISatelliteRepository _satelliteRepo;
-    private readonly IPassService _passService;
-    private readonly ILogger<PassCalculationJob> _logger;
-    private Timer? _timer;
+    private readonly ISatelliteRepository _satelliteRepo; // Repository for accessing satellite data
+    private readonly IPassService _passService; // Service for calculating and retrieving satellite passes
+    private readonly ILogger<PassCalculationJob> _logger; // Logger for logging information and errors
+    private Timer? _timer; // Timer for scheduling the job
 
     public PassCalculationJob(
         ISatelliteRepository satelliteRepo,

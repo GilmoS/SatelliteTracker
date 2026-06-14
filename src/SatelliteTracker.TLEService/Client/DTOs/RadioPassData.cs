@@ -1,11 +1,11 @@
 using System.Text.Json.Serialization;
 
 namespace SatelliteTracker.TLEService.Client.DTOs;
-
+// This class represents the data for a radio pass of a satellite, including the start, maximum, and end azimuths, elevations, and timestamps.
 public class RadioPassData
 {
     [JsonPropertyName("startAz")]
-    public double StartAz { get; set; }
+    public double StartAz { get; set; } 
 
     [JsonPropertyName("startAzCompass")]
     public string StartAzCompass { get; set; } = string.Empty;

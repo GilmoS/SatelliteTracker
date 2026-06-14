@@ -1,5 +1,8 @@
 namespace SatelliteTracker.Database.Entities;
 
+//This class represents a note associated with a satellite pass.
+//It contains the content of the note, timestamps for creation and updates, and a reference to the associated pass.
+//This allows users to add comments or observations about specific satellite passes.
 public class Note
 {
     public Guid Id { get; set; }

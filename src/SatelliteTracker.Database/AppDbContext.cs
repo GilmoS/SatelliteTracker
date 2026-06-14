@@ -3,16 +3,23 @@ using SatelliteTracker.Database.Entities;
 
 namespace SatelliteTracker.Database;
 
+
+//This class represents the database context for the Satellite Tracker application.
+//It inherits from DbContext and provides access to the various entities in the database, such as Satellites, TleRecords, Passes, Notes, and Settings.
+//The OnModelCreating method is overridden to configure the entity relationships and constraints using Fluent API.
 public class AppDbContext : DbContext
 {
-    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { } // Constructor that accepts DbContextOptions and passes them to the base class constructor
 
+    // DbSet properties for each entity in the database
     public DbSet<Satellite> Satellites => Set<Satellite>();
     public DbSet<TleRecord> TleRecords => Set<TleRecord>();
     public DbSet<Pass> Passes => Set<Pass>();
     public DbSet<Note> Notes => Set<Note>();
     public DbSet<Settings> Settings => Set<Settings>();
 
+    // The OnModelCreating method is overridden to configure the entity relationships and constraints using Fluent API.
+    // It defines the primary keys, property constraints, and relationships between the entities.
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Satellite>(e =>

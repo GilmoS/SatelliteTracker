@@ -4,6 +4,7 @@ using SatelliteTracker.PassService.SGP4;
 
 namespace SatelliteTracker.PassService.Services;
 
+// This interface defines the contract for a service that calculates and retrieves satellite passes.
 public interface IPassService
 {
     Task<Result<IEnumerable<PassResult>>> CalculateAndSavePassesAsync(Guid satelliteId, CancellationToken ct = default);

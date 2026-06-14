@@ -4,20 +4,21 @@ using SatelliteTracker.Database.Entities;
 
 namespace SatelliteTracker.Database.Repositories;
 
+// This repository manages application settings, providing methods to retrieve and update settings records in the database.
 public class SettingsRepository : ISettingsRepository
 {
-    private readonly AppDbContext _context;
+    private readonly AppDbContext _context; // The database context used to interact with the Settings table in the database.
 
-    public SettingsRepository(AppDbContext context) => _context = context;
+    public SettingsRepository(AppDbContext context) => _context = context; // Constructor that initializes the repository with the provided database context.
 
+    // Retrieves the current application settings from the database.
     public async Task<Result<Settings>> GetAsync()
     {
         try
         {
-            var settings = await _context.Settings.FirstOrDefaultAsync();
-            return settings is null
-                ? Result<Settings>.Failure("Settings not found.")
-                : Result<Settings>.Success(settings);
+            var settings = await _context.Settings.FirstOrDefaultAsync(); // Fetch the first settings record from the database, or null if none exists.
+            // If no settings record is found, return a failure result; otherwise, return a success result with the settings.
+            return settings is null? Result<Settings>.Failure("Settings not found."): Result<Settings>.Success(settings);
         }
         catch (Exception ex)
         {
@@ -25,18 +26,20 @@ public class SettingsRepository : ISettingsRepository
         }
     }
 
+    // Inserts a new settings record or updates the existing one in the database.
     public async Task<Result<Settings>> UpsertAsync(Settings settings)
     {
         try
         {
             var existing = await _context.Settings.FirstOrDefaultAsync();
-            if (existing is null)
+
+            if (existing is null) // If no existing settings record is found, create a new one.
             {
                 if (settings.Id == Guid.Empty)
                     settings.Id = Guid.NewGuid();
                 _context.Settings.Add(settings);
             }
-            else
+            else // If an existing settings record is found, update its properties with the new values.
             {
                 existing.AlertMinutes = settings.AlertMinutes;
                 existing.OutlookDays = settings.OutlookDays;

@@ -4,12 +4,18 @@ using SatelliteTracker.Database.Entities;
 
 namespace SatelliteTracker.Database.Repositories;
 
+//This repository manages TLE (Two-Line Element) records,
+//providing methods to retrieve the latest TLE for a satellite,
+//retrieve historical TLEs, add new TLE records, and delete old TLE records from the database.
 public class TleRepository : ITleRepository
 {
-    private readonly AppDbContext _context;
+    private readonly AppDbContext _context; // The database context used to interact with the TleRecords table in the database.
 
-    public TleRepository(AppDbContext context) => _context = context;
+    public TleRepository(AppDbContext context) => _context = context; // Constructor that initializes the repository with the provided database context.
 
+
+
+    // Retrieves the latest TLE record for a satellite identified by its NORAD ID.
     public async Task<Result<TleRecord>> GetLatestByNoradIdAsync(int noradId)
     {
         try
@@ -20,9 +26,8 @@ public class TleRepository : ITleRepository
                 .OrderByDescending(t => t.FetchedAt)
                 .FirstOrDefaultAsync();
 
-            return record is null
-                ? Result<TleRecord>.Failure($"No TLE record found for NORAD ID {noradId}.")
-                : Result<TleRecord>.Success(record);
+            // If no record is found, return a failure result with an appropriate message. else, return a success result containing the latest TLE record.
+            return record is null? Result<TleRecord>.Failure($"No TLE record found for NORAD ID {noradId}."): Result<TleRecord>.Success(record);
         }
         catch (Exception ex)
         {
@@ -30,6 +35,7 @@ public class TleRepository : ITleRepository
         }
     }
 
+    // Retrieves historical TLE records for a satellite identified by its NORAD ID,
     public async Task<Result<IEnumerable<TleRecord>>> GetHistoryAsync(int noradId, DateTime from)
     {
         try
@@ -48,6 +54,8 @@ public class TleRepository : ITleRepository
         }
     }
 
+
+    // Adds a new TLE record to the database.
     public async Task<Result<TleRecord>> AddAsync(TleRecord tle)
     {
         try
@@ -62,6 +70,9 @@ public class TleRepository : ITleRepository
         }
     }
 
+
+    // Deletes TLE records older than a specified cutoff date that do not have any associated passes.
+    //set to six months as requested by the clint, but can be changed to any other value as needed.
     public async Task<Result<bool>> DeleteOlderThanAsync(DateTime cutoff)
     {
         try

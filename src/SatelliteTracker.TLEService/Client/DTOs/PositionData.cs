@@ -1,7 +1,8 @@
 using System.Text.Json.Serialization;
 
 namespace SatelliteTracker.TLEService.Client.DTOs;
-
+// This class represents the position data of a satellite,
+// including its latitude, longitude, altitude, azimuth, elevation, right ascension (RA), declination (Dec), and timestamp.
 public class PositionData
 {
     [JsonPropertyName("satlatitude")]

@@ -3,6 +3,9 @@ using SatelliteTracker.Database.Entities;
 
 namespace SatelliteTracker.Database.Repositories;
 
+// This interface defines the contract for a repository that manages Satellite entities in the database.
+// It provides methods for retrieving, adding, and updating satellite records,
+// with each method returning a Result object that encapsulates the success or failure of the operation along with any relevant data or error messages.
 public interface ISatelliteRepository
 {
     Task<Result<IEnumerable<Satellite>>> GetAllAsync();

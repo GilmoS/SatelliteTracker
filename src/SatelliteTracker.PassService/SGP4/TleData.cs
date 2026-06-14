@@ -1,5 +1,6 @@
 namespace SatelliteTracker.PassService.SGP4;
 
+// this class represents the data from a Two-Line Element (TLE) set, which describes the orbital parameters of a satellite
 public sealed class TleData
 {
     public int SatelliteNumber { get; init; }

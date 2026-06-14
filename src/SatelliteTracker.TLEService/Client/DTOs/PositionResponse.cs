@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace SatelliteTracker.TLEService.Client.DTOs;
 
+// This class represents the response from the TLE service when requesting satellite position data.
 public class PositionResponse
 {
     [JsonPropertyName("info")]
@@ -11,6 +12,7 @@ public class PositionResponse
     public PositionData[] Positions { get; set; } = [];
 }
 
+// This class represents the information about the satellite, including its name, ID, and the count of transactions.
 public class PositionInfo
 {
     [JsonPropertyName("satname")]

@@ -4,12 +4,16 @@ using SatelliteTracker.Database.Entities;
 
 namespace SatelliteTracker.Database.Repositories;
 
+// This repository manages satellite data, providing methods to retrieve, add, and update satellite records in the database.
 public class SatelliteRepository : ISatelliteRepository
 {
-    private readonly AppDbContext _context;
+    private readonly AppDbContext _context; // The database context used to interact with the Satellites table in the database.
 
-    public SatelliteRepository(AppDbContext context) => _context = context;
+    public SatelliteRepository(AppDbContext context) => _context = context; // Constructor that initializes the repository with the provided database context.
 
+
+
+    // Retrieves ALL satellite records from the database.
     public async Task<Result<IEnumerable<Satellite>>> GetAllAsync()
     {
         try
@@ -23,14 +27,17 @@ public class SatelliteRepository : ISatelliteRepository
         }
     }
 
+
+
+    // Retrieves a satellite record by its unique identifier (ID).
     public async Task<Result<Satellite>> GetByIdAsync(Guid id)
     {
         try
         {
             var satellite = await _context.Satellites.FindAsync(id);
-            return satellite is null
-                ? Result<Satellite>.Failure($"Satellite {id} not found.")
-                : Result<Satellite>.Success(satellite);
+
+            // If the satellite is not found, return a failure result with an appropriate error message.
+            return satellite is null? Result<Satellite>.Failure($"Satellite {id} not found."): Result<Satellite>.Success(satellite);
         }
         catch (Exception ex)
         {
@@ -38,14 +45,16 @@ public class SatelliteRepository : ISatelliteRepository
         }
     }
 
+
+
+    // Retrieves a satellite record by its NORAD ID, which is a unique identifier assigned to satellites by the North American Aerospace Defense Command.
     public async Task<Result<Satellite>> GetByNoradIdAsync(int noradId)
     {
         try
         {
             var satellite = await _context.Satellites.FirstOrDefaultAsync(s => s.NoradId == noradId);
-            return satellite is null
-                ? Result<Satellite>.Failure($"Satellite with NORAD ID {noradId} not found.")
-                : Result<Satellite>.Success(satellite);
+            // If the satellite is not found, return a failure result with an appropriate error message. else, return a success result containing the satellite data.
+            return satellite is null? Result<Satellite>.Failure($"Satellite with NORAD ID {noradId} not found."): Result<Satellite>.Success(satellite);
         }
         catch (Exception ex)
         {
@@ -53,6 +62,10 @@ public class SatelliteRepository : ISatelliteRepository
         }
     }
 
+
+
+    
+    // Retrieves all active satellite records from the database.
     public async Task<Result<IEnumerable<Satellite>>> GetActiveAsync()
     {
         try
@@ -66,6 +79,10 @@ public class SatelliteRepository : ISatelliteRepository
         }
     }
 
+
+
+
+    // Adds a new satellite record to the database.
     public async Task<Result<Satellite>> AddAsync(Satellite satellite)
     {
         try
@@ -80,6 +97,9 @@ public class SatelliteRepository : ISatelliteRepository
         }
     }
 
+
+
+    // Updates an existing satellite record in the database.
     public async Task<Result<Satellite>> UpdateAsync(Satellite satellite)
     {
         try

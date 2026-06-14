@@ -2,7 +2,7 @@ using SatelliteTracker.Database.Common;
 using SatelliteTracker.Database.Entities;
 
 namespace SatelliteTracker.Database.Repositories;
-
+// This interface defines the contract for a repository that manages TleRecord entities in the database.
 public interface ITleRepository
 {
     Task<Result<TleRecord>> GetLatestByNoradIdAsync(int noradId);

@@ -2,29 +2,33 @@ namespace SatelliteTracker.PassService.SGP4;
 
 public static class Sgp4Calculator
 {
-    private const double Rad = Math.PI / 180.0;
-    private const double Deg = 180.0 / Math.PI;
-    private const double TwoPi = 2.0 * Math.PI;
-    private const double EarthRadiusKm = 6378.137;
-    private const double XKE = 0.07436691613317;    // sqrt(GM) in ER^(3/2)/min
-    private const double XJ2 = 1.08262998905e-3;
-    private const double XJ3 = -2.53215306e-6;
-    private const double XJ4 = -1.61098761e-6;
-    private const double CK2 = 0.5 * XJ2;
-    private const double CK4 = -0.375 * XJ4;
-    private const double S = 1.01222928;
-    private const double QOMS2T = 1.88027916e-9;
-    private const double MinutesPerDay = 1440.0;
+    // --- Constants ---
+    private const double Rad = Math.PI / 180.0; // degrees to radians
+    private const double Deg = 180.0 / Math.PI; // radians to degrees
+    private const double TwoPi = 2.0 * Math.PI; // 2 * pi
+    private const double EarthRadiusKm = 6378.137; // Earth's equatorial radius in kilometers
+    private const double XKE = 0.07436691613317; // sqrt(GM) in ER^(3/2)/min
+    private const double XJ2 = 1.08262998905e-3; // Earth's second zonal harmonic
+    private const double XJ3 = -2.53215306e-6; // Earth's third zonal harmonic
+    private const double XJ4 = -1.61098761e-6; // Earth's fourth zonal harmonic
+    private const double CK2 = 0.5 * XJ2; // Ck2 = 0.5 * J2
+    private const double CK4 = -0.375 * XJ4; // Ck4 = -0.375 * J4
+    private const double S = 1.01222928; // s in Earth radii
+    private const double QOMS2T = 1.88027916e-9; // (q0-s)^4 ER^4
+    private const double MinutesPerDay = 1440.0; // Number of minutes in a day
 
+
+    // Run SGP4 to calculate satellite position and velocity in ECI frame at given UTC time
     public static PositionVelocity CalculatePositionVelocity(TleData tle, DateTime utcTime)
     {
         double tsince = (utcTime - tle.Epoch).TotalMinutes;
-        return RunSgp4(tle, tsince);
+        return RunSgp4(tle, tsince); //
     }
 
+    // Convert ECI position to geodetic coordinates (latitude, longitude, altitude)
     public static GeoPosition ToGeodetic(PositionVelocity pv, DateTime utcTime)
     {
-        double thetaGst = GreenwichSiderealTime(utcTime);
+        double thetaGst = GreenwichSiderealTime(utcTime); // convert ECI to ECEF by rotating around Z-axis by GST
 
         double x = pv.X, y = pv.Y, z = pv.Z;
         double lon = Math.Atan2(y, x) - thetaGst;
@@ -51,6 +55,7 @@ public static class Sgp4Calculator
         return new GeoPosition(lat * Deg, lon * Deg, altKm);
     }
 
+    // Convert geodetic coordinates to ECEF observer position
     public static ObserverPosition CalculateObserverPosition(double latDeg, double lngDeg, double altMeters)
     {
         double lat = latDeg * Rad;
@@ -69,11 +74,14 @@ public static class Sgp4Calculator
         return new ObserverPosition(x, y, z);
     }
 
+    // Calculate look angles (azimuth, elevation, range) from observer to satellite at given UTC time
     public static LookAngles CalculateLookAngles(PositionVelocity satPv, ObserverPosition obs, DateTime utcTime)
     {
         double thetaGst = GreenwichSiderealTime(utcTime);
-        double sinGst = Math.Sin(thetaGst);
-        double cosGst = Math.Cos(thetaGst);
+
+        // precompute sine and cosine of GST for rotation
+        double sinGst = Math.Sin(thetaGst); 
+        double cosGst = Math.Cos(thetaGst); 
 
         // Rotate observer from ECEF to ECI (Z-rotation by GST)
         double obsEciX = obs.X * cosGst - obs.Y * sinGst;
@@ -90,6 +98,7 @@ public static class Sgp4Calculator
         double obsLon = Math.Atan2(obsEciY, obsEciX);
         double obsLat = Math.Atan2(obs.Z, Math.Sqrt(obs.X * obs.X + obs.Y * obs.Y));
 
+        // Precompute sine and cosine of observer's latitude and longitude for SEZ transformation
         double sinLat = Math.Sin(obsLat);
         double cosLat = Math.Cos(obsLat);
         double sinLon = Math.Sin(obsLon);
@@ -102,15 +111,18 @@ public static class Sgp4Calculator
 
         double elevation = Math.Asin(zenith / range) * Deg;
         double azimuth = Math.Atan2(-east, south) * Deg;
-        if (azimuth < 0) azimuth += 360.0;
+
+        if (azimuth < 0) // ensure azimuth is in [0, 360) degrees
+            azimuth += 360.0;
 
         return new LookAngles(azimuth, elevation, range);
     }
 
-    // --- Core SGP4 propagator (simplified/near-Earth orbit) ---
+    // --- Core SGP4 propagator (simplified/near-Earth orbit) per Vallado 2008 ---
 
     private static PositionVelocity RunSgp4(TleData tle, double tsince)
     {
+        // Extract orbital elements from TLE
         double xno  = tle.MeanMotion * TwoPi / MinutesPerDay;  // rad/min
         double xnodeo = tle.RightAscension * Rad;
         double omegao = tle.ArgumentOfPerigee * Rad;
@@ -119,6 +131,7 @@ public static class Sgp4Calculator
         double eo    = tle.Eccentricity;
         double bstar = tle.BStarDrag;
 
+        // --- Initialization for SGP4 ---
         double a1 = Math.Pow(XKE / xno, 2.0 / 3.0);
         double cosio = Math.Cos(xincl);
         double theta2 = cosio * cosio;
@@ -127,17 +140,20 @@ public static class Sgp4Calculator
         double betao2 = 1.0 - eosq;
         double betao = Math.Sqrt(betao2);
 
+        // Compute the semimajor axis and mean motion with secular perturbations
         double del1 = 1.5 * CK2 * x3thm1 / (a1 * a1 * betao * betao2);
         double ao   = a1 * (1.0 - del1 * (0.5 / 3.0 + del1 * (1.0 + 134.0 / 81.0 * del1)));
         double delo = 1.5 * CK2 * x3thm1 / (ao * ao * betao * betao2);
         double xnodp = xno / (1.0 + delo);
         double aodp = ao / (1.0 - delo);
 
+        // For perigee less than 220 kilometers, the "simple" flag is set and the equations are truncated to linear variation in sqrt(a) and quadratic variation in mean anomaly.
+        // Also, the c3 term, which accounts for atmospheric drag, is dropped.
         double s4 = S;
         double qoms24 = QOMS2T;
         double perigee = (aodp * (1.0 - eo) - 1.0) * EarthRadiusKm;
 
-        if (perigee < 156.0)
+        if (perigee < 156.0) // perigee is in kilometers above Earth's surface
         {
             s4 = perigee - 78.0;
             if (perigee <= 98.0) s4 = 20.0;
@@ -145,6 +161,7 @@ public static class Sgp4Calculator
             s4 = s4 / EarthRadiusKm + 1.0;
         }
 
+        // --- Precompute constants for secular and periodic effects ---
         double pinvsq = 1.0 / (aodp * aodp * betao2 * betao2);
         double tsi = 1.0 / (aodp - s4);
         double eta = aodp * eo * tsi;
@@ -154,12 +171,13 @@ public static class Sgp4Calculator
         double coef = qoms24 * Math.Pow(tsi, 4.0);
         double coef1 = coef / Math.Pow(psisq, 3.5);
 
+        // Compute the coefficients for the secular and periodic perturbations
         double c2 = coef1 * xnodp
             * (aodp * (1.0 + 1.5 * etasq + eeta * (4.0 + etasq))
             + 0.75 * CK2 * tsi / psisq * x3thm1 * (8.0 + 3.0 * etasq * (8.0 + etasq)));
         double c1 = bstar * c2;
 
-        double sinio = Math.Sin(xincl);
+        double sinio = Math.Sin(xincl); 
         double a3ovk2 = -XJ3 / CK2;
         double c3 = coef * tsi * a3ovk2 * xnodp * sinio / eo;
         double x1mth2 = 1.0 - theta2;
@@ -178,7 +196,7 @@ public static class Sgp4Calculator
         double temp1 = 3.0 * CK2 * pinvsq * xnodp;
         double temp2 = temp1 * CK2 * pinvsq;
         double temp3 = 1.25 * CK4 * pinvsq * pinvsq * xnodp;
-
+        
         double xmdot = xnodp
             + 0.5 * temp1 * betao * x3thm1
             + 0.0625 * temp2 * betao * (13.0 - 78.0 * theta2 + 137.0 * theta4);
@@ -212,6 +230,7 @@ public static class Sgp4Calculator
         double omgadf = omegao + omgdot * tsince;
         double xnoddf = xnodeo + xnodot * tsince;
 
+        // Apply secular effects to mean anomaly, argument of perigee, and right ascension
         double omega = omgadf;
         double xmp = xmdf;
         double tsq = tsince * tsince;
@@ -220,11 +239,13 @@ public static class Sgp4Calculator
         double tempe = bstar * c4 * tsince;
         double templ = t2cof * tsq;
 
-        xmp   += xmcof * (Math.Pow(1.0 + eta * Math.Cos(xmdf), 3.0) - delmo);
+        // Update mean anomaly for secular effects
+        xmp += xmcof * (Math.Pow(1.0 + eta * Math.Cos(xmdf), 3.0) - delmo);
         omega += omgcof * tsince;
         tempe += omgcof * c5 * (Math.Sin(xmp) - sinmo);
         templ += tsince * tsq * (c1 * c1 / 2.0);
 
+        
         double a = aodp * tempa * tempa;
         double e = eo - tempe;
         e = Math.Max(e, 1e-6);
@@ -329,6 +350,7 @@ public static class Sgp4Calculator
         return NormalizeAngle(theta);
     }
 
+    // Convert DateTime to Julian Date
     private static double ToJulianDate(DateTime dt)
     {
         int y = dt.Year;
@@ -342,6 +364,7 @@ public static class Sgp4Calculator
              + (dt.Hour + dt.Minute / 60.0 + dt.Second / 3600.0 + dt.Millisecond / 3600000.0) / 24.0;
     }
 
+    // Normalize angle to [0, 2*pi)
     private static double NormalizeAngle(double angle)
     {
         angle %= TwoPi;
@@ -349,6 +372,7 @@ public static class Sgp4Calculator
         return angle;
     }
 
+    // Normalize angle to [0, 2*pi)
     private static double Fmod2p(double x)
     {
         x %= TwoPi;
