@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Options;
 using SatelliteTracker.API.DTOs;
+using SatelliteTracker.Database.Common;
 using SatelliteTracker.Database.Repositories;
 using SatelliteTracker.TLEService.Client;
 
@@ -12,21 +14,23 @@ namespace SatelliteTracker.API.Controllers;
 public class RealTimeController : BaseController
 {
 
-    private const double ObserverLat = 32.0055; //to be removed and replaced with user input in the 
-    private const double ObserverLng = 34.8854;//to be removed and replaced with user input in the 
-    private const double ObserverAltM = 135; //to be removed and replaced with user input in the 
 
     private readonly ISatelliteRepository _satelliteRepo; // Repository for accessing satellite data from the database
     private readonly IN2YOClient _n2yo; // Client for interacting with the N2YO API to retrieve real-time satellite data
     private readonly IMemoryCache _cache; // In-memory cache for storing recent satellite position and track data to reduce API calls and improve performance
+    private readonly ObserverSettings _observer;
+
+
 
     // Constructor that initializes the satellite repository, N2YO client, and memory cache through dependency injection.
-    public RealTimeController(ISatelliteRepository satelliteRepo, IN2YOClient n2yo, IMemoryCache cache)
+    public RealTimeController(ISatelliteRepository satelliteRepo, IN2YOClient n2yo, IMemoryCache cache , IOptions<ObserverSettings> observer)
     {
         _satelliteRepo = satelliteRepo;
         _n2yo = n2yo;
         _cache = cache;
+        _observer = observer.Value;
     }
+    
 
     // GET api/satellites/{id}/position - Retrieves the current position of a satellite by its ID
     [HttpGet("{id:guid}/position")]
@@ -44,9 +48,9 @@ public class RealTimeController : BaseController
             return Ok(cached);
 
         // Call the N2YO API to get the current position of the satellite. We request only 1 second of data since we only need the latest position.
-        var result = await _n2yo.GetPositionsAsync(noradId, ObserverLat, ObserverLng, ObserverAltM, seconds: 1, ct);
+        var result = await _n2yo.GetPositionsAsync(noradId, _observer.Lat, _observer.Lng, _observer.AltMeters, seconds: 1, ct);
         if (!result.IsSuccess)
-            return StatusCode(500, new { error = result.Error });
+            return ToError(result.Error!);
 
         // Ensure we have position data returned from the API. If not, return a 500 error indicating that no position data was available.
         var positions = result.Value!.Positions;
@@ -71,9 +75,9 @@ public class RealTimeController : BaseController
         if (_cache.TryGetValue(cacheKey, out TrackDto? cached))
             return Ok(cached);
 
-        var result = await _n2yo.GetPositionsAsync(
-            noradId, ObserverLat, ObserverLng, ObserverAltM, seconds: 300, ct);
-        if (!result.IsSuccess) return StatusCode(500, new { error = result.Error });
+        var result = await _n2yo.GetPositionsAsync(noradId, _observer.Lat, _observer.Lng, _observer.AltMeters, seconds: 300, ct);
+        if (!result.IsSuccess)
+            return ToError(result.Error!);
 
         var dto = new TrackDto
         {
