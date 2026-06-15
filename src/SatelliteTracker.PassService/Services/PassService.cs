@@ -11,11 +11,11 @@ public class PassService : IPassService
 {
     // Constants for the observer's location and minimum elevation angle for pass prediction
     // These values are used to determine when a satellite pass is visible from the observer's location.
-    //for now , the observer's location is hardcoded to a specific latitude, longitude, and altitude (Ben Gurion International Airport , Israel).
-    private const double ObserverLat = 32.0055;
-    private const double ObserverLng = 34.8854;
-    private const double ObserverAltM = 135.0;
-    private const double MinElevationDeg = 5.0;
+
+    private const double ObserverLat = 32.0055;//to be removed and replaced with user input in the 
+    private const double ObserverLng = 34.8854; //to be removed and replaced with user input in the 
+    private const double ObserverAltM = 135.0; //to be removed and replaced with user input in the 
+    private const double MinElevationDeg = 5.0; //to be removed and replaced with user input in the 
 
     private readonly ISatelliteRepository _satelliteRepo; // Repository for accessing satellite data
     private readonly ITleRepository _tleRepo; // Repository for accessing TLE (Two-Line Element) data, which is used for satellite orbit prediction

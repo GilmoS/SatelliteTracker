@@ -4,14 +4,18 @@ using SatelliteTracker.PassService.Services;
 
 namespace SatelliteTracker.API.Controllers;
 
+// This controller manages satellite passes.
+// It provides endpoints to retrieve upcoming passes, pass history, and specific pass details by ID.
 [ApiController]
 [Route("api/passes")]
-public class PassesController : ControllerBase
+public class PassesController : BaseController
 {
-    private readonly IPassService _passService;
+    private readonly IPassService _passService;// Service for managing satellite pass data
 
-    public PassesController(IPassService passService) => _passService = passService;
+    public PassesController(IPassService passService) => _passService = passService; // Constructor that injects the pass service
 
+
+    // GET api/passes/{satelliteId}
     [HttpGet("{satelliteId:guid}")]
     public async Task<IActionResult> GetUpcoming(Guid satelliteId)
     {
@@ -20,6 +24,8 @@ public class PassesController : ControllerBase
         return Ok(result.Value!.Select(PassDto.From));
     }
 
+
+    // GET api/passes/{satelliteId}/history
     [HttpGet("{satelliteId:guid}/history")]
     public async Task<IActionResult> GetHistory(Guid satelliteId)
     {
@@ -28,6 +34,8 @@ public class PassesController : ControllerBase
         return Ok(result.Value!.Select(PassDto.From));
     }
 
+
+    // GET api/passes/pass/{id}
     [HttpGet("pass/{id:guid}")]
     public async Task<IActionResult> GetById(Guid id)
     {
@@ -36,8 +44,6 @@ public class PassesController : ControllerBase
         return Ok(PassDto.From(result.Value!));
     }
 
-    private IActionResult ToError(string error) =>
-        error.Contains("not found", StringComparison.OrdinalIgnoreCase)
-            ? NotFound(new { error })
-            : StatusCode(500, new { error });
+    // Helper method to convert error messages into appropriate HTTP responses.
+   
 }

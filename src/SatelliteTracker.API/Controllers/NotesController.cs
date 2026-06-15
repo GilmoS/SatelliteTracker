@@ -5,13 +5,18 @@ using SatelliteTracker.Database.Repositories;
 
 namespace SatelliteTracker.API.Controllers;
 
+//This controller manages notes associated with passes. It allows clients to create, read, update, and delete notes for specific passes.
+//Each note is linked to a pass via the PassId property. The controller uses an INoteRepository to interact with the database and perform CRUD operations on notes.
+//Error handling is implemented to return appropriate HTTP status codes based on the success or failure of each operation.
 [ApiController]
-public class NotesController : ControllerBase
+public class NotesController : BaseController
 {
-    private readonly INoteRepository _repo;
+    private readonly INoteRepository _repo; // Repository for managing notes in the database
 
-    public NotesController(INoteRepository repo) => _repo = repo;
+    public NotesController(INoteRepository repo) => _repo = repo; // Constructor that injects the note repository
 
+
+    // GET /api/passes/{passId}/notes - Retrieves all notes associated with a specific pass
     [HttpGet("/api/passes/{passId:guid}/notes")]
     public async Task<IActionResult> GetByPassId(Guid passId)
     {
@@ -20,6 +25,8 @@ public class NotesController : ControllerBase
         return Ok(result.Value!.Select(NoteDto.From));
     }
 
+
+    // POST /api/passes/{passId}/notes - Creates a new note for a specific pass
     [HttpPost("/api/passes/{passId:guid}/notes")]
     public async Task<IActionResult> Add(Guid passId, [FromBody] CreateNoteRequest request)
     {
@@ -37,6 +44,7 @@ public class NotesController : ControllerBase
         return Ok(NoteDto.From(result.Value!));
     }
 
+    // PUT /api/notes/{id} - Updates an existing note by its ID
     [HttpPut("/api/notes/{id:guid}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateNoteRequest request)
     {
@@ -52,6 +60,7 @@ public class NotesController : ControllerBase
         return Ok(NoteDto.From(result.Value!));
     }
 
+    // DELETE /api/notes/{id} - Deletes a note by its ID
     [HttpDelete("/api/notes/{id:guid}")]
     public async Task<IActionResult> Delete(Guid id)
     {
@@ -60,8 +69,6 @@ public class NotesController : ControllerBase
         return Ok();
     }
 
-    private IActionResult ToError(string error) =>
-        error.Contains("not found", StringComparison.OrdinalIgnoreCase)
-            ? NotFound(new { error })
-            : StatusCode(500, new { error });
+   
+    
 }
