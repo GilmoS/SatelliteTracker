@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Moq;
 using SatelliteTracker.Database.Common;
 using SatelliteTracker.Database.Entities;
@@ -31,6 +32,9 @@ public class PassServiceTests
 
     private static readonly Guid TestTleId = Guid.NewGuid();
 
+
+   
+
     private static TleRecord MakeTleRecord(string line2) => new()
     {
         Id = TestTleId,
@@ -41,18 +45,22 @@ public class PassServiceTests
         FetchedAt = DateTime.UtcNow
     };
 
-    private static (IPassService service,
-                    Mock<ISatelliteRepository> satRepo,
-                    Mock<ITleRepository> tleRepo,
-                    Mock<IPassRepository> passRepo)
+    private static (IPassService service, Mock<ISatelliteRepository> satRepo, Mock<ITleRepository> tleRepo,Mock<IPassRepository> passRepo)
         CreateService()
     {
         var satRepo = new Mock<ISatelliteRepository>();
         var tleRepo = new Mock<ITleRepository>();
         var passRepo = new Mock<IPassRepository>();
         var logger = new Mock<ILogger<SatelliteTracker.PassService.Services.PassService>>();
+        var observerOptions = Options.Create(new ObserverSettings
+        {
+            Lat = 32.0055,
+            Lng = 34.8854,
+            AltMeters = 135.0,
+            MinElevationDeg = 5.0
+        });
         var service = new SatelliteTracker.PassService.Services.PassService(
-            satRepo.Object, tleRepo.Object, passRepo.Object, logger.Object);
+            satRepo.Object, tleRepo.Object, passRepo.Object, logger.Object, observerOptions);
         return (service, satRepo, tleRepo, passRepo);
     }
 

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using SatelliteTracker.Database;
+using SatelliteTracker.Database.Common;
 using SatelliteTracker.Database.Repositories;
 using SatelliteTracker.PassService.Services;
 using SatelliteTracker.TLEService.Client;
@@ -7,6 +8,8 @@ using SatelliteTracker.TLEService.Jobs;
 using SatelliteTracker.TLEService.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.Configure<ObserverSettings>(builder.Configuration.GetSection("Observer"));
 
 // Database context
 builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));

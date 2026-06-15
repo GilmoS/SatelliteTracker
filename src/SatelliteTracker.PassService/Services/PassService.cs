@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using SatelliteTracker.Database.Common;
 using SatelliteTracker.Database.Entities;
 using SatelliteTracker.Database.Repositories;
@@ -11,25 +12,23 @@ public class PassService : IPassService
 {
     // Constants for the observer's location and minimum elevation angle for pass prediction
     // These values are used to determine when a satellite pass is visible from the observer's location.
-    //for now , the observer's location is hardcoded to a specific latitude, longitude, and altitude (Ben Gurion International Airport , Israel).
-    private const double ObserverLat = 32.0055;
-    private const double ObserverLng = 34.8854;
-    private const double ObserverAltM = 135.0;
-    private const double MinElevationDeg = 5.0;
+
 
     private readonly ISatelliteRepository _satelliteRepo; // Repository for accessing satellite data
     private readonly ITleRepository _tleRepo; // Repository for accessing TLE (Two-Line Element) data, which is used for satellite orbit prediction
     private readonly IPassRepository _passRepo; // Repository for accessing and storing satellite pass data
     private readonly ILogger<PassService> _logger; // Logger for logging information and errors
+    private readonly ObserverSettings _observer;
 
 
     // Constructor that initializes the repositories and logger through dependency injection.
-    public PassService(ISatelliteRepository satelliteRepo,ITleRepository tleRepo,IPassRepository passRepo,ILogger<PassService> logger)
+    public PassService(ISatelliteRepository satelliteRepo,ITleRepository tleRepo,IPassRepository passRepo,ILogger<PassService> logger , IOptions<ObserverSettings> observer)
     {
         _satelliteRepo = satelliteRepo;
         _tleRepo = tleRepo;
         _passRepo = passRepo;
         _logger = logger;
+        _observer = observer.Value;
     }
 
     // This method calculates the upcoming passes of a satellite and saves them to the database.
@@ -65,12 +64,12 @@ public class PassService : IPassService
         var passResults = PassPredictor.PredictPasses(
             tleData,
             satelliteId,
-            ObserverLat,
-            ObserverLng,
-            ObserverAltM,
+            _observer.Lat,
+            _observer.Lng,
+            _observer.AltMeters,
             DateTime.UtcNow,
             DateTime.UtcNow.AddDays(7),
-            MinElevationDeg).ToList();
+            _observer.MinElevationDeg).ToList();
 
         if (passResults.Count == 0) // If no passes are predicted, return an empty result
             return Result<IEnumerable<PassResult>>.Success(passResults);
