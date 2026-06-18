@@ -44,6 +44,6 @@ public class PassesController : BaseController
         return Ok(PassDto.From(result.Value!));
     }
 
-    // Helper method to convert error messages into appropriate HTTP responses.
+    
    
 }
