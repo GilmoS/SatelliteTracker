@@ -13,4 +13,5 @@ public interface IPassRepository
     Task<Result<Pass>> AddAsync(Pass pass);
     Task<Result<bool>> AddRangeAsync(IEnumerable<Pass> passes);
     Task<Result<Pass>> UpdateAsync(Pass pass);
+    Task<Result<bool>> DeleteUpcomingAsync(Guid satelliteId, DateTime from);
 }

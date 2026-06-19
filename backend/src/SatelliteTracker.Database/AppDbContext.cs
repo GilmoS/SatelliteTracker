@@ -58,5 +58,29 @@ public class AppDbContext : DbContext
              .HasForeignKey(n => n.PassId)
              .OnDelete(DeleteBehavior.Cascade);
         });
+
+        //Seed data,the two defult satellites
+        modelBuilder.Entity<Satellite>().HasData(
+        new Satellite
+        {
+            Id = Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            Name = "EROS C3",
+            NoradId = 54880,
+            Description = "EROS C3 observation satellite",
+            IsActive = true,
+            IsDefault = true,
+            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        },
+        new Satellite
+        {
+            Id = Guid.Parse("22222222-2222-2222-2222-222222222222"),
+            Name = "RUNNER-1",
+            NoradId = 56953,
+            Description = "RUNNER-1 observation satellite",
+            IsActive = true,
+            IsDefault = true,
+            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        }
+    );
     }
 }

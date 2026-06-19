@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using SatelliteTracker.Database.Repositories;
@@ -7,19 +8,15 @@ namespace SatelliteTracker.PassService.Services;
 //This class represents a background job that calculates satellite passes at regular intervals.
 public sealed class PassCalculationJob : IHostedService, IDisposable
 {
-    private readonly ISatelliteRepository _satelliteRepo; // Repository for accessing satellite data
-    private readonly IPassService _passService; // Service for calculating and retrieving satellite passes
+    
     private readonly ILogger<PassCalculationJob> _logger; // Logger for logging information and errors
+    private readonly IServiceScopeFactory _scopeFactory; 
     private Timer? _timer; // Timer for scheduling the job
 
-    public PassCalculationJob(
-        ISatelliteRepository satelliteRepo,
-        IPassService passService,
-        ILogger<PassCalculationJob> logger)
+    public PassCalculationJob(ILogger<PassCalculationJob> logger, IServiceScopeFactory scopeFactory)
     {
-        _satelliteRepo = satelliteRepo;
-        _passService = passService;
         _logger = logger;
+        _scopeFactory = scopeFactory;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -30,7 +27,12 @@ public sealed class PassCalculationJob : IHostedService, IDisposable
 
     private async void RunAsync(object? state)
     {
-        var result = await _satelliteRepo.GetActiveAsync();
+        using var scope = _scopeFactory.CreateScope();
+
+        var satelliteRepo = scope.ServiceProvider.GetRequiredService<ISatelliteRepository>();
+        var passService = scope.ServiceProvider.GetRequiredService<IPassService>();
+
+        var result = await satelliteRepo.GetActiveAsync();
         if (!result.IsSuccess)
         {
             _logger.LogError("Failed to fetch active satellites: {Error}", result.Error);
@@ -39,7 +41,7 @@ public sealed class PassCalculationJob : IHostedService, IDisposable
 
         foreach (var satellite in result.Value!)
         {
-            var passResult = await _passService.CalculateAndSavePassesAsync(satellite.Id);
+            var passResult = await passService.CalculateAndSavePassesAsync(satellite.Id);
             if (passResult.IsSuccess)
                 _logger.LogInformation("Calculated passes for {Name} (NORAD {NoradId})",
                     satellite.Name, satellite.NoradId);
