@@ -37,7 +37,16 @@ builder.Services.AddMemoryCache();
 
 builder.Services.AddControllers();
 
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("DevFrontend", policy =>
+        policy.WithOrigins("http://localhost:5173")
+              .AllowAnyMethod()
+              .AllowAnyHeader());
+});
+
 var app = builder.Build();
 
+app.UseCors("DevFrontend");
 app.MapControllers();
 app.Run();

@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* Leaflet popup overrides */
+.leaflet-popup-content-wrapper {
+  background: #090d09;
+  border: 0.5px solid #1a3a1a;
+  border-radius: 2px;
+  box-shadow: 0 0 12px rgba(34, 197, 94, 0.15);
+  padding: 0;
+}
+
+.leaflet-popup-content {
+  margin: 0;
+}
+
+.leaflet-popup-tip {
+  background: #1a3a1a;
+}
+
+.leaflet-container {
+  background: #080c08;
+  font-family: monospace;
+}
