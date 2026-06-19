@@ -16,6 +16,7 @@ internal static class TestDbContextFactory
             .Options;
 
         var context = new TestAppDbContext(options);
+        context.Database.EnsureDeleted();
         context.Database.EnsureCreated();
         return (context, connection);
     }

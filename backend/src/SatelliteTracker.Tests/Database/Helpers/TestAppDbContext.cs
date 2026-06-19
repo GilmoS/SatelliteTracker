@@ -22,5 +22,9 @@ internal class TestAppDbContext : AppDbContext
                     : v.Split(',', StringSplitOptions.RemoveEmptyEntries)
                         .Select(int.Parse).ToArray()
             );
+            
+        
     }
+    // Remove seed data in test env
+     protected override void SeedData(ModelBuilder modelBuilder) { }
 }
