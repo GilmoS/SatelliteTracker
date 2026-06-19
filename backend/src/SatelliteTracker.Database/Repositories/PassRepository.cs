@@ -29,7 +29,6 @@ public class PassRepository : IPassRepository
         }
     }
 
-
     // Retrieves historical satellite passes for a specific satellite that occurred after a specified date.
     public async Task<Result<IEnumerable<Pass>>> GetHistoryAsync(Guid satelliteId, DateTime from)
     {
@@ -48,7 +47,6 @@ public class PassRepository : IPassRepository
         }
     }
 
-
     // Retrieves a specific satellite pass by its unique identifier.
     public async Task<Result<Pass>> GetByIdAsync(Guid id)
     {
@@ -56,14 +54,13 @@ public class PassRepository : IPassRepository
         {
             var pass = await _context.Passes.FindAsync(id);
             // If the pass is not found, return a failure result with an appropriate message; otherwise, return a success result containing the pass.
-            return pass is null? Result<Pass>.Failure($"Pass {id} not found."): Result<Pass>.Success(pass);
+            return pass is null ? Result<Pass>.Failure($"Pass {id} not found.") : Result<Pass>.Success(pass);
         }
         catch (Exception ex)
         {
             return Result<Pass>.Failure(ex.Message);
         }
     }
-
 
     // Adds a new satellite pass record to the database and returns the added pass if successful.
     public async Task<Result<Pass>> AddAsync(Pass pass)
@@ -80,9 +77,6 @@ public class PassRepository : IPassRepository
         }
     }
 
-
-
-    
     // Adds multiple satellite pass records to the database and returns a success result if all passes are added successfully.
     public async Task<Result<bool>> AddRangeAsync(IEnumerable<Pass> passes)
     {
@@ -98,9 +92,6 @@ public class PassRepository : IPassRepository
         }
     }
 
-
-
-    
     // Updates an existing satellite pass record in the database and returns the updated pass if successful.
     public async Task<Result<Pass>> UpdateAsync(Pass pass)
     {
@@ -113,6 +104,28 @@ public class PassRepository : IPassRepository
         catch (Exception ex)
         {
             return Result<Pass>.Failure(ex.Message);
+        }
+    }
+
+    // Deletes upcoming predicted passes for a satellite (passes with AOS >= from)
+    public async Task<Result<bool>> DeleteUpcomingAsync(Guid satelliteId, DateTime from)
+    {
+        try
+        {
+            var upcoming = await _context.Passes
+                .Where(p => p.SatelliteId == satelliteId && p.Aos >= from)
+                .ToListAsync();
+
+            if (!upcoming.Any())
+                return Result<bool>.Success(true);
+
+            _context.Passes.RemoveRange(upcoming);
+            await _context.SaveChangesAsync();
+            return Result<bool>.Success(true);
+        }
+        catch (Exception ex)
+        {
+            return Result<bool>.Failure(ex.Message);
         }
     }
 }

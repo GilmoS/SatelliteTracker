@@ -19,22 +19,22 @@ dotnet restore
 dotnet build
 
 # Run the API
-dotnet run --project src/SatelliteTracker.API
+dotnet run --project backend/src/SatelliteTracker.API
 
 # Run all tests
 dotnet test
 
 # Run a single test project
-dotnet test src/<TestProject>/<TestProject>.csproj
+dotnet test backend/src/<TestProject>/<TestProject>.csproj
 
 # Run a single test by name
 dotnet test --filter "FullyQualifiedName~TestMethodName"
 
 # Add a new EF Core migration
-dotnet ef migrations add <MigrationName> --project src/SatelliteTracker.Database
+dotnet ef migrations add <MigrationName> --project backend/src/SatelliteTracker.Database
 
 # Apply migrations
-dotnet ef database update --project src/SatelliteTracker.Database
+dotnet ef database update --project backend/src/SatelliteTracker.Database
 ```
 
 Connection string: `ConnectionStrings:DefaultConnection` in `appsettings.Development.json` (not committed).
@@ -152,9 +152,9 @@ CI runs on GitHub Actions: restore → build → test on every push/PR to main.
 
 ## Build Order (Milestones)
 
-A → Infrastructure (current)
+A → Infrastructure 
 B → TLEService + PassService + SGP4
-C → React Web Frontend
+C → React Web Frontend (current)
 D → Outlook + FCM Push Notifications
 E → Android (Kotlin) basic
 F → Sky View / ARCore
@@ -192,22 +192,22 @@ dotnet restore
 dotnet build
 
 # Run the API
-dotnet run --project src/SatelliteTracker.API
+dotnet run --project backend/src/SatelliteTracker.API
 
 # Run all tests
 dotnet test
 
 # Run a single test project
-dotnet test src/<TestProject>/<TestProject>.csproj
+dotnet test backend/src/<TestProject>/<TestProject>.csproj
 
 # Run a single test by name
 dotnet test --filter "FullyQualifiedName~TestMethodName"
 
 # Add a new EF Core migration
-dotnet ef migrations add <MigrationName> --project src/SatelliteTracker.Database
+dotnet ef migrations add <MigrationName> --project backend/src/SatelliteTracker.Database
 
 # Apply migrations
-dotnet ef database update --project src/SatelliteTracker.Database
+dotnet ef database update --project backend/src/SatelliteTracker.Database
 ```
 
 Connection string: `ConnectionStrings:DefaultConnection` in `appsettings.Development.json` (not committed).

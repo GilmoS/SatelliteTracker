@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using SatelliteTracker.Database.Repositories;
@@ -8,20 +9,17 @@ namespace SatelliteTracker.TLEService.Jobs;
 // This class represents a background job that periodically updates the Two-Line Element (TLE) data for active satellites.
 public class TleUpdateJob : BackgroundService
 {
-    private readonly ITleService _tleService;
-    private readonly ISatelliteRepository _satelliteRepository;
-    private readonly ITleRepository _tleRepository;
+    
     private readonly ILogger<TleUpdateJob> _logger;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     private static readonly TimeSpan Interval = TimeSpan.FromHours(2); // Interval between TLE updates
 
     // Constructor that initializes the dependencies for the TLE update job, including the TLE service, satellite repository, TLE repository, and logger.
-    public TleUpdateJob(ITleService tleService,ISatelliteRepository satelliteRepository,ITleRepository tleRepository,ILogger<TleUpdateJob> logger)
+    public TleUpdateJob(ILogger<TleUpdateJob> logger, IServiceScopeFactory scopeFactory)
     {
-        _tleService = tleService;
-        _satelliteRepository = satelliteRepository;
-        _tleRepository = tleRepository;
         _logger = logger;
+        _scopeFactory = scopeFactory;
     }
 
     // This method is called when the background service starts and runs the main loop for updating TLE data until the service is stopped.
@@ -57,9 +55,14 @@ public class TleUpdateJob : BackgroundService
     // which includes retrieving active satellites, fetching and saving their TLE data, and cleaning up old TLE records.
     private async Task RunUpdate(CancellationToken ct)
     {
-        // Retrieve the list of active satellites from the satellite repository. If the retrieval fails, log a warning and exit the method.
-        var satellitesResult = await _satelliteRepository.GetActiveAsync();
+        
+        using var scope = _scopeFactory.CreateScope();
 
+        var tleService = scope.ServiceProvider.GetRequiredService<ITleService>();
+        var satelliteRepo = scope.ServiceProvider.GetRequiredService<ISatelliteRepository>();
+        var tleRepo = scope.ServiceProvider.GetRequiredService<ITleRepository>();
+
+        var satellitesResult = await satelliteRepo.GetActiveAsync();
         if (!satellitesResult.IsSuccess)
         {
             _logger.LogWarning("Failed to retrieve active satellites: {Error}", satellitesResult.Error);
@@ -68,11 +71,13 @@ public class TleUpdateJob : BackgroundService
 
         foreach (var satellite in satellitesResult.Value!)
         {
-            var result = await _tleService.FetchAndSaveAsync(satellite.NoradId, ct);
+            var result = await tleService.FetchAndSaveAsync(satellite.NoradId, ct);
             if (!result.IsSuccess)
-                _logger.LogWarning("Failed to fetch TLE for NORAD {NoradId}: {Error}",satellite.NoradId, result.Error);
+                _logger.LogWarning("Failed to fetch TLE for NORAD {NoradId}: {Error}",
+                    satellite.NoradId, result.Error);
         }
 
-        await _tleRepository.DeleteOlderThanAsync(DateTime.UtcNow.AddMonths(-6)); // Clean up old TLE records that are older than 6 months to maintain a manageable database size.
+        await tleRepo.DeleteOlderThanAsync(DateTime.UtcNow.AddMonths(-6));
     }
 }
+

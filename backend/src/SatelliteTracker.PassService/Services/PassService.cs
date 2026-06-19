@@ -92,6 +92,9 @@ public class PassService : IPassService
             CalculatedAt = DateTime.UtcNow
         }).ToList();
 
+        //Remove previosly predicted passes 
+        await _passRepo.DeleteUpcomingAsync(satelliteId, DateTime.UtcNow);
+
         // Save the predicted passes to the database using the pass repository
         var saveResult = await _passRepo.AddRangeAsync(passes);
 
@@ -115,4 +118,6 @@ public class PassService : IPassService
     // This method retrieves a specific pass by its ID from the database.
     public async Task<Result<Pass>> GetPassByIdAsync(Guid passId)
         => await _passRepo.GetByIdAsync(passId);
+
+    
 }
