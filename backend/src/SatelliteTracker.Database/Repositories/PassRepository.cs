@@ -107,6 +107,25 @@ public class PassRepository : IPassRepository
         }
     }
 
+    // Updates the Notify flag for a specific pass by its unique identifier.
+    public async Task<Result<Pass>> UpdateNotifyAsync(Guid id, bool notify)
+    {
+        try
+        {
+            var pass = await _context.Passes.FindAsync(id);
+            if (pass is null)
+                return Result<Pass>.Failure("Pass not found");
+
+            pass.Notify = notify;
+            await _context.SaveChangesAsync();
+            return Result<Pass>.Success(pass);
+        }
+        catch (Exception ex)
+        {
+            return Result<Pass>.Failure(ex.Message);
+        }
+    }
+
     // Deletes upcoming predicted passes for a satellite (passes with AOS >= from)
     public async Task<Result<bool>> DeleteUpcomingAsync(Guid satelliteId, DateTime from)
     {

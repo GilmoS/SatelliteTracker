@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using SatelliteTracker.API.DTOs;
+using SatelliteTracker.Database.Repositories;
 using SatelliteTracker.PassService.Services;
 
 namespace SatelliteTracker.API.Controllers;
@@ -10,9 +11,14 @@ namespace SatelliteTracker.API.Controllers;
 [Route("api/passes")]
 public class PassesController : BaseController
 {
-    private readonly IPassService _passService;// Service for managing satellite pass data
+    private readonly IPassService _passService;
+    private readonly IPassRepository _passRepository;
 
-    public PassesController(IPassService passService) => _passService = passService; // Constructor that injects the pass service
+    public PassesController(IPassService passService, IPassRepository passRepository)
+    {
+        _passService = passService;
+        _passRepository = passRepository;
+    }
 
 
     // GET api/passes/{satelliteId}
@@ -44,6 +50,13 @@ public class PassesController : BaseController
         return Ok(PassDto.From(result.Value!));
     }
 
-    
-   
+
+    // PATCH api/passes/{id}/notify
+    [HttpPatch("{id:guid}/notify")]
+    public async Task<IActionResult> PatchNotify(Guid id, [FromBody] PatchNotifyRequest request)
+    {
+        var result = await _passRepository.UpdateNotifyAsync(id, request.Notify);
+        if (!result.IsSuccess) return ToError(result.Error!);
+        return Ok(PassDto.From(result.Value!));
+    }
 }
