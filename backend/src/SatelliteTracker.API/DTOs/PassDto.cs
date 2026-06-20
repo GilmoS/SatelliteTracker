@@ -17,6 +17,7 @@ public class PassDto
     public bool NotificationSent { get; set; }
     public DateTime? NotificationSentAt { get; set; }
     public bool OutlookSynced { get; set; }
+    public bool Notify { get; set; }
     public DateTime CalculatedAt { get; set; }
 
     public static PassDto From(Pass p) => new()
@@ -34,6 +35,7 @@ public class PassDto
         NotificationSent = p.NotificationSent,
         NotificationSentAt = p.NotificationSentAt,
         OutlookSynced = p.OutlookSynced,
+        Notify = p.Notify,
         CalculatedAt = p.CalculatedAt
     };
 }

@@ -18,6 +18,7 @@ public class Pass
     public bool NotificationSent { get; set; }
     public DateTime? NotificationSentAt { get; set; } // Nullable to indicate that it may not have been sent yet
     public bool OutlookSynced { get; set; } // Indicates whether the pass has been synced with Outlook calendar
+    public bool Notify { get; set; } = false;
     public DateTime CalculatedAt { get; set; }
 
     public Satellite Satellite { get; set; } = null!; // Navigation property to the Satellite entity
