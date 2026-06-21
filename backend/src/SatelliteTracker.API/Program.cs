@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using SatelliteTracker.API.Jobs;
+using SatelliteTracker.API.Services;
 using SatelliteTracker.Database;
 using SatelliteTracker.Database.Common;
 using SatelliteTracker.Database.Repositories;
@@ -28,9 +30,13 @@ builder.Services.AddScoped<IPassService, PassService>();
 // N2YO HTTP client (reads N2YO:ApiKey from configuration)
 builder.Services.AddHttpClient<IN2YOClient, N2YOClient>();
 
+// Firebase
+builder.Services.AddSingleton<IFirebaseService, FirebaseService>();
+
 // Background jobs
 builder.Services.AddHostedService<TleUpdateJob>();
 builder.Services.AddHostedService<PassCalculationJob>();
+builder.Services.AddHostedService<PassNotificationJob>();
 
 // Caching
 builder.Services.AddMemoryCache();
