@@ -15,4 +15,5 @@ public interface IPassRepository
     Task<Result<Pass>> UpdateAsync(Pass pass);
     Task<Result<bool>> DeleteUpcomingAsync(Guid satelliteId, DateTime from);
     Task<Result<Pass>> UpdateNotifyAsync(Guid id, bool notify);
+    Task<Result<IEnumerable<Pass>>> GetPendingNotificationsAsync();
 }

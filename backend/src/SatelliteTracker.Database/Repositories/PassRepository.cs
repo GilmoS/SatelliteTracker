@@ -126,6 +126,25 @@ public class PassRepository : IPassRepository
         }
     }
 
+    // Returns all future passes with notify=true that have not yet had a notification sent.
+    public async Task<Result<IEnumerable<Pass>>> GetPendingNotificationsAsync()
+    {
+        try
+        {
+            var passes = await _context.Passes
+                .Include(p => p.Satellite)
+                .Where(p => p.Notify && !p.NotificationSent && p.Aos > DateTime.UtcNow)
+                .OrderBy(p => p.Aos)
+                .ToListAsync();
+
+            return Result<IEnumerable<Pass>>.Success(passes);
+        }
+        catch (Exception ex)
+        {
+            return Result<IEnumerable<Pass>>.Failure(ex.Message);
+        }
+    }
+
     // Deletes upcoming predicted passes for a satellite (passes with AOS >= from)
     public async Task<Result<bool>> DeleteUpcomingAsync(Guid satelliteId, DateTime from)
     {

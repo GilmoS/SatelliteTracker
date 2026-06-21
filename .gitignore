@@ -482,3 +482,7 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Firebase Service Account
+**/firebase-adminsdk*.json
+google-services.json
