@@ -19,6 +19,7 @@
     <ProjectReference Include="..\SatelliteTracker.Database\SatelliteTracker.Database.csproj" />
     <ProjectReference Include="..\SatelliteTracker.TLEService\SatelliteTracker.TLEService.csproj" />
     <ProjectReference Include="..\SatelliteTracker.PassService\SatelliteTracker.PassService.csproj" />
+    <ProjectReference Include="..\SatelliteTracker.OutlookService\SatelliteTracker.OutlookService.csproj" />
   </ItemGroup>
 
 </Project>
