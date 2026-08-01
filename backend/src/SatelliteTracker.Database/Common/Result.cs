@@ -13,3 +13,15 @@ public class Result<T>
     public static Result<T> Success(T value) => new() { IsSuccess = true, Value = value };
     public static Result<T> Failure(string error) => new() { IsSuccess = false, Error = error };
 }
+
+// Non-generic counterpart for operations that succeed or fail without returning a value.
+public class Result
+{
+    public bool IsSuccess { get; private set; }
+    public string? Error { get; private set; } // The error message if the operation failed; null if it succeeded.
+
+    private Result() { }
+
+    public static Result Success() => new() { IsSuccess = true };
+    public static Result Failure(string error) => new() { IsSuccess = false, Error = error };
+}

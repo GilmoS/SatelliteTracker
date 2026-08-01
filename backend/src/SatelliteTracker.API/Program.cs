@@ -4,6 +4,7 @@ using SatelliteTracker.API.Services;
 using SatelliteTracker.Database;
 using SatelliteTracker.Database.Common;
 using SatelliteTracker.Database.Repositories;
+using SatelliteTracker.OutlookService.Extensions;
 using SatelliteTracker.PassService.Services;
 using SatelliteTracker.TLEService.Client;
 using SatelliteTracker.TLEService.Jobs;
@@ -32,6 +33,9 @@ builder.Services.AddHttpClient<IN2YOClient, N2YOClient>();
 
 // Firebase
 builder.Services.AddSingleton<IFirebaseService, FirebaseService>();
+
+// Calendar sync (ICS MVP; see OutlookServiceCollectionExtensions to swap to Graph)
+builder.Services.AddOutlookServiceModule();
 
 // Background jobs
 builder.Services.AddHostedService<TleUpdateJob>();
