@@ -11,7 +11,7 @@ namespace SatelliteTracker.OutlookService.Services;
 /// </summary>
 public class IcsCalendarSyncService : ICalendarSyncService
 {
-    private const string TimeZoneId = "Asia/Jerusalem";
+    private const string TimeZoneId = "Asia/Jerusalem"; // hard-coded for Israel for now, per product spec; could be made configurable in the future if needed
     private static readonly TimeZoneInfo IsraelTimeZone = TimeZoneInfo.FindSystemTimeZoneById(TimeZoneId);
 
     /// <summary>
