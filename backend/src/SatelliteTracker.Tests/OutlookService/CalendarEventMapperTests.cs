@@ -6,14 +6,14 @@ namespace SatelliteTracker.Tests.OutlookService;
 
 public class CalendarEventMapperTests
 {
-    private static Pass BuildPass(Satellite? satellite)
+    private static Pass BuildPass(Satellite? satellite, int orbitNumber = 1234)
     {
         return new Pass
         {
             Id = Guid.NewGuid(),
             SatelliteId = satellite?.Id ?? Guid.NewGuid(),
             TleId = Guid.NewGuid(),
-            OrbitNumber = 1234,
+            OrbitNumber = orbitNumber,
             Aos = new DateTime(2026, 8, 1, 11, 0, 0, DateTimeKind.Utc),
             Los = new DateTime(2026, 8, 1, 11, 10, 0, DateTimeKind.Utc),
             MaxElevation = 45.3m,
@@ -40,7 +40,7 @@ public class CalendarEventMapperTests
 
         var result = pass.ToCalendarEventData();
 
-        Assert.Equal($"pass-placeholder-{pass.Id}", result.Uid);
+        Assert.Equal("25544-1234@sattrakk.com", result.Uid);
         Assert.Equal("EROS C3", result.SatelliteName);
         Assert.Equal(25544, result.NoradId);
         Assert.Equal(1234, result.OrbitNumber);
@@ -57,5 +57,26 @@ public class CalendarEventMapperTests
         var pass = BuildPass(null);
 
         Assert.Throws<InvalidOperationException>(() => pass.ToCalendarEventData());
+    }
+
+    [Fact]
+    public void ToCalendarEventData_DifferentOrbitNumbers_ProduceDifferentUids()
+    {
+        var satellite = new Satellite
+        {
+            Id = Guid.NewGuid(),
+            Name = "EROS C3",
+            NoradId = 25544,
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        var passA = BuildPass(satellite, orbitNumber: 1234);
+        var passB = BuildPass(satellite, orbitNumber: 1235);
+
+        var uidA = passA.ToCalendarEventData().Uid;
+        var uidB = passB.ToCalendarEventData().Uid;
+
+        Assert.NotEqual(uidA, uidB);
     }
 }

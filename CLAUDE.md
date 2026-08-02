@@ -76,10 +76,13 @@ API/PassService/Controllers.
 - **`GraphCalendarSyncService`** is a stub (`NotImplementedException` on both methods) for future
   use if IT admin consent for Microsoft Graph is obtained. Swap it in by changing the single
   registration line in `OutlookServiceCollectionExtensions`.
-- **Open item:** the `orbit_number` source (TLE Revolution Number at Epoch vs. a computed value)
-  still needs verification in `PassService`/the TLE parser before the final `Uid` formula in
-  `CalendarEventMapper` can be locked in. Currently a placeholder based on `pass.Id`
-  (`pass-placeholder-{Guid}`) — do not treat it as final.
+- **UID formula:** `CalendarEventMapper` builds each event's `Uid` as
+  `{norad_id}-{orbit_number}@sattrakk.com`. It was chosen over alternatives (e.g. a rounded-AOS
+  timestamp) because it's stable and monotonic per satellite and unique per physical pass, so a
+  re-sync updates the existing calendar event instead of creating a duplicate. Accepted limitation:
+  a TLE re-snapshot can rarely shift `orbit_number` by one at an orbit-count boundary for the same
+  physical pass, causing a duplicate event on re-sync instead of an update — this is deliberately
+  not engineered around (low severity, user deletes the stray duplicate manually), not a pending TODO.
 
 ---
 

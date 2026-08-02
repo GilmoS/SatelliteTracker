@@ -21,9 +21,13 @@ public static class CalendarEventMapper
                 $"Pass {pass.Id} has no loaded Satellite. Ensure the query includes .Include(p => p.Satellite).");
         }
 
-        // TODO: placeholder UID based on pass.Id — replace once the orbit_number source
-        // (TLE Revolution Number at Epoch vs. computed) is confirmed and a final UID formula is decided.
-        var uid = $"pass-placeholder-{pass.Id}";
+        // {norad_id}-{orbit_number}: stable, monotonic, and unique per physical pass, so a
+        // re-sync updates the existing calendar event instead of creating a duplicate. Accepted
+        // limitation: if a TLE re-snapshot shifts orbit_number by one at an orbit-count boundary
+        // for the same physical pass, re-sync can produce a duplicate event instead of an update.
+        // This is rare, low-severity (user deletes the stray duplicate manually), and deliberately
+        // not engineered around — see CLAUDE.md's Calendar Sync section.
+        var uid = $"{pass.Satellite.NoradId}-{pass.OrbitNumber}@sattrakk.com";
 
         return new CalendarEventData(
             Uid: uid,
