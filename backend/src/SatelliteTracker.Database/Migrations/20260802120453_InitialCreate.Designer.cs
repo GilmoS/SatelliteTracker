@@ -12,7 +12,7 @@ using SatelliteTracker.Database;
 namespace SatelliteTracker.Database.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260617134538_InitialCreate")]
+    [Migration("20260802120453_InitialCreate")]
     partial class InitialCreate
     {
         /// <inheritdoc />
@@ -83,6 +83,9 @@ namespace SatelliteTracker.Database.Migrations
 
                     b.Property<DateTime?>("NotificationSentAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("Notify")
+                        .HasColumnType("boolean");
 
                     b.Property<int>("OrbitNumber")
                         .HasColumnType("integer");
