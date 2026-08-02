@@ -80,7 +80,7 @@ public class PassService : IPassService
             Id = Guid.NewGuid(),
             SatelliteId = satelliteId,
             TleId = tleRecord.Id,
-            OrbitNumber = 0,
+            OrbitNumber = ComputeOrbitNumber(tleData, pr.AOS),
             Aos = pr.AOS,
             Los = pr.LOS,
             MaxElevation = (decimal)pr.MaxElevation,
@@ -119,5 +119,15 @@ public class PassService : IPassService
     public async Task<Result<Pass>> GetPassByIdAsync(Guid passId)
         => await _passRepo.GetByIdAsync(passId);
 
-    
+    // Computes the revolution number at a given pass time by advancing the TLE's Revolution
+    // Number at Epoch by however many full orbits elapse between the TLE epoch and the pass AOS.
+    // MeanMotion is in revs/day, so 1440 / MeanMotion gives the orbital period in minutes.
+    private static int ComputeOrbitNumber(TleData tle, DateTime passAosUtc)
+    {
+        double orbitalPeriodMinutes = 1440.0 / tle.MeanMotion;
+        double elapsedMinutes = (passAosUtc - tle.Epoch).TotalMinutes;
+        int elapsedOrbits = (int)Math.Floor(elapsedMinutes / orbitalPeriodMinutes);
+
+        return tle.RevolutionNumber + elapsedOrbits;
+    }
 }
