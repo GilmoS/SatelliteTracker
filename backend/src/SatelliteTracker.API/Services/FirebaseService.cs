@@ -53,8 +53,8 @@ public class FirebaseService : IFirebaseService
                 Token = fcmToken,
                 Notification = new Notification
                 {
-                    Title = $"חליפה מתקרבת — {satelliteName}",
-                    Body = $"חליפה תתחיל בעוד {minutesBefore} דקות ({aos:HH:mm} UTC)"
+                    Title = $"Upcoming pass for {satelliteName}",
+                    Body = $"The pass will start in {minutesBefore} minutes ({aos:HH:mm} UTC)"
                 }
             };
 

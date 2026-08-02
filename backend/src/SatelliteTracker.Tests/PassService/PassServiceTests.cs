@@ -4,6 +4,7 @@ using Moq;
 using SatelliteTracker.Database.Common;
 using SatelliteTracker.Database.Entities;
 using SatelliteTracker.Database.Repositories;
+using SatelliteTracker.PassService.SGP4;
 using SatelliteTracker.PassService.Services;
 using Xunit;
 
@@ -117,6 +118,73 @@ public class PassServiceTests
         Assert.NotNull(result.Value);
         satRepo.Verify(r => r.GetByIdAsync(TestSatelliteId), Times.Once);
         tleRepo.Verify(r => r.GetLatestByNoradIdAsync(TestNoradId), Times.Once);
+    }
+
+    [Fact]
+    public async Task CalculateAndSavePassesAsync_ComputesOrbitNumber_FromTleRevolutionAndElapsedOrbits()
+    {
+        var (service, satRepo, tleRepo, passRepo) = CreateService();
+
+        satRepo.Setup(r => r.GetByIdAsync(TestSatelliteId))
+            .ReturnsAsync(Result<Satellite>.Success(TestSatellite));
+
+        tleRepo.Setup(r => r.GetLatestByNoradIdAsync(TestNoradId))
+            .ReturnsAsync(Result<TleRecord>.Success(MakeTleRecord(IssLine2)));
+
+        List<Pass>? savedPasses = null;
+        passRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<Pass>>()))
+            .Callback<IEnumerable<Pass>>(p => savedPasses = p.ToList())
+            .ReturnsAsync(Result<bool>.Success(true));
+
+        var result = await service.CalculateAndSavePassesAsync(TestSatelliteId);
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(savedPasses);
+        Assert.NotEmpty(savedPasses!);
+
+        // Independently derive the expected orbit number from the same TLE, parsed fresh here
+        // (TleParser itself is covered by TleParserTests.cs), to verify PassService actually
+        // wires the parsed epoch/mean-motion/revolution-number into the calculation rather than
+        // hardcoding a placeholder.
+        var tle = TleParser.Parse(IssLine1, IssLine2);
+        double orbitalPeriodMinutes = 1440.0 / tle.MeanMotion;
+
+        foreach (var pass in savedPasses!)
+        {
+            int expectedOrbitNumber = tle.RevolutionNumber +
+                (int)Math.Floor((pass.Aos - tle.Epoch).TotalMinutes / orbitalPeriodMinutes);
+
+            Assert.Equal(expectedOrbitNumber, pass.OrbitNumber);
+            Assert.NotEqual(0, pass.OrbitNumber);
+        }
+    }
+
+    [Fact]
+    public async Task CalculateAndSavePassesAsync_OrbitNumbers_AreNonDecreasing_AcrossPassesOrderedByAos()
+    {
+        var (service, satRepo, tleRepo, passRepo) = CreateService();
+
+        satRepo.Setup(r => r.GetByIdAsync(TestSatelliteId))
+            .ReturnsAsync(Result<Satellite>.Success(TestSatellite));
+
+        tleRepo.Setup(r => r.GetLatestByNoradIdAsync(TestNoradId))
+            .ReturnsAsync(Result<TleRecord>.Success(MakeTleRecord(IssLine2)));
+
+        List<Pass>? savedPasses = null;
+        passRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<Pass>>()))
+            .Callback<IEnumerable<Pass>>(p => savedPasses = p.ToList())
+            .ReturnsAsync(Result<bool>.Success(true));
+
+        await service.CalculateAndSavePassesAsync(TestSatelliteId);
+
+        Assert.NotNull(savedPasses);
+        var orderedByAos = savedPasses!.OrderBy(p => p.Aos).ToList();
+
+        for (int i = 1; i < orderedByAos.Count; i++)
+        {
+            Assert.True(orderedByAos[i].OrbitNumber >= orderedByAos[i - 1].OrbitNumber,
+                "Orbit number must not decrease for a pass with a later AOS.");
+        }
     }
 
     [Fact]

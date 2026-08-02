@@ -18,7 +18,5 @@ public interface ICalendarSyncService
     /// <summary>
     /// Cancels/removes previously synced calendar events for the given passes.
     /// </summary>
-    Task<Result> CancelSyncedPassesAsync(
-        IReadOnlyList<CalendarEventData> passes,
-        CancellationToken cancellationToken = default);
+    Task<Result> CancelSyncedPassesAsync( IReadOnlyList<CalendarEventData> passes,CancellationToken cancellationToken = default);
 }
