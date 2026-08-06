@@ -194,4 +194,51 @@ public class PassRepositoryTests : IDisposable
         Assert.False(result.IsSuccess);
         Assert.Equal("Pass not found", result.Error);
     }
+
+    [Fact]
+    public async Task GetByIdsAsync_AllIdsExist_ReturnsPassesWithSatelliteIncluded()
+    {
+        var (sat, tle) = Seed();
+        var pass1 = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddHours(1));
+        var pass2 = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddHours(2));
+        _context.Passes.AddRange(pass1, pass2);
+        await _context.SaveChangesAsync();
+
+        var result = await _repo.GetByIdsAsync([pass1.Id, pass2.Id]);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, result.Value!.Count);
+        Assert.All(result.Value!, p => Assert.Equal(sat.Id, p.Satellite.Id));
+    }
+
+    [Fact]
+    public async Task GetByIdsAsync_SomeIdsMissing_ReturnsFailureListingMissingIds()
+    {
+        var (sat, tle) = Seed();
+        var pass = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddHours(1));
+        _context.Passes.Add(pass);
+        await _context.SaveChangesAsync();
+
+        var missingId = Guid.NewGuid();
+        var result = await _repo.GetByIdsAsync([pass.Id, missingId]);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains(missingId.ToString(), result.Error);
+    }
+
+    [Fact]
+    public async Task MarkOutlookSyncedAsync_SetsFlagForAllGivenPasses()
+    {
+        var (sat, tle) = Seed();
+        var pass1 = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddHours(1));
+        var pass2 = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddHours(2));
+        _context.Passes.AddRange(pass1, pass2);
+        await _context.SaveChangesAsync();
+
+        var result = await _repo.MarkOutlookSyncedAsync([pass1.Id, pass2.Id]);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(_context.Passes.Single(p => p.Id == pass1.Id).OutlookSynced);
+        Assert.True(_context.Passes.Single(p => p.Id == pass2.Id).OutlookSynced);
+    }
 }

@@ -16,4 +16,23 @@ public interface IPassRepository
     Task<Result<bool>> DeleteUpcomingAsync(Guid satelliteId, DateTime from);
     Task<Result<Pass>> UpdateNotifyAsync(Guid id, bool notify);
     Task<Result<IEnumerable<Pass>>> GetPendingNotificationsAsync();
+
+    /// <summary>
+    /// Retrieves passes by ID, with <c>Satellite</c> eager-loaded. Used by the calendar schedule
+    /// flow to map straight to <see cref="OutlookService.Abstractions.CalendarEventData"/>
+    /// without a second round-trip.
+    /// </summary>
+    /// <returns>
+    /// A failure listing every ID that doesn't exist if any are missing — never a partial list.
+    /// </returns>
+    Task<Result<IReadOnlyList<Pass>>> GetByIdsAsync(IEnumerable<Guid> passIds);
+
+    /// <summary>
+    /// Bulk-sets <see cref="Pass.OutlookSynced"/> to <c>true</c> for the given passes.
+    /// The field name is retained for forward-compatibility with a possible future Microsoft
+    /// Graph implementation. In the current ICS MVP it means "an .ics was generated and offered
+    /// to the user" — not "confirmed added to a calendar" — since the ICS model has no
+    /// programmatic way to confirm the user actually imported the event.
+    /// </summary>
+    Task<Result> MarkOutlookSyncedAsync(IEnumerable<Guid> passIds);
 }

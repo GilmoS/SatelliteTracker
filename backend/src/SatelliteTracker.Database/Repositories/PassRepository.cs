@@ -145,6 +145,58 @@ public class PassRepository : IPassRepository
         }
     }
 
+    // Retrieves passes by ID with Satellite eager-loaded; fails clearly if any ID is missing.
+    public async Task<Result<IReadOnlyList<Pass>>> GetByIdsAsync(IEnumerable<Guid> passIds)
+    {
+        try
+        {
+            var ids = passIds.ToList();
+
+            var passes = await _context.Passes
+                .Include(p => p.Satellite)
+                .Where(p => ids.Contains(p.Id))
+                .ToListAsync();
+
+            var foundIds = passes.Select(p => p.Id).ToHashSet();
+            var missingIds = ids.Where(id => !foundIds.Contains(id)).ToList();
+            if (missingIds.Count > 0)
+            {
+                return Result<IReadOnlyList<Pass>>.Failure(
+                    $"Pass(es) not found: {string.Join(", ", missingIds)}.");
+            }
+
+            return Result<IReadOnlyList<Pass>>.Success(passes);
+        }
+        catch (Exception ex)
+        {
+            return Result<IReadOnlyList<Pass>>.Failure(ex.Message);
+        }
+    }
+
+    // Bulk-marks the given passes as synced. See IPassRepository.MarkOutlookSyncedAsync for the
+    // ICS-MVP semantics of the OutlookSynced flag.
+    public async Task<Result> MarkOutlookSyncedAsync(IEnumerable<Guid> passIds)
+    {
+        try
+        {
+            var ids = passIds.ToList();
+
+            var passes = await _context.Passes
+                .Where(p => ids.Contains(p.Id))
+                .ToListAsync();
+
+            foreach (var pass in passes)
+                pass.OutlookSynced = true;
+
+            await _context.SaveChangesAsync();
+            return Result.Success();
+        }
+        catch (Exception ex)
+        {
+            return Result.Failure(ex.Message);
+        }
+    }
+
     // Deletes upcoming predicted passes for a satellite (passes with AOS >= from)
     public async Task<Result<bool>> DeleteUpcomingAsync(Guid satelliteId, DateTime from)
     {
