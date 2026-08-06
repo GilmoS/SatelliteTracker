@@ -67,6 +67,16 @@ available for org calendar access on this unofficial project. `ICalendarSyncServ
 abstraction boundary — swapping calendar backends is a single DI change with zero changes to
 API/PassService/Controllers.
 
+**Final flow:** the user selects one or more specific upcoming passes from the passes table
+already shown in the app, chooses alert minute(s) for the request, and
+`POST /api/calendar/schedule` (`CalendarController`, the real production entry point) returns a
+single combined `.ics` for exactly those passes. The Android app opens it via `ACTION_VIEW` to
+add it to the user's own calendar, and can `ACTION_SEND` it to share with a team lead — there is
+no backend email-sending, no Microsoft Graph, and no push notification involved in this flow.
+This replaced the originally planned Graph-based bulk date-range sync. The earlier
+`DevCalendarTestController` manual-verification endpoint has been removed now that the real
+controller exists.
+
 - **`IcsCalendarSyncService`** is the active implementation, registered in
   `OutlookServiceCollectionExtensions.AddOutlookServiceModule()`. It builds one combined RFC 5545
   `.ics` document (one `VEVENT` per pass, `TZID=Asia/Jerusalem`). `CancelSyncedPassesAsync` throws
@@ -83,6 +93,14 @@ API/PassService/Controllers.
   a TLE re-snapshot can rarely shift `orbit_number` by one at an orbit-count boundary for the same
   physical pass, causing a duplicate event on re-sync instead of an update — this is deliberately
   not engineered around (low severity, user deletes the stray duplicate manually), not a pending TODO.
+- **`TeamEmail`** on `CalendarSyncSettings` is intentional dead code / future-Graph
+  infrastructure. `CalendarController` always passes `TeamEmail: null` — the ICS model has no
+  programmatic way to notify a third party, so sharing happens on-device via `ACTION_SEND` after
+  the user receives the `.ics`. Not wired to any current behavior.
+- **`OutlookSynced`** semantics are weakened in the ICS MVP: it means "an `.ics` was generated and
+  offered to the user," not "confirmed added to a calendar" (the ICS model has no way to confirm
+  that). The field/name is kept as-is for forward compatibility with a future Graph
+  implementation, where it would regain its original "confirmed synced" meaning.
 
 ---
 
