@@ -49,7 +49,8 @@ public class CalendarController : BaseController
         }
 
         var passesResult = await _passRepository.GetByIdsAsync(request.PassIds);
-        if (!passesResult.IsSuccess) return ToError(passesResult.Error!);
+        if (!passesResult.IsSuccess)
+            return ToError(passesResult.Error!);
 
         var eventData = passesResult.Value!.Select(p => p.ToCalendarEventData()).ToList();
 
@@ -58,8 +59,10 @@ public class CalendarController : BaseController
         // ACTION_SEND after the user receives the .ics.
         var settings = new CalendarSyncSettings(AlertMinutes: alertMinutes, TeamEmail: null);
 
+        // here we generate the ICS content and return it as a file download
         var syncResult = await _calendarSyncService.SyncPassesAsync(eventData, settings);
-        if (!syncResult.IsSuccess) return ToError(syncResult.Error!);
+        if (!syncResult.IsSuccess) 
+            return ToError(syncResult.Error!);
 
         var markResult = await _passRepository.MarkOutlookSyncedAsync(request.PassIds);
         if (!markResult.IsSuccess) return ToError(markResult.Error!);
