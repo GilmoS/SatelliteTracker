@@ -47,6 +47,8 @@ builder.Services.AddMemoryCache();
 
 builder.Services.AddControllers();
 
+builder.Services.AddSwaggerGen();
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("DevFrontend", policy =>
@@ -55,7 +57,15 @@ builder.Services.AddCors(options =>
               .AllowAnyHeader());
 });
 
+
+
 var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();   
+}
 
 app.UseCors("DevFrontend");
 app.MapControllers();
