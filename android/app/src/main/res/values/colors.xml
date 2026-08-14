@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Mirrors ui/theme/Color.kt — kept here only because the adaptive
+         launcher icon (an XML resource, not a Composable) needs it. -->
+    <color name="mission_control_background">#0A0E12</color>
+    <color name="mission_control_electric_blue">#4FC3F7</color>
+</resources>

@@ -1,0 +1,74 @@
+[versions]
+# Pinned Aug 2026. A real Gradle build against these exact versions got through
+# dependency resolution, resource processing, and KSP (Hilt + Room annotation
+# processing) cleanly, then hit an unresolved "internal compiler error" in the
+# final compileDebugKotlin step — see PR description for details and the
+# recommended next step (first build from a clean Android Studio daemon).
+# Re-verify all versions via Android Studio's Upgrade Assistant regardless.
+#
+# AGP was deliberately kept on the 8.x line rather than 9.2.0: AGP 9's new
+# "built-in Kotlin" support conflicts with the standalone
+# org.jetbrains.kotlin.android plugin used here and forces a migration (see
+# developer.android.com/build/migrate-to-built-in-kotlin) that's out of scope
+# for a brand-new skeleton. Revisit when adopting AGP 9.
+# Compose BOM is likewise held one step back (2026.06.01, not the newest
+# 2026.08.00) — the newest BOM pulls Compose 1.12.x, which requires
+# compileSdk 37 and AGP >= 9.1, i.e. the same AGP-9 jump.
+agp = "8.13.1"
+kotlin = "2.1.20"
+ksp = "2.1.20-2.0.1"
+coreKtx = "1.15.0"
+lifecycleRuntimeKtx = "2.9.0"
+activityCompose = "1.10.0"
+composeBom = "2026.06.01"
+navigationCompose = "2.9.7"
+hilt = "2.57.1"
+hiltNavigationCompose = "1.2.0"
+retrofit = "3.0.0"
+kotlinxSerializationJson = "1.11.0"
+room = "2.8.1"
+openapiGenerator = "7.11.0"
+junit = "4.13.2"
+androidxTestExtJunit = "1.2.1"
+espressoCore = "3.6.1"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
+androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
+
+androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" }
+
+hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
+hilt-android-compiler = { group = "com.google.dagger", name = "hilt-android-compiler", version.ref = "hilt" }
+hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hiltNavigationCompose" }
+
+retrofit-core = { group = "com.squareup.retrofit2", name = "retrofit", version.ref = "retrofit" }
+retrofit-kotlinx-serialization-converter = { group = "com.squareup.retrofit2", name = "converter-kotlinx-serialization", version.ref = "retrofit" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
+
+androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
+androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
+openapi-generator = { id = "org.openapi.generator", version.ref = "openapiGenerator" }
