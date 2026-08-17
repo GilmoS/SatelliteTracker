@@ -49,28 +49,31 @@ public class PassNotificationJob : BackgroundService
     private async Task RunTickAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
-        var settingsRepo = scope.ServiceProvider.GetRequiredService<ISettingsRepository>();
+        var userSettingsRepo = scope.ServiceProvider.GetRequiredService<IUserSettingsRepository>();
         var passRepo = scope.ServiceProvider.GetRequiredService<IPassRepository>();
         var firebaseService = scope.ServiceProvider.GetRequiredService<IFirebaseService>();
-        await ProcessPendingNotificationsAsync(settingsRepo, passRepo, firebaseService);
+        await ProcessPendingNotificationsAsync(userSettingsRepo, passRepo, firebaseService);
     }
 
     public async Task ProcessPendingNotificationsAsync(
-        ISettingsRepository settingsRepo,
+        IUserSettingsRepository userSettingsRepo,
         IPassRepository passRepo,
         IFirebaseService firebaseService)
     {
-        var settingsResult = await settingsRepo.GetAsync();
+        var settingsResult = await userSettingsRepo.GetAllActiveAsync();
         if (!settingsResult.IsSuccess)
         {
-            _logger.LogWarning("Failed to get settings: {Error}", settingsResult.Error);
+            _logger.LogWarning("Failed to get user settings: {Error}", settingsResult.Error);
             return;
         }
 
-        var settings = settingsResult.Value!;
-        if (string.IsNullOrEmpty(settings.FcmToken))
+        var testerSettings = settingsResult.Value!
+            .Where(s => !string.IsNullOrEmpty(s.FcmToken))
+            .ToList();
+
+        if (testerSettings.Count == 0)
         {
-            _logger.LogWarning("FCM token not configured — skipping pass notification check");
+            _logger.LogWarning("No active testers with an FCM token configured — skipping pass notification check");
             return;
         }
 
@@ -82,33 +85,41 @@ public class PassNotificationJob : BackgroundService
         }
 
         var now = DateTime.UtcNow;
-        var alertMinutes = settings.AlertMinutes.OrderByDescending(m => m).ToArray();
-        if (alertMinutes.Length == 0) return;
-        var smallestAlert = alertMinutes.Min();
+
+        // Once we've passed the closest alert boundary across ALL testers, no tester's
+        // alert can still be pending — that's the point at which a pass is "done", since
+        // GetPendingNotificationsAsync stops returning it once NotificationSent is set.
+        var globalSmallestAlert = testerSettings
+            .SelectMany(s => s.AlertMinutes)
+            .DefaultIfEmpty(0)
+            .Min();
 
         foreach (var pass in passesResult.Value!)
         {
             var minutesUntilAos = (pass.Aos - now).TotalMinutes;
 
-            foreach (var minutesBefore in alertMinutes)
+            foreach (var settings in testerSettings)
             {
-                if (Math.Abs(minutesUntilAos - minutesBefore) <= 1.0)
+                var alertMinutes = settings.AlertMinutes;
+                foreach (var minutesBefore in alertMinutes)
                 {
-                    await firebaseService.SendPassNotificationAsync(
-                        settings.FcmToken,
-                        pass.Satellite.Name,
-                        pass.Aos,
-                        minutesBefore);
-
-                    if (minutesBefore == smallestAlert)
+                    if (Math.Abs(minutesUntilAos - minutesBefore) <= 1.0)
                     {
-                        pass.NotificationSent = true;
-                        pass.NotificationSentAt = now;
-                        await passRepo.UpdateAsync(pass);
+                        await firebaseService.SendPassNotificationAsync(
+                            settings.FcmToken!,
+                            pass.Satellite.Name,
+                            pass.Aos,
+                            minutesBefore);
+                        break;
                     }
-
-                    break;
                 }
+            }
+
+            if (Math.Abs(minutesUntilAos - globalSmallestAlert) <= 1.0)
+            {
+                pass.NotificationSent = true;
+                pass.NotificationSentAt = now;
+                await passRepo.UpdateAsync(pass);
             }
         }
     }
