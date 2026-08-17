@@ -17,6 +17,8 @@ public class AppDbContext : DbContext
     public DbSet<Pass> Passes => Set<Pass>();
     public DbSet<Note> Notes => Set<Note>();
     public DbSet<Settings> Settings => Set<Settings>();
+    public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
+    public DbSet<UserSettings> UserSettings => Set<UserSettings>();
 
     // The OnModelCreating method is overridden to configure the entity relationships and constraints using Fluent API.
     // It defines the primary keys, property constraints, and relationships between the entities.
@@ -86,6 +88,22 @@ private static void ConfigureEntities(ModelBuilder modelBuilder)
          .WithMany(p => p.Notes)
          .HasForeignKey(n => n.PassId)
          .OnDelete(DeleteBehavior.Cascade);
+    });
+    modelBuilder.Entity<ApiKey>(e =>
+    {
+        e.HasKey(a => a.Id);
+        e.Property(a => a.Email).HasMaxLength(256).IsRequired();
+        e.Property(a => a.DisplayName).HasMaxLength(100).IsRequired();
+        e.Property(a => a.KeyHash).HasMaxLength(64).IsRequired();
+    });
+    modelBuilder.Entity<UserSettings>(e =>
+    {
+        e.HasKey(u => u.Id);
+        e.HasOne(u => u.ApiKey)
+         .WithOne(a => a.UserSettings)
+         .HasForeignKey<UserSettings>(u => u.ApiKeyId);
+        // Enforces the 1:1 with ApiKey — the navigation property alone does not.
+        e.HasIndex(u => u.ApiKeyId).IsUnique();
     });
 }
 
