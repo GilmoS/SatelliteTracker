@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Placeholder mark: an orbit arc around a satellite dot, electric blue on
+     transparent. Swap for the real Figma mark before shipping. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:strokeColor="@color/mission_control_electric_blue"
+        android:strokeWidth="3"
+        android:pathData="M24,54 A30,18 0 1 1 84,54 A30,18 0 1 1 24,54 Z" />
+    <path
+        android:fillColor="@color/mission_control_electric_blue"
+        android:pathData="M54,44 m-8,0 a8,8 0 1 1 16,0 a8,8 0 1 1 -16,0" />
+</vector>
