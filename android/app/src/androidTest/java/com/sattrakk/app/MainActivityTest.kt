@@ -8,6 +8,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /** Smoke test: the skeleton launches and the start destination (Dashboard) renders. */
+@Suppress("DEPRECATION")
 @RunWith(AndroidJUnit4::class)
 class MainActivityTest {
     @get:Rule
