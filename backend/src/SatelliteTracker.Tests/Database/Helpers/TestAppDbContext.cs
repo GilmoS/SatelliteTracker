@@ -13,7 +13,7 @@ internal class TestAppDbContext : AppDbContext
         base.OnModelCreating(modelBuilder);
 
         // SQLite does not support int[] — serialize as comma-separated string
-        modelBuilder.Entity<Settings>()
+        modelBuilder.Entity<UserSettings>()
             .Property(s => s.AlertMinutes)
             .HasConversion(
                 v => string.Join(',', v),
@@ -22,8 +22,8 @@ internal class TestAppDbContext : AppDbContext
                     : v.Split(',', StringSplitOptions.RemoveEmptyEntries)
                         .Select(int.Parse).ToArray()
             );
-            
-        
+
+
     }
     // Remove seed data in test env
      protected override void SeedData(ModelBuilder modelBuilder) { }
