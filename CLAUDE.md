@@ -119,15 +119,43 @@ No Redis needed at this scale. IMemoryCache is built into .NET.
 
 ## Database — PostgreSQL
 
-Five tables. All PKs are UUID (Guid in C#). All relationships via Fluent API in OnModelCreating.
+Seven tables. All PKs are UUID (Guid in C#). All relationships via Fluent API in OnModelCreating.
 
-| Table      | Purpose                                              |
-|------------|------------------------------------------------------|
-| satellites | Satellite catalog. NoradId is unique.                |
-| tles       | TLE history per satellite. Up to 6 months back.      |
-| passes     | Calculated passes. 1 week forward + 6 months history.|
-| notes      | Free-text per pass. CASCADE delete with pass.        |
-| settings   | Single settings row. AlertMinutes is int[].          |
+| Table         | Purpose                                                          |
+|---------------|-------------------------------------------------------------------|
+| satellites    | Satellite catalog. NoradId is unique.                             |
+| tles          | TLE history per satellite. Up to 6 months back.                   |
+| passes        | Calculated passes. 1 week forward + 6 months history.             |
+| notes         | Free-text per pass. CASCADE delete with pass.                     |
+| settings      | Single global row: MinElevation, OutlookDays, TeamEmail.          |
+| api_keys      | One row per registered beta tester. See below.                    |
+| user_settings | Per-tester notification prefs, 1:1 with api_keys. See below.      |
+
+### Beta multi-tester model — ApiKey and UserSettings
+
+The app moved from a single global settings row to per-tester API keys for the beta:
+
+- **`ApiKey`** — one row per registered tester (`Email`, `DisplayName`, `KeyHash`, `IsActive`,
+  `CreatedAt`, `LastUsedAt`). The raw key is a random 256-bit value
+  (`RandomNumberGenerator.GetBytes(32)`) shown to the tester exactly once at registration and
+  never stored — only `KeyHash` (its SHA-256 hash, via `ApiKeyHasher` in
+  `SatelliteTracker.Database.Security`) is persisted. `DisplayName` exists separately from
+  `Email` so testers can be identified in logs/manual testing without exposing email everywhere.
+  **SHA-256, not bcrypt/PBKDF2/Argon2, is intentional**: slow hashes exist to slow down
+  brute-forcing low-entropy, human-chosen secrets (passwords). The raw key here is fully random
+  at 256 bits, so guessing it is computationally infeasible even against a fast hash — a slow
+  hash would only add cost to every request with no security benefit. Do not "fix" this later.
+- **`UserSettings`** — per-tester `FcmToken` and `AlertMinutes` (the fields that used to live on
+  the global `Settings` row), 1:1 with `ApiKey` via a required `ApiKeyId` FK. The 1:1 is enforced
+  with `HasIndex(x => x.ApiKeyId).IsUnique()` in `OnModelCreating` — the navigation property alone
+  does not enforce it.
+- **`Settings.OutlookDays` and `Settings.TeamEmail`** remain in the schema but are **not read from
+  anywhere in the logic yet** — they're prep for a future Microsoft Graph integration pending IT
+  admin consent, not dead code to clean up. See the Calendar Sync section above for the current
+  ICS-based flow that replaced the Graph-based design these fields were originally meant for.
+- `PassNotificationJob` reads all active testers' `UserSettings` via
+  `IUserSettingsRepository.GetAllActiveAsync()` (filtered to `ApiKey.IsActive`) and notifies each
+  independently rather than reading one global FCM token/alert-minutes pair.
 
 ---
 
@@ -140,7 +168,7 @@ Five tables. All PKs are UUID (Guid in C#). All relationships via Fluent API in 
 - **Async/await everywhere** — no sync DB or HTTP calls
 
 ### Naming
-- Entities: PascalCase singular (Satellite, TleRecord, Pass, Note, Settings)
+- Entities: PascalCase singular (Satellite, TleRecord, Pass, Note, Settings, ApiKey, UserSettings)
 - Repositories: I{Entity}Repository interface + {Entity}Repository implementation
 - Services: I{Name}Service interface + {Name}Service implementation
 - Tests: {Class}Tests.cs with xUnit
