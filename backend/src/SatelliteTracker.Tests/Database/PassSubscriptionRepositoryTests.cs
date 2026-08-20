@@ -124,6 +124,66 @@ public class PassSubscriptionRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task DeleteOverrideAsync_ExistingRow_RemovesItAndRestoresDefaultTrue()
+    {
+        var (sat, tle, apiKey) = Seed();
+        var pass = MakePass(sat.Id, tle.Id);
+        _context.Passes.Add(pass);
+        await _context.SaveChangesAsync();
+
+        await _repo.SetNotifyAsync(pass.Id, apiKey.Id, notify: false);
+
+        var result = await _repo.DeleteOverrideAsync(pass.Id, apiKey.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Empty(_context.PassSubscriptions);
+        var effective = await _repo.GetEffectiveNotifyStatusAsync(pass.Id, apiKey.Id);
+        Assert.True(effective.Value);
+    }
+
+    [Fact]
+    public async Task DeleteOverrideAsync_NoExistingRow_IsNoOpSuccess()
+    {
+        var (sat, tle, apiKey) = Seed();
+        var pass = MakePass(sat.Id, tle.Id);
+        _context.Passes.Add(pass);
+        await _context.SaveChangesAsync();
+
+        var result = await _repo.DeleteOverrideAsync(pass.Id, apiKey.Id);
+
+        Assert.True(result.IsSuccess);
+    }
+
+    [Fact]
+    public async Task DeleteOverrideAsync_OnlyRemovesTheGivenTestersRow()
+    {
+        var (sat, tle, apiKey1) = Seed();
+        var apiKey2 = new ApiKey
+        {
+            Id = Guid.NewGuid(),
+            Email = "tester2@iai.co.il",
+            DisplayName = "Tester Two",
+            KeyHash = new string('b', 64),
+            IsActive = true,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        _context.ApiKeys.Add(apiKey2);
+        var pass = MakePass(sat.Id, tle.Id);
+        _context.Passes.Add(pass);
+        await _context.SaveChangesAsync();
+
+        await _repo.SetNotifyAsync(pass.Id, apiKey1.Id, notify: false);
+        await _repo.SetNotifyAsync(pass.Id, apiKey2.Id, notify: false);
+
+        await _repo.DeleteOverrideAsync(pass.Id, apiKey1.Id);
+
+        var tester1Effective = await _repo.GetEffectiveNotifyStatusAsync(pass.Id, apiKey1.Id);
+        var tester2Effective = await _repo.GetEffectiveNotifyStatusAsync(pass.Id, apiKey2.Id);
+        Assert.True(tester1Effective.Value);
+        Assert.False(tester2Effective.Value);
+    }
+
+    [Fact]
     public async Task DeleteByPassIdAsync_RemovesOnlyThatPassSubscriptions()
     {
         var (sat, tle, apiKey) = Seed();
