@@ -27,6 +27,8 @@ builder.Services.AddScoped<ISettingsRepository, SettingsRepository>();
 builder.Services.AddScoped<IUserSettingsRepository, UserSettingsRepository>();
 builder.Services.AddScoped<IPassSubscriptionRepository, PassSubscriptionRepository>();
 builder.Services.AddScoped<IPassNotificationLogRepository, PassNotificationLogRepository>();
+builder.Services.AddScoped<IAllowlistedEmailRepository, AllowlistedEmailRepository>();
+builder.Services.AddScoped<IApiKeyRepository, ApiKeyRepository>();
 
 // Services
 builder.Services.AddScoped<ITleService, TleService>();
