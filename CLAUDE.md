@@ -119,7 +119,7 @@ No Redis needed at this scale. IMemoryCache is built into .NET.
 
 ## Database — PostgreSQL
 
-Nine tables. All PKs are UUID (Guid in C#). All relationships via Fluent API in OnModelCreating.
+Ten tables. All PKs are UUID (Guid in C#). All relationships via Fluent API in OnModelCreating.
 
 | Table                  | Purpose                                                          |
 |------------------------|-------------------------------------------------------------------|
@@ -132,6 +132,7 @@ Nine tables. All PKs are UUID (Guid in C#). All relationships via Fluent API in 
 | user_settings          | Per-tester notification prefs, 1:1 with api_keys. See below.      |
 | pass_subscriptions     | Per-tester notify opt-out per pass. Sparse. See below.            |
 | pass_notification_logs | Per-tester, per-threshold sent-notification ledger. See below.    |
+| allowlisted_emails     | Admin-managed beta signup allowlist. See below.                   |
 
 ### Beta multi-tester model — ApiKey and UserSettings
 
@@ -206,6 +207,46 @@ tester is calling, which requires `AuthenticationHandler` (not yet built) to res
 from the request, then upsert a `PassSubscription` row via `IPassSubscriptionRepository
 .SetNotifyAsync`. This must be completed before the Android app's Pass Details Modal "notify
 toggle" can work end-to-end.
+
+### Beta allowlist and self-registration — AllowlistedEmail, admin tooling, /api/auth/register
+
+**⚠️ This entire mechanism is temporary beta infrastructure (Milestone E, Step 1.2). It is not a
+foundation to build on** — production will eventually use proper org SSO, and if the allowlist
+outgrows manual admin entry it may move to a Google Sheets/Excel-backed integration. Do not extend
+or "productionize" the `X-Admin-Key` approach; a real redesign is expected before production use.
+
+- **`AllowlistedEmail`** (`Id`, `Email`, `AddedAt`) — one row per email an admin has approved for
+  beta signup. `Email` is always stored trimmed + lowercased before insert. Uniqueness is enforced
+  by a unique index on `Email` *plus* strict normalization in code before every write/read
+  comparison — the index alone is not case-insensitive, so a caller that skips normalization can
+  still create a logical duplicate.
+- **Admin auth is a completely separate concern from tester `ApiKey` identity** — it does not
+  reuse or extend the `ApiKey`/`AuthenticationHandler` concept in any way, and the future tester
+  `AuthenticationHandler` (Step 1.3) must not be merged with it. Admin endpoints require a header
+  `X-Admin-Key` matching the `Admin:ApiKey` configuration value (set via `dotnet user-secrets`,
+  the same mechanism already used for `Firebase:ServiceAccountPath`). Enforced by
+  `RequireAdminKeyAttribute` (`SatelliteTracker.API.Filters`), a standalone action filter with no
+  shared code with tester auth. Missing/invalid key → `401`.
+- **Admin endpoints** (all under `api/admin`, all `[RequireAdminKey]`, all
+  `[ApiExplorerSettings(IgnoreApi = true)]` so they never appear in the generated
+  `openapi/sattrakk-api.json` Android consumes):
+  - `POST /api/admin/allowlist` — adds an email (normalized) to the allowlist. Idempotent: adding
+    an already-present email is a no-op success, not a conflict — this is an admin convenience
+    tool, not a strict API contract.
+  - `GET /api/admin/allowlist` — lists all allowlisted emails. No pagination (small beta group).
+  - `POST /api/admin/reissue` — **stub, returns `501`**. Real key re-issuance (revoke the old key
+    and issue a new one in one step, for a tester who lost their device) is not implemented yet.
+    For now: an admin manually sets the old `ApiKey.IsActive = false` in the DB, and the tester
+    re-runs `POST /api/auth/register`. Still gated by `X-Admin-Key` even though stubbed, so the
+    real implementation doesn't need auth bolted on later.
+- **`POST /api/auth/register`** (`AuthController`) — the self-service entry point, **not** behind
+  `X-Admin-Key` or any tester auth, gated only by the allowlist check inside it. Flow: normalize
+  the submitted email → reject with `403` if not on the allowlist → reject with `409` if an active
+  `ApiKey` already exists for that email (message points at admin-assisted re-issuance, since
+  `/api/admin/reissue` isn't functional yet) → otherwise generate a random 256-bit raw key, hash
+  it with the existing `ApiKeyHasher`, persist a new `ApiKey` row, and return the **raw** key in
+  the response body — the only time it is ever visible; it is never logged. Does **not** create a
+  `UserSettings` row — that happens later, the first time Android sends an FCM token (Step 1.4).
 
 ---
 
