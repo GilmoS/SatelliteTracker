@@ -201,12 +201,13 @@ migration) — not deprecated, not kept-but-unused. That state is now split into
   `PassSubscription`/`PassNotificationLog` rows for expired-but-retained passes is a product
   decision, not made here.
 
-**TODO (Milestone E, Step 1.3)**: `PATCH /api/passes/{id}/notify` currently returns `501 Not
-Implemented` (`PassesController.PatchNotify`). The correct implementation needs to know which
-tester is calling, which requires `AuthenticationHandler` (not yet built) to resolve an `ApiKeyId`
-from the request, then upsert a `PassSubscription` row via `IPassSubscriptionRepository
-.SetNotifyAsync`. This must be completed before the Android app's Pass Details Modal "notify
-toggle" can work end-to-end.
+`PATCH /api/passes/{id}/notify` is fully implemented (Milestone E, Step 1.3) —
+`PassesController.PatchNotify` resolves the caller's `ApiKeyId` from the authenticated principal
+(see Tester Authentication below) and upserts the tester's `PassSubscription` row via
+`IPassSubscriptionRepository`. `Notify = true` is the sparse default, so setting it back to true
+*deletes* any existing override row (via the new `DeleteOverrideAsync`) rather than writing a
+redundant "true" row — `Notify = false` still goes through `SetNotifyAsync`. The endpoint requires
+`[Authorize]` under the `ApiKey` scheme and returns the pass's effective notify status.
 
 ### Beta allowlist and self-registration — AllowlistedEmail, admin tooling, /api/auth/register
 
@@ -247,6 +248,66 @@ or "productionize" the `X-Admin-Key` approach; a real redesign is expected befor
   it with the existing `ApiKeyHasher`, persist a new `ApiKey` row, and return the **raw** key in
   the response body — the only time it is ever visible; it is never logged. Does **not** create a
   `UserSettings` row — that happens later, the first time Android sends an FCM token (Step 1.4).
+
+### Tester authentication — the "ApiKey" scheme (Milestone E, Step 1.3)
+
+Testers now authenticate as a real ASP.NET Core authentication scheme, not a one-off action
+filter — this scheme is meant to be reused by every future tester-facing endpoint (starting with
+`/api/settings/me` in Step 1.4), unlike the admin `X-Admin-Key` mechanism above which is
+deliberately standalone and not meant to be extended.
+
+- **`ApiKeyAuthenticationHandler`** (`SatelliteTracker.API.Authentication`, an
+  `AuthenticationHandler<ApiKeyAuthenticationOptions>`) reads the `X-Api-Key` header, hashes it
+  with the existing `ApiKeyHasher` (never reimplemented), and looks up the hash via the new
+  `IApiKeyRepository.GetByHashAsync`. Registered as the **default** authentication scheme
+  (`ApiKeyAuthenticationOptions.SchemeName = "ApiKey"`) in `Program.cs`, so `[Authorize]` works
+  without per-action scheme configuration — endpoints still specify
+  `[Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]` explicitly for
+  clarity, matching the intent that more schemes could exist later.
+- **Missing header → `NoResult()`, not `Fail()`** — this is what lets anonymous GET endpoints
+  keep working normally even though the handler runs on every request; only an `[Authorize]`d
+  action actually triggers a challenge for a missing/invalid key.
+- **Uniform failure message, by design**: a missing header, a well-formed-but-unknown key, and a
+  found-but-inactive key all produce the exact same `401` response (`HandleChallengeAsync` writes
+  one fixed JSON body) — distinguishing them in the response would let a caller enumerate which
+  keys exist or are active. `IApiKeyRepository.GetByHashAsync` deliberately does *not* filter on
+  `IsActive` (unlike `GetActiveByEmailAsync`) so the handler can look up the row and check
+  `IsActive` itself, collapsing both cases into the same generic failure.
+- **`LastUsedAt` tracking**: every successful authentication calls the new
+  `IApiKeyRepository.UpdateLastUsedAtAsync`, persisted immediately (not just set on the in-memory
+  entity) so it reflects real API usage, not just registration/login events.
+- On success, the handler builds a `ClaimsPrincipal` carrying the tester's `ApiKeyId`, `Email`,
+  and `DisplayName`. Controllers read the ApiKeyId via `HttpContext.User.GetApiKeyId()` (or just
+  `User.GetApiKeyId()` from within a controller) — an extension method in
+  `SatelliteTracker.API.Authentication.ClaimsPrincipalExtensions` — rather than re-parsing the
+  claim by hand in every action.
+- **Endpoints requiring `[Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]`**:
+  `POST`/`PUT /api/satellites`, `POST /api/tles/{satelliteId}/fetch`,
+  `POST`/`PUT`/`DELETE` on notes, `PATCH /api/passes/{id}/notify`,
+  `POST /api/calendar/schedule` (even though it's not itself a DB write — an anonymous
+  calendar-generation endpoint is an abuse/DoS surface), and `PUT /api/settings` (a mutating
+  endpoint found during the Step 1.3 audit that wasn't in the original planned list). **All GET
+  endpoints stay anonymous** — none of them are tester-specific in a way that requires knowing who
+  is asking. That changes starting with `/api/settings/me` in Step 1.4, the first
+  inherently-tester-specific endpoint (a GET that must know which tester's settings to return).
+- Deliberately **not** touched: `POST /api/auth/register` (self-service, gated only by the
+  allowlist check — see above) and every `api/admin/*` endpoint (gated by the separate
+  `X-Admin-Key`/`RequireAdminKeyAttribute` mechanism, which must not be merged with tester auth).
+
+### WebApplicationFactory test infrastructure
+
+`SatelliteTracker.Tests.API.Infrastructure.CustomWebApplicationFactory` boots the real API host
+(`Program.cs`, full middleware pipeline) in-memory via `Microsoft.AspNetCore.Mvc.Testing`, backed
+by a SQLite in-memory `TestAppDbContext` (the same subclass/pattern `TestDbContextFactory` already
+uses for repository-level tests — the int[]-as-CSV conversion for `UserSettings.AlertMinutes` and
+the no-op `SeedData()` override). It also removes the three background `IHostedService`
+registrations (`TleUpdateJob`, `PassCalculationJob`, `PassNotificationJob`) so tests don't race
+real-world timers against N2YO/Firebase on an in-memory connection. Use this — not hand-built
+`ActionExecutingContext`/filter-context objects like `RequireAdminKeyAttributeTests` uses — for any
+test that needs to verify behavior of the actual HTTP pipeline (header parsing, DI wiring,
+middleware ordering), since that's something a direct controller-method call can't exercise.
+Controller-level unit tests (real SQLite-backed repositories, mocked services) remain the right
+tool for testing business logic that doesn't depend on the pipeline itself.
 
 ---
 
