@@ -21,6 +21,7 @@ public class AppDbContext : DbContext
     public DbSet<UserSettings> UserSettings => Set<UserSettings>();
     public DbSet<PassSubscription> PassSubscriptions => Set<PassSubscription>();
     public DbSet<PassNotificationLog> PassNotificationLogs => Set<PassNotificationLog>();
+    public DbSet<AllowlistedEmail> AllowlistedEmails => Set<AllowlistedEmail>();
 
     // The OnModelCreating method is overridden to configure the entity relationships and constraints using Fluent API.
     // It defines the primary keys, property constraints, and relationships between the entities.
@@ -134,6 +135,13 @@ private static void ConfigureEntities(ModelBuilder modelBuilder)
          .OnDelete(DeleteBehavior.Cascade);
         // Append-only ledger: one row per (pass, tester, threshold) that actually fired.
         e.HasIndex(l => new { l.PassId, l.ApiKeyId, l.AlertMinutes }).IsUnique();
+    });
+    modelBuilder.Entity<AllowlistedEmail>(e =>
+    {
+        e.HasKey(a => a.Id);
+        e.Property(a => a.Email).HasMaxLength(256).IsRequired();
+        // Uniqueness relies on every write normalizing (trim+lowercase) first — see entity comment.
+        e.HasIndex(a => a.Email).IsUnique();
     });
 }
 
