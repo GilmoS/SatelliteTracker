@@ -119,15 +119,134 @@ No Redis needed at this scale. IMemoryCache is built into .NET.
 
 ## Database — PostgreSQL
 
-Five tables. All PKs are UUID (Guid in C#). All relationships via Fluent API in OnModelCreating.
+Ten tables. All PKs are UUID (Guid in C#). All relationships via Fluent API in OnModelCreating.
 
-| Table      | Purpose                                              |
-|------------|------------------------------------------------------|
-| satellites | Satellite catalog. NoradId is unique.                |
-| tles       | TLE history per satellite. Up to 6 months back.      |
-| passes     | Calculated passes. 1 week forward + 6 months history.|
-| notes      | Free-text per pass. CASCADE delete with pass.        |
-| settings   | Single settings row. AlertMinutes is int[].          |
+| Table                  | Purpose                                                          |
+|------------------------|-------------------------------------------------------------------|
+| satellites             | Satellite catalog. NoradId is unique.                             |
+| tles                   | TLE history per satellite. Up to 6 months back.                   |
+| passes                 | Calculated passes. 1 week forward + 6 months history.             |
+| notes                  | Free-text per pass. CASCADE delete with pass.                     |
+| settings               | Single global row: MinElevation, OutlookDays, TeamEmail.          |
+| api_keys               | One row per registered beta tester. See below.                    |
+| user_settings          | Per-tester notification prefs, 1:1 with api_keys. See below.      |
+| pass_subscriptions     | Per-tester notify opt-out per pass. Sparse. See below.            |
+| pass_notification_logs | Per-tester, per-threshold sent-notification ledger. See below.    |
+| allowlisted_emails     | Admin-managed beta signup allowlist. See below.                   |
+
+### Beta multi-tester model — ApiKey and UserSettings
+
+The app moved from a single global settings row to per-tester API keys for the beta:
+
+- **`ApiKey`** — one row per registered tester (`Email`, `DisplayName`, `KeyHash`, `IsActive`,
+  `CreatedAt`, `LastUsedAt`). The raw key is a random 256-bit value
+  (`RandomNumberGenerator.GetBytes(32)`) shown to the tester exactly once at registration and
+  never stored — only `KeyHash` (its SHA-256 hash, via `ApiKeyHasher` in
+  `SatelliteTracker.Database.Security`) is persisted. `DisplayName` exists separately from
+  `Email` so testers can be identified in logs/manual testing without exposing email everywhere.
+  **SHA-256, not bcrypt/PBKDF2/Argon2, is intentional**: slow hashes exist to slow down
+  brute-forcing low-entropy, human-chosen secrets (passwords). The raw key here is fully random
+  at 256 bits, so guessing it is computationally infeasible even against a fast hash — a slow
+  hash would only add cost to every request with no security benefit. Do not "fix" this later.
+- **`UserSettings`** — per-tester `FcmToken` and `AlertMinutes` (the fields that used to live on
+  the global `Settings` row), 1:1 with `ApiKey` via a required `ApiKeyId` FK. The 1:1 is enforced
+  with `HasIndex(x => x.ApiKeyId).IsUnique()` in `OnModelCreating` — the navigation property alone
+  does not enforce it.
+- **`Settings.OutlookDays` and `Settings.TeamEmail`** remain in the schema but are **not read from
+  anywhere in the logic yet** — they're prep for a future Microsoft Graph integration pending IT
+  admin consent, not dead code to clean up. See the Calendar Sync section above for the current
+  ICS-based flow that replaced the Graph-based design these fields were originally meant for.
+- `PassNotificationJob` reads all active testers' `UserSettings` via
+  `IUserSettingsRepository.GetAllActiveAsync()` (filtered to `ApiKey.IsActive`) and notifies each
+  independently rather than reading one global FCM token/alert-minutes pair.
+
+### Per-tester notification state — PassSubscription and PassNotificationLog
+
+`Pass` used to carry `Notify`, `NotificationSent`, and `NotificationSentAt` — all three assumed a
+single global recipient, which doesn't work once there are multiple independent testers. **These
+three fields were removed from `Pass` entirely** (dropped in the `SplitPassNotificationState`
+migration) — not deprecated, not kept-but-unused. That state is now split into two tables:
+
+- **`PassSubscription`** — per-tester notify opt-out for a specific pass. **Sparse/opt-out
+  model**: a row exists ONLY once a tester has actively toggled notifications off for that pass —
+  there is no row created by default when a pass is calculated or when a tester registers.
+  Absence of a row means `Notify = true`. Every read of this table (including in
+  `PassNotificationJob`) must treat a missing row as `Notify = true` — `IPassSubscriptionRepository
+  .GetEffectiveNotifyStatusAsync(passId, apiKeyId)` encodes this LEFT JOIN + COALESCE explicitly
+  rather than exposing a generic `GetAsync` that could be misread as "null means unsubscribed."
+  Unique index on `(PassId, ApiKeyId)`.
+- **`PassNotificationLog`** — append-only ledger of notifications actually sent, one row per
+  `(PassId, ApiKeyId, AlertMinutes)` threshold that fired, never a flag that gets flipped back. A
+  single tester can have multiple rows for the same pass — one per `AlertMinutes` threshold (e.g.
+  `[5, 10, 30]` can produce up to 3 rows for one pass, one per job tick that matches a threshold).
+  Unique index on `(PassId, ApiKeyId, AlertMinutes)`. `IPassNotificationLogRepository
+  .TryInsertAsync` catches the unique-constraint violation from a concurrent job tick and returns
+  `false` ("already logged") instead of throwing — do not let that exception propagate.
+- `PassNotificationJob` fetches all future passes, then for each (pass, active tester) pair checks
+  `PassSubscription` (sparse opt-out) before checking `PassNotificationLog` per `AlertMinutes`
+  threshold. This fixes the previous bug where a single global `NotificationSent` flag meant that
+  once any tester's earliest threshold fired, the pass was marked done and no other tester —
+  including one who registered afterward — could ever be notified about it.
+- Both `PassSubscription` and `PassNotificationLog` rows CASCADE-delete when their `Pass` row is
+  deleted (mirrors `Note`'s cascade pattern) — this covers the "pass cancelled/recalculated" case,
+  since `PassService.CalculateAndSavePassesAsync` deletes and replaces upcoming `Pass` rows via
+  `IPassRepository.DeleteUpcomingAsync` on every recalculation.
+- **Unresolved tension, flagged for a decision, not resolved here**: there is no existing job that
+  deletes `Pass` rows once they're in the past (LOS in the past) — the 6-month history requirement
+  means historical `Pass` rows are kept, only filtered out by `GetHistoryAsync`'s date range, never
+  deleted. So cascade delete never fires for "pass has passed." `IPassSubscriptionRepository
+  .DeleteByPassIdAsync` and `IPassNotificationLogRepository.DeleteByPassIdAsync` exist as
+  standalone primitives (delete the subscription/log rows without deleting the `Pass` row) for a
+  future expiry job, but nothing calls them yet. Deciding whether/when to clean up
+  `PassSubscription`/`PassNotificationLog` rows for expired-but-retained passes is a product
+  decision, not made here.
+
+**TODO (Milestone E, Step 1.3)**: `PATCH /api/passes/{id}/notify` currently returns `501 Not
+Implemented` (`PassesController.PatchNotify`). The correct implementation needs to know which
+tester is calling, which requires `AuthenticationHandler` (not yet built) to resolve an `ApiKeyId`
+from the request, then upsert a `PassSubscription` row via `IPassSubscriptionRepository
+.SetNotifyAsync`. This must be completed before the Android app's Pass Details Modal "notify
+toggle" can work end-to-end.
+
+### Beta allowlist and self-registration — AllowlistedEmail, admin tooling, /api/auth/register
+
+**⚠️ This entire mechanism is temporary beta infrastructure (Milestone E, Step 1.2). It is not a
+foundation to build on** — production will eventually use proper org SSO, and if the allowlist
+outgrows manual admin entry it may move to a Google Sheets/Excel-backed integration. Do not extend
+or "productionize" the `X-Admin-Key` approach; a real redesign is expected before production use.
+
+- **`AllowlistedEmail`** (`Id`, `Email`, `AddedAt`) — one row per email an admin has approved for
+  beta signup. `Email` is always stored trimmed + lowercased before insert. Uniqueness is enforced
+  by a unique index on `Email` *plus* strict normalization in code before every write/read
+  comparison — the index alone is not case-insensitive, so a caller that skips normalization can
+  still create a logical duplicate.
+- **Admin auth is a completely separate concern from tester `ApiKey` identity** — it does not
+  reuse or extend the `ApiKey`/`AuthenticationHandler` concept in any way, and the future tester
+  `AuthenticationHandler` (Step 1.3) must not be merged with it. Admin endpoints require a header
+  `X-Admin-Key` matching the `Admin:ApiKey` configuration value (set via `dotnet user-secrets`,
+  the same mechanism already used for `Firebase:ServiceAccountPath`). Enforced by
+  `RequireAdminKeyAttribute` (`SatelliteTracker.API.Filters`), a standalone action filter with no
+  shared code with tester auth. Missing/invalid key → `401`.
+- **Admin endpoints** (all under `api/admin`, all `[RequireAdminKey]`, all
+  `[ApiExplorerSettings(IgnoreApi = true)]` so they never appear in the generated
+  `openapi/sattrakk-api.json` Android consumes):
+  - `POST /api/admin/allowlist` — adds an email (normalized) to the allowlist. Idempotent: adding
+    an already-present email is a no-op success, not a conflict — this is an admin convenience
+    tool, not a strict API contract.
+  - `GET /api/admin/allowlist` — lists all allowlisted emails. No pagination (small beta group).
+  - `POST /api/admin/reissue` — **stub, returns `501`**. Real key re-issuance (revoke the old key
+    and issue a new one in one step, for a tester who lost their device) is not implemented yet.
+    For now: an admin manually sets the old `ApiKey.IsActive = false` in the DB, and the tester
+    re-runs `POST /api/auth/register`. Still gated by `X-Admin-Key` even though stubbed, so the
+    real implementation doesn't need auth bolted on later.
+- **`POST /api/auth/register`** (`AuthController`) — the self-service entry point, **not** behind
+  `X-Admin-Key` or any tester auth, gated only by the allowlist check inside it. Flow: normalize
+  the submitted email → reject with `403` if not on the allowlist → reject with `409` if an active
+  `ApiKey` already exists for that email (message points at admin-assisted re-issuance, since
+  `/api/admin/reissue` isn't functional yet) → otherwise generate a random 256-bit raw key, hash
+  it with the existing `ApiKeyHasher`, persist a new `ApiKey` row, and return the **raw** key in
+  the response body — the only time it is ever visible; it is never logged. Does **not** create a
+  `UserSettings` row — that happens later, the first time Android sends an FCM token (Step 1.4).
 
 ---
 
@@ -140,7 +259,7 @@ Five tables. All PKs are UUID (Guid in C#). All relationships via Fluent API in 
 - **Async/await everywhere** — no sync DB or HTTP calls
 
 ### Naming
-- Entities: PascalCase singular (Satellite, TleRecord, Pass, Note, Settings)
+- Entities: PascalCase singular (Satellite, TleRecord, Pass, Note, Settings, ApiKey, UserSettings)
 - Repositories: I{Entity}Repository interface + {Entity}Repository implementation
 - Services: I{Name}Service interface + {Name}Service implementation
 - Tests: {Class}Tests.cs with xUnit

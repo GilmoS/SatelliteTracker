@@ -107,33 +107,15 @@ public class PassRepository : IPassRepository
         }
     }
 
-    // Updates the Notify flag for a specific pass by its unique identifier.
-    public async Task<Result<Pass>> UpdateNotifyAsync(Guid id, bool notify)
-    {
-        try
-        {
-            var pass = await _context.Passes.FindAsync(id);
-            if (pass is null)
-                return Result<Pass>.Failure("Pass not found");
-
-            pass.Notify = notify;
-            await _context.SaveChangesAsync();
-            return Result<Pass>.Success(pass);
-        }
-        catch (Exception ex)
-        {
-            return Result<Pass>.Failure(ex.Message);
-        }
-    }
-
-    // Returns all future passes with notify=true that have not yet had a notification sent.
+    // Returns all future passes; per-tester opt-out/already-sent filtering now happens in
+    // PassNotificationJob against PassSubscription and PassNotificationLog.
     public async Task<Result<IEnumerable<Pass>>> GetPendingNotificationsAsync()
     {
         try
         {
             var passes = await _context.Passes
                 .Include(p => p.Satellite)
-                .Where(p => p.Notify && !p.NotificationSent && p.Aos > DateTime.UtcNow)
+                .Where(p => p.Aos > DateTime.UtcNow)
                 .OrderBy(p => p.Aos)
                 .ToListAsync();
 

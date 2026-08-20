@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using SatelliteTracker.Database;
@@ -11,9 +12,11 @@ using SatelliteTracker.Database;
 namespace SatelliteTracker.Database.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260817151044_AddApiKeysAndUserSettings")]
+    partial class AddApiKeysAndUserSettings
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -21,28 +24,6 @@ namespace SatelliteTracker.Database.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
-
-            modelBuilder.Entity("SatelliteTracker.Database.Entities.AllowlistedEmail", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("AddedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Email")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Email")
-                        .IsUnique();
-
-                    b.ToTable("AllowlistedEmails");
-                });
 
             modelBuilder.Entity("SatelliteTracker.Database.Entities.ApiKey", b =>
                 {
@@ -132,6 +113,15 @@ namespace SatelliteTracker.Database.Migrations
                     b.Property<decimal>("MaxElevation")
                         .HasColumnType("numeric");
 
+                    b.Property<bool>("NotificationSent")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime?>("NotificationSentAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("Notify")
+                        .HasColumnType("boolean");
+
                     b.Property<int>("OrbitNumber")
                         .HasColumnType("integer");
 
@@ -151,62 +141,6 @@ namespace SatelliteTracker.Database.Migrations
                     b.HasIndex("TleId");
 
                     b.ToTable("Passes");
-                });
-
-            modelBuilder.Entity("SatelliteTracker.Database.Entities.PassNotificationLog", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("AlertMinutes")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid>("ApiKeyId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("PassId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("SentAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ApiKeyId");
-
-                    b.HasIndex("PassId", "ApiKeyId", "AlertMinutes")
-                        .IsUnique();
-
-                    b.ToTable("PassNotificationLogs");
-                });
-
-            modelBuilder.Entity("SatelliteTracker.Database.Entities.PassSubscription", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("ApiKeyId")
-                        .HasColumnType("uuid");
-
-                    b.Property<bool>("Notify")
-                        .HasColumnType("boolean");
-
-                    b.Property<Guid>("PassId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ApiKeyId");
-
-                    b.HasIndex("PassId", "ApiKeyId")
-                        .IsUnique();
-
-                    b.ToTable("PassSubscriptions");
                 });
 
             modelBuilder.Entity("SatelliteTracker.Database.Entities.Satellite", b =>
@@ -377,44 +311,6 @@ namespace SatelliteTracker.Database.Migrations
                     b.Navigation("TleRecord");
                 });
 
-            modelBuilder.Entity("SatelliteTracker.Database.Entities.PassNotificationLog", b =>
-                {
-                    b.HasOne("SatelliteTracker.Database.Entities.ApiKey", "ApiKey")
-                        .WithMany("PassNotificationLogs")
-                        .HasForeignKey("ApiKeyId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("SatelliteTracker.Database.Entities.Pass", "Pass")
-                        .WithMany("PassNotificationLogs")
-                        .HasForeignKey("PassId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("ApiKey");
-
-                    b.Navigation("Pass");
-                });
-
-            modelBuilder.Entity("SatelliteTracker.Database.Entities.PassSubscription", b =>
-                {
-                    b.HasOne("SatelliteTracker.Database.Entities.ApiKey", "ApiKey")
-                        .WithMany("PassSubscriptions")
-                        .HasForeignKey("ApiKeyId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("SatelliteTracker.Database.Entities.Pass", "Pass")
-                        .WithMany("PassSubscriptions")
-                        .HasForeignKey("PassId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("ApiKey");
-
-                    b.Navigation("Pass");
-                });
-
             modelBuilder.Entity("SatelliteTracker.Database.Entities.TleRecord", b =>
                 {
                     b.HasOne("SatelliteTracker.Database.Entities.Satellite", "Satellite")
@@ -439,20 +335,12 @@ namespace SatelliteTracker.Database.Migrations
 
             modelBuilder.Entity("SatelliteTracker.Database.Entities.ApiKey", b =>
                 {
-                    b.Navigation("PassNotificationLogs");
-
-                    b.Navigation("PassSubscriptions");
-
                     b.Navigation("UserSettings");
                 });
 
             modelBuilder.Entity("SatelliteTracker.Database.Entities.Pass", b =>
                 {
                     b.Navigation("Notes");
-
-                    b.Navigation("PassNotificationLogs");
-
-                    b.Navigation("PassSubscriptions");
                 });
 
             modelBuilder.Entity("SatelliteTracker.Database.Entities.Satellite", b =>

@@ -36,17 +36,17 @@ public class PassNotificationJobTests : IDisposable
 
     private PassNotificationJob CreateJob() => new(_logger.Object, _scopeFactory.Object);
 
-    private static Settings MakeSettings(string? fcmToken = "test-token", int[]? alertMinutes = null) => new()
+    private static UserSettings MakeUserSettings(
+        Guid? apiKeyId = null, string? fcmToken = "test-token", int[]? alertMinutes = null) => new()
     {
         Id = Guid.NewGuid(),
+        ApiKeyId = apiKeyId ?? Guid.NewGuid(),
         FcmToken = fcmToken,
         AlertMinutes = alertMinutes ?? [5, 10, 30],
-        OutlookDays = 7,
-        MinElevation = 5,
-        UpdatedAt = DateTime.UtcNow
+        UpdatedAt = DateTimeOffset.UtcNow
     };
 
-    private static (Pass pass, Satellite satellite) MakePass(double minutesFromNow, bool notify = true, bool notificationSent = false)
+    private static (Pass pass, Satellite satellite) MakePass(double minutesFromNow)
     {
         var satellite = new Satellite
         {
@@ -68,28 +68,50 @@ public class PassNotificationJobTests : IDisposable
             AosAzimuth = 90,
             LosAzimuth = 270,
             DurationSec = 600,
-            Notify = notify,
-            NotificationSent = notificationSent,
             CalculatedAt = DateTime.UtcNow
         };
         return (pass, satellite);
     }
 
+    private static Mock<IPassRepository> MockPassRepo(params Pass[] passes)
+    {
+        var mock = new Mock<IPassRepository>();
+        mock.Setup(r => r.GetPendingNotificationsAsync())
+            .ReturnsAsync(Result<IEnumerable<Pass>>.Success(passes));
+        return mock;
+    }
+
+    private static Mock<IPassSubscriptionRepository> MockSubscriptionRepo(params PassSubscription[] subscriptions)
+    {
+        var mock = new Mock<IPassSubscriptionRepository>();
+        mock.Setup(r => r.GetByPassIdsAsync(It.IsAny<IEnumerable<Guid>>()))
+            .ReturnsAsync(Result<IEnumerable<PassSubscription>>.Success(subscriptions));
+        return mock;
+    }
+
+    private static Mock<IPassNotificationLogRepository> MockLogRepo(params PassNotificationLog[] alreadySent)
+    {
+        var mock = new Mock<IPassNotificationLogRepository>();
+        mock.Setup(r => r.GetByPassIdsAsync(It.IsAny<IEnumerable<Guid>>()))
+            .ReturnsAsync(Result<IEnumerable<PassNotificationLog>>.Success(alreadySent));
+        mock.Setup(r => r.TryInsertAsync(It.IsAny<PassNotificationLog>()))
+            .ReturnsAsync(Result<bool>.Success(true));
+        return mock;
+    }
+
     [Fact]
     public async Task SendNotification_WhenPassIsWithinAlertWindow_SendsFCM()
     {
-        var settings = MakeSettings(fcmToken: "device-token", alertMinutes: [5, 10]);
+        var settings = MakeUserSettings(fcmToken: "device-token", alertMinutes: [5, 10]);
         var (pass, _) = MakePass(minutesFromNow: 10);
 
-        var mockSettingsRepo = new Mock<ISettingsRepository>();
-        mockSettingsRepo.Setup(r => r.GetAsync())
-            .ReturnsAsync(Result<Settings>.Success(settings));
+        var mockSettingsRepo = new Mock<IUserSettingsRepository>();
+        mockSettingsRepo.Setup(r => r.GetAllActiveAsync())
+            .ReturnsAsync(Result<IEnumerable<UserSettings>>.Success([settings]));
 
-        var mockPassRepo = new Mock<IPassRepository>();
-        mockPassRepo.Setup(r => r.GetPendingNotificationsAsync())
-            .ReturnsAsync(Result<IEnumerable<Pass>>.Success([pass]));
-        mockPassRepo.Setup(r => r.UpdateAsync(It.IsAny<Pass>()))
-            .ReturnsAsync((Pass p) => Result<Pass>.Success(p));
+        var mockPassRepo = MockPassRepo(pass);
+        var mockSubscriptionRepo = MockSubscriptionRepo();
+        var mockLogRepo = MockLogRepo();
 
         var mockFirebase = new Mock<IFirebaseService>();
         mockFirebase.Setup(f => f.SendPassNotificationAsync(
@@ -97,26 +119,30 @@ public class PassNotificationJobTests : IDisposable
             .Returns(Task.CompletedTask);
 
         await CreateJob().ProcessPendingNotificationsAsync(
-            mockSettingsRepo.Object, mockPassRepo.Object, mockFirebase.Object);
+            mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
 
         mockFirebase.Verify(f => f.SendPassNotificationAsync(
             "device-token", "EROS C3", pass.Aos, 10), Times.Once);
+        mockLogRepo.Verify(r => r.TryInsertAsync(It.Is<PassNotificationLog>(
+            l => l.PassId == pass.Id && l.ApiKeyId == settings.ApiKeyId && l.AlertMinutes == 10)), Times.Once);
     }
 
     [Fact]
     public async Task SendNotification_WhenFcmTokenIsEmpty_SkipsNotification()
     {
-        var settings = MakeSettings(fcmToken: null);
+        var settings = MakeUserSettings(fcmToken: null);
 
-        var mockSettingsRepo = new Mock<ISettingsRepository>();
-        mockSettingsRepo.Setup(r => r.GetAsync())
-            .ReturnsAsync(Result<Settings>.Success(settings));
+        var mockSettingsRepo = new Mock<IUserSettingsRepository>();
+        mockSettingsRepo.Setup(r => r.GetAllActiveAsync())
+            .ReturnsAsync(Result<IEnumerable<UserSettings>>.Success([settings]));
 
         var mockPassRepo = new Mock<IPassRepository>();
+        var mockSubscriptionRepo = new Mock<IPassSubscriptionRepository>();
+        var mockLogRepo = new Mock<IPassNotificationLogRepository>();
         var mockFirebase = new Mock<IFirebaseService>();
 
         await CreateJob().ProcessPendingNotificationsAsync(
-            mockSettingsRepo.Object, mockPassRepo.Object, mockFirebase.Object);
+            mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
 
         mockFirebase.Verify(f => f.SendPassNotificationAsync(
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>()), Times.Never);
@@ -124,29 +150,178 @@ public class PassNotificationJobTests : IDisposable
     }
 
     [Fact]
-    public async Task SendNotification_WhenPassAlreadySent_SkipsNotification()
+    public async Task SendNotification_WhenNoPendingPasses_SkipsNotification()
     {
-        var settings = MakeSettings(alertMinutes: [5, 10]);
+        var settings = MakeUserSettings(alertMinutes: [5, 10]);
 
-        var mockSettingsRepo = new Mock<ISettingsRepository>();
-        mockSettingsRepo.Setup(r => r.GetAsync())
-            .ReturnsAsync(Result<Settings>.Success(settings));
+        var mockSettingsRepo = new Mock<IUserSettingsRepository>();
+        mockSettingsRepo.Setup(r => r.GetAllActiveAsync())
+            .ReturnsAsync(Result<IEnumerable<UserSettings>>.Success([settings]));
 
-        var mockPassRepo = new Mock<IPassRepository>();
-        mockPassRepo.Setup(r => r.GetPendingNotificationsAsync())
-            .ReturnsAsync(Result<IEnumerable<Pass>>.Success([]));
-
+        var mockPassRepo = MockPassRepo();
+        var mockSubscriptionRepo = new Mock<IPassSubscriptionRepository>();
+        var mockLogRepo = new Mock<IPassNotificationLogRepository>();
         var mockFirebase = new Mock<IFirebaseService>();
 
         await CreateJob().ProcessPendingNotificationsAsync(
-            mockSettingsRepo.Object, mockPassRepo.Object, mockFirebase.Object);
+            mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
 
         mockFirebase.Verify(f => f.SendPassNotificationAsync(
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>()), Times.Never);
+        mockSubscriptionRepo.Verify(r => r.GetByPassIdsAsync(It.IsAny<IEnumerable<Guid>>()), Times.Never);
     }
 
     [Fact]
-    public async Task GetPendingNotifications_ReturnsOnlyNotifyTruePasses()
+    public async Task MultipleTesters_DifferentAlertMinutes_BothNotifiedIndependently()
+    {
+        var (pass, _) = MakePass(minutesFromNow: 10);
+        var testerA = MakeUserSettings(fcmToken: "token-a", alertMinutes: [10]);
+        var testerB = MakeUserSettings(fcmToken: "token-b", alertMinutes: [10, 30]);
+
+        var mockSettingsRepo = new Mock<IUserSettingsRepository>();
+        mockSettingsRepo.Setup(r => r.GetAllActiveAsync())
+            .ReturnsAsync(Result<IEnumerable<UserSettings>>.Success([testerA, testerB]));
+
+        var mockPassRepo = MockPassRepo(pass);
+        var mockSubscriptionRepo = MockSubscriptionRepo();
+        var mockLogRepo = MockLogRepo();
+        var mockFirebase = new Mock<IFirebaseService>();
+
+        await CreateJob().ProcessPendingNotificationsAsync(
+            mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
+
+        mockFirebase.Verify(f => f.SendPassNotificationAsync("token-a", "EROS C3", pass.Aos, 10), Times.Once);
+        mockFirebase.Verify(f => f.SendPassNotificationAsync("token-b", "EROS C3", pass.Aos, 10), Times.Once);
+    }
+
+    [Fact]
+    public async Task UnsubscribedTester_NoSend()
+    {
+        var (pass, _) = MakePass(minutesFromNow: 10);
+        var settings = MakeUserSettings(fcmToken: "device-token", alertMinutes: [10]);
+
+        var optOut = new PassSubscription
+        {
+            Id = Guid.NewGuid(),
+            PassId = pass.Id,
+            ApiKeyId = settings.ApiKeyId,
+            Notify = false,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+
+        var mockSettingsRepo = new Mock<IUserSettingsRepository>();
+        mockSettingsRepo.Setup(r => r.GetAllActiveAsync())
+            .ReturnsAsync(Result<IEnumerable<UserSettings>>.Success([settings]));
+
+        var mockPassRepo = MockPassRepo(pass);
+        var mockSubscriptionRepo = MockSubscriptionRepo(optOut);
+        var mockLogRepo = MockLogRepo();
+        var mockFirebase = new Mock<IFirebaseService>();
+
+        await CreateJob().ProcessPendingNotificationsAsync(
+            mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
+
+        mockFirebase.Verify(f => f.SendPassNotificationAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>()), Times.Never);
+        mockLogRepo.Verify(r => r.TryInsertAsync(It.IsAny<PassNotificationLog>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task TesterWithNoSubscriptionRow_DefaultsToNotified()
+    {
+        var (pass, _) = MakePass(minutesFromNow: 10);
+        var settings = MakeUserSettings(fcmToken: "device-token", alertMinutes: [10]);
+
+        var mockSettingsRepo = new Mock<IUserSettingsRepository>();
+        mockSettingsRepo.Setup(r => r.GetAllActiveAsync())
+            .ReturnsAsync(Result<IEnumerable<UserSettings>>.Success([settings]));
+
+        var mockPassRepo = MockPassRepo(pass);
+        // No subscription rows at all for this pass — sparse table, absence means notify = true.
+        var mockSubscriptionRepo = MockSubscriptionRepo();
+        var mockLogRepo = MockLogRepo();
+        var mockFirebase = new Mock<IFirebaseService>();
+
+        await CreateJob().ProcessPendingNotificationsAsync(
+            mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
+
+        mockFirebase.Verify(f => f.SendPassNotificationAsync(
+            "device-token", "EROS C3", pass.Aos, 10), Times.Once);
+    }
+
+    [Fact]
+    public async Task ThresholdAlreadyLogged_NotResent()
+    {
+        var (pass, _) = MakePass(minutesFromNow: 10);
+        var settings = MakeUserSettings(fcmToken: "device-token", alertMinutes: [10]);
+
+        var existingLog = new PassNotificationLog
+        {
+            Id = Guid.NewGuid(),
+            PassId = pass.Id,
+            ApiKeyId = settings.ApiKeyId,
+            AlertMinutes = 10,
+            SentAt = DateTimeOffset.UtcNow.AddMinutes(-1)
+        };
+
+        var mockSettingsRepo = new Mock<IUserSettingsRepository>();
+        mockSettingsRepo.Setup(r => r.GetAllActiveAsync())
+            .ReturnsAsync(Result<IEnumerable<UserSettings>>.Success([settings]));
+
+        var mockPassRepo = MockPassRepo(pass);
+        var mockSubscriptionRepo = MockSubscriptionRepo();
+        var mockLogRepo = MockLogRepo(existingLog);
+        var mockFirebase = new Mock<IFirebaseService>();
+
+        await CreateJob().ProcessPendingNotificationsAsync(
+            mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
+
+        mockFirebase.Verify(f => f.SendPassNotificationAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>()), Times.Never);
+        mockLogRepo.Verify(r => r.TryInsertAsync(It.IsAny<PassNotificationLog>()), Times.Never);
+    }
+
+    // Regression test for the bug this whole change fixes: previously, a single global
+    // NotificationSent flag on Pass meant that once ANY tester's earliest threshold fired, the
+    // pass was marked done and no other tester (including one that registered afterward) could
+    // ever be notified about it. Completion is now tracked per (pass, tester, threshold), so a
+    // new tester still gets their own notifications for thresholds no one has logged for them yet.
+    [Fact]
+    public async Task NewTesterAfterOtherTesterAlreadyLogged_StillGetsOwnNotification()
+    {
+        var (pass, _) = MakePass(minutesFromNow: 10);
+        var existingTester = MakeUserSettings(fcmToken: "existing-token", alertMinutes: [10]);
+        var newTester = MakeUserSettings(fcmToken: "new-token", alertMinutes: [10]);
+
+        var existingLog = new PassNotificationLog
+        {
+            Id = Guid.NewGuid(),
+            PassId = pass.Id,
+            ApiKeyId = existingTester.ApiKeyId,
+            AlertMinutes = 10,
+            SentAt = DateTimeOffset.UtcNow.AddMinutes(-1)
+        };
+
+        var mockSettingsRepo = new Mock<IUserSettingsRepository>();
+        mockSettingsRepo.Setup(r => r.GetAllActiveAsync())
+            .ReturnsAsync(Result<IEnumerable<UserSettings>>.Success([existingTester, newTester]));
+
+        var mockPassRepo = MockPassRepo(pass);
+        var mockSubscriptionRepo = MockSubscriptionRepo();
+        var mockLogRepo = MockLogRepo(existingLog);
+        var mockFirebase = new Mock<IFirebaseService>();
+
+        await CreateJob().ProcessPendingNotificationsAsync(
+            mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
+
+        mockFirebase.Verify(f => f.SendPassNotificationAsync(
+            "existing-token", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>()), Times.Never);
+        mockFirebase.Verify(f => f.SendPassNotificationAsync(
+            "new-token", "EROS C3", pass.Aos, 10), Times.Once);
+    }
+
+    [Fact]
+    public async Task GetPendingNotifications_ReturnsOnlyFuturePasses()
     {
         var satellite = new Satellite
         {
@@ -169,13 +344,11 @@ public class PassNotificationJobTests : IDisposable
         };
         _context.TleRecords.Add(tle);
 
-        var notifyPass = new Pass
+        var futurePass = new Pass
         {
             Id = Guid.NewGuid(),
             SatelliteId = satellite.Id,
             TleId = tle.Id,
-            Notify = true,
-            NotificationSent = false,
             Aos = DateTime.UtcNow.AddHours(1),
             Los = DateTime.UtcNow.AddHours(1).AddMinutes(10),
             MaxElevation = 45,
@@ -185,15 +358,13 @@ public class PassNotificationJobTests : IDisposable
             CalculatedAt = DateTime.UtcNow
         };
 
-        var noNotifyPass = new Pass
+        var pastPass = new Pass
         {
             Id = Guid.NewGuid(),
             SatelliteId = satellite.Id,
             TleId = tle.Id,
-            Notify = false,
-            NotificationSent = false,
-            Aos = DateTime.UtcNow.AddHours(2),
-            Los = DateTime.UtcNow.AddHours(2).AddMinutes(10),
+            Aos = DateTime.UtcNow.AddHours(-3),
+            Los = DateTime.UtcNow.AddHours(-3).AddMinutes(10),
             MaxElevation = 45,
             AosAzimuth = 90,
             LosAzimuth = 270,
@@ -201,30 +372,13 @@ public class PassNotificationJobTests : IDisposable
             CalculatedAt = DateTime.UtcNow
         };
 
-        var alreadySentPass = new Pass
-        {
-            Id = Guid.NewGuid(),
-            SatelliteId = satellite.Id,
-            TleId = tle.Id,
-            Notify = true,
-            NotificationSent = true,
-            NotificationSentAt = DateTime.UtcNow.AddMinutes(-5),
-            Aos = DateTime.UtcNow.AddHours(3),
-            Los = DateTime.UtcNow.AddHours(3).AddMinutes(10),
-            MaxElevation = 45,
-            AosAzimuth = 90,
-            LosAzimuth = 270,
-            DurationSec = 600,
-            CalculatedAt = DateTime.UtcNow
-        };
-
-        _context.Passes.AddRange(notifyPass, noNotifyPass, alreadySentPass);
+        _context.Passes.AddRange(futurePass, pastPass);
         await _context.SaveChangesAsync();
 
         var result = await _passRepo.GetPendingNotificationsAsync();
 
         Assert.True(result.IsSuccess);
         Assert.Single(result.Value!);
-        Assert.Equal(notifyPass.Id, result.Value!.First().Id);
+        Assert.Equal(futurePass.Id, result.Value!.First().Id);
     }
 }

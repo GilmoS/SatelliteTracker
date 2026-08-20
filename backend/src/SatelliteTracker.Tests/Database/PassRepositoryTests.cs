@@ -165,34 +165,11 @@ public class PassRepositoryTests : IDisposable
         _context.Passes.Add(pass);
         await _context.SaveChangesAsync();
 
-        pass.NotificationSent = true;
+        pass.OutlookSynced = true;
         var result = await _repo.UpdateAsync(pass);
 
         Assert.True(result.IsSuccess);
-        Assert.True(result.Value!.NotificationSent);
-    }
-
-    [Fact]
-    public async Task UpdateNotifyAsync_ExistingPass_ReturnsSuccess()
-    {
-        var (sat, tle) = Seed();
-        var pass = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddHours(1));
-        _context.Passes.Add(pass);
-        await _context.SaveChangesAsync();
-
-        var result = await _repo.UpdateNotifyAsync(pass.Id, true);
-
-        Assert.True(result.IsSuccess);
-        Assert.True(result.Value!.Notify);
-    }
-
-    [Fact]
-    public async Task UpdateNotifyAsync_NonExistentPass_ReturnsFailure()
-    {
-        var result = await _repo.UpdateNotifyAsync(Guid.NewGuid(), true);
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal("Pass not found", result.Error);
+        Assert.True(result.Value!.OutlookSynced);
     }
 
     [Fact]

@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
 using SatelliteTracker.API.DTOs;
-using SatelliteTracker.Database.Repositories;
 using SatelliteTracker.PassService.Services;
 
 namespace SatelliteTracker.API.Controllers;
@@ -12,12 +11,10 @@ namespace SatelliteTracker.API.Controllers;
 public class PassesController : BaseController
 {
     private readonly IPassService _passService;
-    private readonly IPassRepository _passRepository;
 
-    public PassesController(IPassService passService, IPassRepository passRepository)
+    public PassesController(IPassService passService)
     {
         _passService = passService;
-        _passRepository = passRepository;
     }
 
 
@@ -52,11 +49,17 @@ public class PassesController : BaseController
 
 
     // PATCH api/passes/{id}/notify
+    // TODO(Milestone E, Step 1.3): per-tester notification preferences require knowing which
+    // tester is calling, which requires AuthenticationHandler (not yet built). Reimplement this
+    // to resolve the caller's ApiKeyId and upsert a PassSubscription row via
+    // IPassSubscriptionRepository.SetNotifyAsync instead of returning 501.
     [HttpPatch("{id:guid}/notify")]
-    public async Task<IActionResult> PatchNotify(Guid id, [FromBody] PatchNotifyRequest request)
+    public IActionResult PatchNotify(Guid id, [FromBody] PatchNotifyRequest request)
     {
-        var result = await _passRepository.UpdateNotifyAsync(id, request.Notify);
-        if (!result.IsSuccess) return ToError(result.Error!);
-        return Ok(PassDto.From(result.Value!));
+        return StatusCode(StatusCodes.Status501NotImplemented, new
+        {
+            passId = id,
+            error = "Per-tester notification preferences require authentication (Milestone E, Step 1.3), which is not implemented yet."
+        });
     }
 }
