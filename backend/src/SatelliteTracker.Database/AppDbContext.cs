@@ -19,6 +19,8 @@ public class AppDbContext : DbContext
     public DbSet<Settings> Settings => Set<Settings>();
     public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
     public DbSet<UserSettings> UserSettings => Set<UserSettings>();
+    public DbSet<PassSubscription> PassSubscriptions => Set<PassSubscription>();
+    public DbSet<PassNotificationLog> PassNotificationLogs => Set<PassNotificationLog>();
 
     // The OnModelCreating method is overridden to configure the entity relationships and constraints using Fluent API.
     // It defines the primary keys, property constraints, and relationships between the entities.
@@ -104,6 +106,34 @@ private static void ConfigureEntities(ModelBuilder modelBuilder)
          .HasForeignKey<UserSettings>(u => u.ApiKeyId);
         // Enforces the 1:1 with ApiKey — the navigation property alone does not.
         e.HasIndex(u => u.ApiKeyId).IsUnique();
+    });
+    modelBuilder.Entity<PassSubscription>(e =>
+    {
+        e.HasKey(s => s.Id);
+        e.HasOne(s => s.Pass)
+         .WithMany(p => p.PassSubscriptions)
+         .HasForeignKey(s => s.PassId)
+         .OnDelete(DeleteBehavior.Cascade);
+        e.HasOne(s => s.ApiKey)
+         .WithMany(a => a.PassSubscriptions)
+         .HasForeignKey(s => s.ApiKeyId)
+         .OnDelete(DeleteBehavior.Cascade);
+        // Sparse exception table: at most one override row per (pass, tester).
+        e.HasIndex(s => new { s.PassId, s.ApiKeyId }).IsUnique();
+    });
+    modelBuilder.Entity<PassNotificationLog>(e =>
+    {
+        e.HasKey(l => l.Id);
+        e.HasOne(l => l.Pass)
+         .WithMany(p => p.PassNotificationLogs)
+         .HasForeignKey(l => l.PassId)
+         .OnDelete(DeleteBehavior.Cascade);
+        e.HasOne(l => l.ApiKey)
+         .WithMany(a => a.PassNotificationLogs)
+         .HasForeignKey(l => l.ApiKeyId)
+         .OnDelete(DeleteBehavior.Cascade);
+        // Append-only ledger: one row per (pass, tester, threshold) that actually fired.
+        e.HasIndex(l => new { l.PassId, l.ApiKeyId, l.AlertMinutes }).IsUnique();
     });
 }
 

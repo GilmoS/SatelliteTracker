@@ -14,7 +14,13 @@ public interface IPassRepository
     Task<Result<bool>> AddRangeAsync(IEnumerable<Pass> passes);
     Task<Result<Pass>> UpdateAsync(Pass pass);
     Task<Result<bool>> DeleteUpcomingAsync(Guid satelliteId, DateTime from);
-    Task<Result<Pass>> UpdateNotifyAsync(Guid id, bool notify);
+
+    /// <summary>
+    /// Returns all future passes (Aos in the future), Satellite eager-loaded, ordered by Aos.
+    /// These are the candidates PassNotificationJob evaluates per-tester against
+    /// PassSubscription (opt-out) and PassNotificationLog (already-sent) — there is no
+    /// pass-level "pending" flag any more since completion is tracked per (pass, tester, threshold).
+    /// </summary>
     Task<Result<IEnumerable<Pass>>> GetPendingNotificationsAsync();
 
     /// <summary>

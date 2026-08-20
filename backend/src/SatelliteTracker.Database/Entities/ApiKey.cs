@@ -13,4 +13,6 @@ public class ApiKey
     public DateTimeOffset? LastUsedAt { get; set; }
 
     public UserSettings? UserSettings { get; set; }
+    public ICollection<PassSubscription> PassSubscriptions { get; set; } = [];
+    public ICollection<PassNotificationLog> PassNotificationLogs { get; set; } = [];
 }
