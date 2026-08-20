@@ -14,10 +14,7 @@ public class PassDto
     public decimal AosAzimuth { get; set; }
     public decimal LosAzimuth { get; set; }
     public int DurationSec { get; set; }
-    public bool NotificationSent { get; set; }
-    public DateTime? NotificationSentAt { get; set; }
     public bool OutlookSynced { get; set; }
-    public bool Notify { get; set; }
     public DateTime CalculatedAt { get; set; }
 
     public static PassDto From(Pass p) => new()
@@ -32,10 +29,7 @@ public class PassDto
         AosAzimuth = p.AosAzimuth,
         LosAzimuth = p.LosAzimuth,
         DurationSec = p.DurationSec,
-        NotificationSent = p.NotificationSent,
-        NotificationSentAt = p.NotificationSentAt,
         OutlookSynced = p.OutlookSynced,
-        Notify = p.Notify,
         CalculatedAt = p.CalculatedAt
     };
 }

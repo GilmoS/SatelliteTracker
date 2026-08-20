@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using SatelliteTracker.API.Services;
+using SatelliteTracker.Database.Entities;
 using SatelliteTracker.Database.Repositories;
 
 namespace SatelliteTracker.API.Jobs;
@@ -51,13 +52,18 @@ public class PassNotificationJob : BackgroundService
         using var scope = _scopeFactory.CreateScope();
         var userSettingsRepo = scope.ServiceProvider.GetRequiredService<IUserSettingsRepository>();
         var passRepo = scope.ServiceProvider.GetRequiredService<IPassRepository>();
+        var subscriptionRepo = scope.ServiceProvider.GetRequiredService<IPassSubscriptionRepository>();
+        var notificationLogRepo = scope.ServiceProvider.GetRequiredService<IPassNotificationLogRepository>();
         var firebaseService = scope.ServiceProvider.GetRequiredService<IFirebaseService>();
-        await ProcessPendingNotificationsAsync(userSettingsRepo, passRepo, firebaseService);
+        await ProcessPendingNotificationsAsync(
+            userSettingsRepo, passRepo, subscriptionRepo, notificationLogRepo, firebaseService);
     }
 
     public async Task ProcessPendingNotificationsAsync(
         IUserSettingsRepository userSettingsRepo,
         IPassRepository passRepo,
+        IPassSubscriptionRepository subscriptionRepo,
+        IPassNotificationLogRepository notificationLogRepo,
         IFirebaseService firebaseService)
     {
         var settingsResult = await userSettingsRepo.GetAllActiveAsync();
@@ -84,42 +90,76 @@ public class PassNotificationJob : BackgroundService
             return;
         }
 
+        var passes = passesResult.Value!.ToList();
+        if (passes.Count == 0)
+            return;
+
+        var passIds = passes.Select(p => p.Id).ToList();
+
+        var subscriptionsResult = await subscriptionRepo.GetByPassIdsAsync(passIds);
+        if (!subscriptionsResult.IsSuccess)
+        {
+            _logger.LogWarning("Failed to get pass subscriptions: {Error}", subscriptionsResult.Error);
+            return;
+        }
+
+        // Sparse opt-out table: only pairs present here have ever been toggled. Any (pass, tester)
+        // pair missing from this dictionary defaults to notify = true.
+        var notifyOverrides = subscriptionsResult.Value!
+            .ToDictionary(s => (s.PassId, s.ApiKeyId), s => s.Notify);
+
+        var sentLogResult = await notificationLogRepo.GetByPassIdsAsync(passIds);
+        if (!sentLogResult.IsSuccess)
+        {
+            _logger.LogWarning("Failed to get pass notification log: {Error}", sentLogResult.Error);
+            return;
+        }
+
+        var alreadySent = sentLogResult.Value!
+            .Select(l => (l.PassId, l.ApiKeyId, l.AlertMinutes))
+            .ToHashSet();
+
         var now = DateTime.UtcNow;
 
-        // Once we've passed the closest alert boundary across ALL testers, no tester's
-        // alert can still be pending — that's the point at which a pass is "done", since
-        // GetPendingNotificationsAsync stops returning it once NotificationSent is set.
-        var globalSmallestAlert = testerSettings
-            .SelectMany(s => s.AlertMinutes)
-            .DefaultIfEmpty(0)
-            .Min();
-
-        foreach (var pass in passesResult.Value!)
+        foreach (var pass in passes)
         {
             var minutesUntilAos = (pass.Aos - now).TotalMinutes;
 
             foreach (var settings in testerSettings)
             {
-                var alertMinutes = settings.AlertMinutes;
-                foreach (var minutesBefore in alertMinutes)
-                {
-                    if (Math.Abs(minutesUntilAos - minutesBefore) <= 1.0)
-                    {
-                        await firebaseService.SendPassNotificationAsync(
-                            settings.FcmToken!,
-                            pass.Satellite.Name,
-                            pass.Aos,
-                            minutesBefore);
-                        break;
-                    }
-                }
-            }
+                var notify = notifyOverrides.TryGetValue((pass.Id, settings.ApiKeyId), out var explicitNotify)
+                    ? explicitNotify
+                    : true;
+                if (!notify)
+                    continue;
 
-            if (Math.Abs(minutesUntilAos - globalSmallestAlert) <= 1.0)
-            {
-                pass.NotificationSent = true;
-                pass.NotificationSentAt = now;
-                await passRepo.UpdateAsync(pass);
+                foreach (var minutesBefore in settings.AlertMinutes)
+                {
+                    if (Math.Abs(minutesUntilAos - minutesBefore) > 1.0)
+                        continue;
+
+                    var key = (pass.Id, settings.ApiKeyId, minutesBefore);
+                    if (alreadySent.Contains(key))
+                        continue;
+
+                    await firebaseService.SendPassNotificationAsync(
+                        settings.FcmToken!,
+                        pass.Satellite.Name,
+                        pass.Aos,
+                        minutesBefore);
+
+                    // TryInsertAsync tolerates a concurrent job tick already having logged this
+                    // key — either way, this threshold is now accounted for.
+                    await notificationLogRepo.TryInsertAsync(new PassNotificationLog
+                    {
+                        Id = Guid.NewGuid(),
+                        PassId = pass.Id,
+                        ApiKeyId = settings.ApiKeyId,
+                        AlertMinutes = minutesBefore,
+                        SentAt = now
+                    });
+                    alreadySent.Add(key);
+                }
             }
         }
     }

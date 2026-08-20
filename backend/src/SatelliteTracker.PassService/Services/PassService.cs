@@ -87,7 +87,6 @@ public class PassService : IPassService
             AosAzimuth = (decimal)pr.AosAzimuth,
             LosAzimuth = (decimal)pr.LosAzimuth,
             DurationSec = pr.DurationSeconds,
-            NotificationSent = false,
             OutlookSynced = false,
             CalculatedAt = DateTime.UtcNow
         }).ToList();
