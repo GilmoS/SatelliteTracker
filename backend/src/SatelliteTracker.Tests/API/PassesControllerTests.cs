@@ -1,23 +1,184 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.Sqlite;
 using Moq;
+using SatelliteTracker.API.Authentication;
 using SatelliteTracker.API.Controllers;
 using SatelliteTracker.API.DTOs;
+using SatelliteTracker.Database;
+using SatelliteTracker.Database.Common;
+using SatelliteTracker.Database.Entities;
+using SatelliteTracker.Database.Repositories;
 using SatelliteTracker.PassService.Services;
+using SatelliteTracker.Tests.Database.Helpers;
 using Xunit;
 
 namespace SatelliteTracker.Tests.API;
 
-public class PassesControllerTests
+// Exercises PatchNotify's logic directly against a real PassSubscriptionRepository (SQLite
+// in-memory) with IPassService mocked — [Authorize] itself isn't exercised here since filters
+// don't run when a controller action is invoked directly (see RequireAdminKeyAttributeTests);
+// that side is covered by the WebApplicationFactory-based AuthenticationTests instead.
+public class PassesControllerTests : IDisposable
 {
-    [Fact]
-    public void PatchNotify_Returns501NotImplemented()
+    private readonly AppDbContext _context;
+    private readonly SqliteConnection _connection;
+    private readonly PassSubscriptionRepository _subscriptionRepo;
+
+    public PassesControllerTests()
     {
-        var controller = new PassesController(Mock.Of<IPassService>());
+        (_context, _connection) = TestDbContextFactory.Create();
+        _subscriptionRepo = new PassSubscriptionRepository(_context);
+    }
 
-        var result = controller.PatchNotify(Guid.NewGuid(), new PatchNotifyRequest(true));
+    public void Dispose()
+    {
+        _context.Dispose();
+        _connection.Dispose();
+    }
 
-        var objectResult = Assert.IsType<ObjectResult>(result);
-        Assert.Equal(StatusCodes.Status501NotImplemented, objectResult.StatusCode);
+    private static PassesController BuildController(IPassSubscriptionRepository subscriptionRepo, Pass? pass, Guid apiKeyId)
+    {
+        var passServiceMock = new Mock<IPassService>();
+        passServiceMock
+            .Setup(s => s.GetPassByIdAsync(It.IsAny<Guid>()))
+            .ReturnsAsync(pass is null
+                ? Result<Pass>.Failure("Pass not found.")
+                : Result<Pass>.Success(pass));
+
+        var controller = new PassesController(passServiceMock.Object, subscriptionRepo);
+
+        var identity = new ClaimsIdentity(
+            [new Claim("api_key_id", apiKeyId.ToString())], authenticationType: "ApiKey");
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = new ClaimsPrincipal(identity) }
+        };
+
+        return controller;
+    }
+
+    private (Satellite sat, TleRecord tle, ApiKey apiKey1, ApiKey apiKey2) Seed()
+    {
+        var sat = new Satellite
+        {
+            Id = Guid.NewGuid(),
+            Name = "TEST-SAT",
+            NoradId = 25544,
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow
+        };
+        var tle = new TleRecord
+        {
+            Id = Guid.NewGuid(),
+            SatelliteId = sat.Id,
+            Line1 = "1 25544U 98067A   23001.00000000  .00000000  00000-0  00000-0 0  9999",
+            Line2 = "2 25544  51.6400 208.9163 0001382  95.6617 344.7248 15.49309522223145",
+            Epoch = DateTime.UtcNow,
+            FetchedAt = DateTime.UtcNow
+        };
+        var apiKey1 = new ApiKey
+        {
+            Id = Guid.NewGuid(),
+            Email = "tester1@iai.co.il",
+            DisplayName = "Tester One",
+            KeyHash = new string('a', 64),
+            IsActive = true,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        var apiKey2 = new ApiKey
+        {
+            Id = Guid.NewGuid(),
+            Email = "tester2@iai.co.il",
+            DisplayName = "Tester Two",
+            KeyHash = new string('b', 64),
+            IsActive = true,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        _context.Satellites.Add(sat);
+        _context.TleRecords.Add(tle);
+        _context.ApiKeys.AddRange(apiKey1, apiKey2);
+        _context.SaveChanges();
+        return (sat, tle, apiKey1, apiKey2);
+    }
+
+    private Pass MakePass(Guid satelliteId, Guid tleId) => new()
+    {
+        Id = Guid.NewGuid(),
+        SatelliteId = satelliteId,
+        TleId = tleId,
+        Aos = DateTime.UtcNow.AddHours(1),
+        Los = DateTime.UtcNow.AddHours(1).AddMinutes(10),
+        MaxElevation = 45,
+        AosAzimuth = 90,
+        LosAzimuth = 270,
+        DurationSec = 600,
+        CalculatedAt = DateTime.UtcNow
+    };
+
+    [Fact]
+    public async Task PatchNotify_UnknownPassId_ReturnsNotFound()
+    {
+        var controller = BuildController(_subscriptionRepo, pass: null, Guid.NewGuid());
+
+        var result = await controller.PatchNotify(Guid.NewGuid(), new PatchNotifyRequest(false));
+
+        Assert.IsType<NotFoundObjectResult>(result);
+    }
+
+    [Fact]
+    public async Task PatchNotify_NotifyFalse_CreatesOptOutRowAndEffectiveStatusIsFalse()
+    {
+        var (sat, tle, apiKey1, _) = Seed();
+        var pass = MakePass(sat.Id, tle.Id);
+        _context.Passes.Add(pass);
+        await _context.SaveChangesAsync();
+
+        var controller = BuildController(_subscriptionRepo, pass, apiKey1.Id);
+
+        var result = await controller.PatchNotify(pass.Id, new PatchNotifyRequest(false));
+
+        Assert.IsType<OkObjectResult>(result);
+        var effective = await _subscriptionRepo.GetEffectiveNotifyStatusAsync(pass.Id, apiKey1.Id);
+        Assert.False(effective.Value);
+    }
+
+    [Fact]
+    public async Task PatchNotify_NotifyTrueAfterFalse_RestoresDefaultAndRemovesRow()
+    {
+        var (sat, tle, apiKey1, _) = Seed();
+        var pass = MakePass(sat.Id, tle.Id);
+        _context.Passes.Add(pass);
+        await _context.SaveChangesAsync();
+
+        await _subscriptionRepo.SetNotifyAsync(pass.Id, apiKey1.Id, notify: false);
+
+        var controller = BuildController(_subscriptionRepo, pass, apiKey1.Id);
+        var result = await controller.PatchNotify(pass.Id, new PatchNotifyRequest(true));
+
+        Assert.IsType<OkObjectResult>(result);
+        var effective = await _subscriptionRepo.GetEffectiveNotifyStatusAsync(pass.Id, apiKey1.Id);
+        Assert.True(effective.Value);
+        Assert.Empty(_context.PassSubscriptions.Where(s => s.PassId == pass.Id && s.ApiKeyId == apiKey1.Id));
+    }
+
+    [Fact]
+    public async Task PatchNotify_DoesNotAffectOtherTestersSubscriptionForSamePass()
+    {
+        var (sat, tle, apiKey1, apiKey2) = Seed();
+        var pass = MakePass(sat.Id, tle.Id);
+        _context.Passes.Add(pass);
+        await _context.SaveChangesAsync();
+
+        await _subscriptionRepo.SetNotifyAsync(pass.Id, apiKey2.Id, notify: false);
+
+        var controller = BuildController(_subscriptionRepo, pass, apiKey1.Id);
+        await controller.PatchNotify(pass.Id, new PatchNotifyRequest(false));
+
+        var tester1Effective = await _subscriptionRepo.GetEffectiveNotifyStatusAsync(pass.Id, apiKey1.Id);
+        var tester2Effective = await _subscriptionRepo.GetEffectiveNotifyStatusAsync(pass.Id, apiKey2.Id);
+        Assert.False(tester1Effective.Value);
+        Assert.False(tester2Effective.Value);
     }
 }

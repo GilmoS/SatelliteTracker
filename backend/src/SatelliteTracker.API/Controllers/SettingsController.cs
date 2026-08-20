@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using SatelliteTracker.API.Authentication;
 using SatelliteTracker.API.DTOs;
 using SatelliteTracker.Database.Entities;
 using SatelliteTracker.Database.Repositories;
@@ -32,6 +34,9 @@ public class SettingsController : BaseController
     // PUT: api/settings
     // Updates the application settings.
     // This method performs an upsert operation, meaning it will create new settings if they don't exist or update existing settings if they do.
+    // Mutating endpoint found during the Step 1.3 audit that wasn't in the originally listed set
+    // — gated the same way as the other mutating endpoints rather than left anonymous.
+    [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPut]
     public async Task<IActionResult> Upsert([FromBody] UpdateSettingsRequest request)
     {
