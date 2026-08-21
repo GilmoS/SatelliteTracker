@@ -71,4 +71,76 @@ public class UserSettingsRepository : IUserSettingsRepository
             return Result<UserSettings>.Failure(ex.Message);
         }
     }
+
+    // Lazy-creation upserts (Milestone E, Step 1.4): AlertMinutes and FcmToken are written
+    // independently, each on first write to that specific field. Unlike UpsertAsync above, these
+    // never overwrite the *other* field on an existing row — that's the whole point of splitting
+    // them out, see CLAUDE.md.
+    public async Task<Result<UserSettings>> UpsertAlertMinutesAsync(Guid apiKeyId, int[] alertMinutes)
+    {
+        try
+        {
+            var existing = await _context.UserSettings.FirstOrDefaultAsync(s => s.ApiKeyId == apiKeyId);
+            var now = DateTimeOffset.UtcNow;
+
+            if (existing is null)
+            {
+                existing = new UserSettings
+                {
+                    Id = Guid.NewGuid(),
+                    ApiKeyId = apiKeyId,
+                    FcmToken = null,
+                    AlertMinutes = alertMinutes,
+                    UpdatedAt = now
+                };
+                _context.UserSettings.Add(existing);
+            }
+            else
+            {
+                existing.AlertMinutes = alertMinutes;
+                existing.UpdatedAt = now;
+            }
+
+            await _context.SaveChangesAsync();
+            return Result<UserSettings>.Success(existing);
+        }
+        catch (Exception ex)
+        {
+            return Result<UserSettings>.Failure(ex.Message);
+        }
+    }
+
+    public async Task<Result<UserSettings>> UpsertFcmTokenAsync(Guid apiKeyId, string fcmToken)
+    {
+        try
+        {
+            var existing = await _context.UserSettings.FirstOrDefaultAsync(s => s.ApiKeyId == apiKeyId);
+            var now = DateTimeOffset.UtcNow;
+
+            if (existing is null)
+            {
+                existing = new UserSettings
+                {
+                    Id = Guid.NewGuid(),
+                    ApiKeyId = apiKeyId,
+                    FcmToken = fcmToken,
+                    AlertMinutes = [],
+                    UpdatedAt = now
+                };
+                _context.UserSettings.Add(existing);
+            }
+            else
+            {
+                existing.FcmToken = fcmToken;
+                existing.UpdatedAt = now;
+            }
+
+            await _context.SaveChangesAsync();
+            return Result<UserSettings>.Success(existing);
+        }
+        catch (Exception ex)
+        {
+            return Result<UserSettings>.Failure(ex.Message);
+        }
+    }
 }
