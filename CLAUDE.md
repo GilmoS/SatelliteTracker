@@ -247,7 +247,10 @@ or "productionize" the `X-Admin-Key` approach; a real redesign is expected befor
   `/api/admin/reissue` isn't functional yet) → otherwise generate a random 256-bit raw key, hash
   it with the existing `ApiKeyHasher`, persist a new `ApiKey` row, and return the **raw** key in
   the response body — the only time it is ever visible; it is never logged. Does **not** create a
-  `UserSettings` row — that happens later, the first time Android sends an FCM token (Step 1.4).
+  `UserSettings` row — that happens later, lazily, on the tester's first write to either
+  `AlertMinutes` or `FcmToken` via `/api/settings/me` (Step 1.4; see below — it is **not**
+  exclusively tied to FCM token registration, whichever of the two fields is written first is
+  what triggers the row's creation).
 
 ### Tester authentication — the "ApiKey" scheme (Milestone E, Step 1.3)
 
@@ -285,14 +288,52 @@ deliberately standalone and not meant to be extended.
   `POST`/`PUT /api/satellites`, `POST /api/tles/{satelliteId}/fetch`,
   `POST`/`PUT`/`DELETE` on notes, `PATCH /api/passes/{id}/notify`,
   `POST /api/calendar/schedule` (even though it's not itself a DB write — an anonymous
-  calendar-generation endpoint is an abuse/DoS surface), and `PUT /api/settings` (a mutating
-  endpoint found during the Step 1.3 audit that wasn't in the original planned list). **All GET
-  endpoints stay anonymous** — none of them are tester-specific in a way that requires knowing who
-  is asking. That changes starting with `/api/settings/me` in Step 1.4, the first
-  inherently-tester-specific endpoint (a GET that must know which tester's settings to return).
+  calendar-generation endpoint is an abuse/DoS surface), `PUT /api/settings` (a mutating
+  endpoint found during the Step 1.3 audit that wasn't in the original planned list), and all
+  three `/api/settings/me*` actions from Step 1.4 below — **including its GET**, which is the
+  first exception to "all GETs are anonymous" (see that section for why).
 - Deliberately **not** touched: `POST /api/auth/register` (self-service, gated only by the
   allowlist check — see above) and every `api/admin/*` endpoint (gated by the separate
   `X-Admin-Key`/`RequireAdminKeyAttribute` mechanism, which must not be merged with tester auth).
+
+### Per-tester settings lifecycle — /api/settings/me (Milestone E, Step 1.4)
+
+`SettingsMeController` (`api/settings/me`) is where Android reads and writes a tester's own
+`AlertMinutes`/`FcmToken`. All three actions — `GET`, `PUT`, and `PUT /fcm-token` — require
+`[Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]`.
+
+- **`GET /api/settings/me` is the first inherently-tester-specific GET in the API**, and thus the
+  first exception to the "all GETs are anonymous" rule from Step 1.3 above — its response depends
+  on which tester is asking, unlike every other GET endpoint, which is why it needs `[Authorize]`
+  when no other GET does. Keep this in mind for future endpoints: a GET only needs auth when its
+  *response*, not just mutating siblings on the same controller, is tester-specific.
+- **The GET is strictly read-only.** If no `UserSettings` row exists yet for the caller's
+  `ApiKeyId`, it returns a *computed* default (`AlertMinutes: []`, `FcmToken: null`) without ever
+  inserting a row — `IUserSettingsRepository.GetByApiKeyIdAsync` returning a "not found" `Result`
+  failure is treated as "use the default," the same pattern `SettingsController.GetOrDefault`
+  already uses for the global `Settings` row.
+- **Lazy creation, on first write to *either* field** — a `UserSettings` row is created on
+  whichever of `PUT /api/settings/me` (`AlertMinutes`) or `PUT /api/settings/me/fcm-token`
+  (`FcmToken`) is called first for that tester, not exclusively by FCM token registration. Both
+  orderings are valid product flows (e.g. Android's settings screen may let a tester choose alert
+  timing before the push-permission soft-ask/hard-ask flow ever completes, or vice versa).
+- **Each PUT touches only its own field**, both on creation and on update — this is the reason
+  `IUserSettingsRepository` gained two dedicated methods instead of reusing the existing
+  `UpsertAsync(UserSettings)`, which overwrites both fields unconditionally and is unsafe for this
+  use case:
+  - `UpsertAlertMinutesAsync(apiKeyId, alertMinutes)` — on insert, sets `FcmToken = null`; on
+    update, changes only `AlertMinutes` and `UpdatedAt`, leaving any existing `FcmToken` alone.
+  - `UpsertFcmTokenAsync(apiKeyId, fcmToken)` — on insert, sets `AlertMinutes = []` (**not** the
+    `UserSettings` entity's `[5, 10, 30]` default value, which only applies to
+    directly-constructed entities elsewhere, e.g. tests); on update, changes only `FcmToken` and
+    `UpdatedAt`, leaving any existing `AlertMinutes` alone.
+  - Calling one endpoint must never null out or reset the field owned by the other — this was the
+    critical regression risk this design guards against, and is covered explicitly by
+    `SettingsMeEndpointTests`.
+- **`AlertMinutes` valid value set is `{5, 10, 15, 30, 60}`**, validated in `SettingsMeController`
+  (`ValidAlertMinutes`) — any value outside that set is rejected with `400` before the repository
+  is touched. An empty array is valid and means "no alerts."
+- `PUT /api/settings/me/fcm-token` rejects an empty or whitespace-only token with `400`.
 
 ### WebApplicationFactory test infrastructure
 
