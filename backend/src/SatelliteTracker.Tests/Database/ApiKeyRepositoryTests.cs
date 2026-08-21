@@ -78,4 +78,47 @@ public class ApiKeyRepositoryTests : IDisposable
         Assert.True(result.IsSuccess);
         Assert.Equal(1, _context.ApiKeys.Count());
     }
+
+    [Fact]
+    public async Task GetByHashAsync_MatchingHashExists_ReturnsItRegardlessOfActiveStatus()
+    {
+        var key = MakeApiKey(isActive: false);
+        _context.ApiKeys.Add(key);
+        await _context.SaveChangesAsync();
+
+        var result = await _repo.GetByHashAsync(key.KeyHash);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(key.Id, result.Value!.Id);
+    }
+
+    [Fact]
+    public async Task GetByHashAsync_NoMatch_ReturnsFailure()
+    {
+        var result = await _repo.GetByHashAsync(new string('c', 64));
+
+        Assert.False(result.IsSuccess);
+    }
+
+    [Fact]
+    public async Task UpdateLastUsedAtAsync_ExistingKey_PersistsTimestamp()
+    {
+        var key = MakeApiKey(isActive: true);
+        _context.ApiKeys.Add(key);
+        await _context.SaveChangesAsync();
+        var timestamp = DateTimeOffset.UtcNow;
+
+        var result = await _repo.UpdateLastUsedAtAsync(key.Id, timestamp);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(timestamp, _context.ApiKeys.Single(a => a.Id == key.Id).LastUsedAt);
+    }
+
+    [Fact]
+    public async Task UpdateLastUsedAtAsync_UnknownKey_ReturnsFailure()
+    {
+        var result = await _repo.UpdateLastUsedAtAsync(Guid.NewGuid(), DateTimeOffset.UtcNow);
+
+        Assert.False(result.IsSuccess);
+    }
 }

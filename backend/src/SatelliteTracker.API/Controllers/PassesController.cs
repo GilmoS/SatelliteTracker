@@ -1,5 +1,8 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using SatelliteTracker.API.Authentication;
 using SatelliteTracker.API.DTOs;
+using SatelliteTracker.Database.Repositories;
 using SatelliteTracker.PassService.Services;
 
 namespace SatelliteTracker.API.Controllers;
@@ -11,10 +14,12 @@ namespace SatelliteTracker.API.Controllers;
 public class PassesController : BaseController
 {
     private readonly IPassService _passService;
+    private readonly IPassSubscriptionRepository _subscriptionRepo;
 
-    public PassesController(IPassService passService)
+    public PassesController(IPassService passService, IPassSubscriptionRepository subscriptionRepo)
     {
         _passService = passService;
+        _subscriptionRepo = subscriptionRepo;
     }
 
 
@@ -49,17 +54,32 @@ public class PassesController : BaseController
 
 
     // PATCH api/passes/{id}/notify
-    // TODO(Milestone E, Step 1.3): per-tester notification preferences require knowing which
-    // tester is calling, which requires AuthenticationHandler (not yet built). Reimplement this
-    // to resolve the caller's ApiKeyId and upsert a PassSubscription row via
-    // IPassSubscriptionRepository.SetNotifyAsync instead of returning 501.
+    // Upserts the calling tester's PassSubscription opt-out row. Notify = true is the sparse
+    // default (see IPassSubscriptionRepository), so setting it back to true deletes any existing
+    // override row instead of writing a redundant "true" row.
+    [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPatch("{id:guid}/notify")]
-    public IActionResult PatchNotify(Guid id, [FromBody] PatchNotifyRequest request)
+    public async Task<IActionResult> PatchNotify(Guid id, [FromBody] PatchNotifyRequest request)
     {
-        return StatusCode(StatusCodes.Status501NotImplemented, new
+        var passResult = await _passService.GetPassByIdAsync(id);
+        if (!passResult.IsSuccess) return ToError(passResult.Error!);
+
+        var apiKeyId = User.GetApiKeyId();
+
+        if (request.Notify)
         {
-            passId = id,
-            error = "Per-tester notification preferences require authentication (Milestone E, Step 1.3), which is not implemented yet."
-        });
+            var deleteResult = await _subscriptionRepo.DeleteOverrideAsync(id, apiKeyId);
+            if (!deleteResult.IsSuccess) return ToError(deleteResult.Error!);
+        }
+        else
+        {
+            var setResult = await _subscriptionRepo.SetNotifyAsync(id, apiKeyId, notify: false);
+            if (!setResult.IsSuccess) return ToError(setResult.Error!);
+        }
+
+        var effectiveResult = await _subscriptionRepo.GetEffectiveNotifyStatusAsync(id, apiKeyId);
+        if (!effectiveResult.IsSuccess) return ToError(effectiveResult.Error!);
+
+        return Ok(new { passId = id, notify = effectiveResult.Value });
     }
 }

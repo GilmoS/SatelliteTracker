@@ -79,6 +79,27 @@ public class PassSubscriptionRepository : IPassSubscriptionRepository
         }
     }
 
+    public async Task<Result> DeleteOverrideAsync(Guid passId, Guid apiKeyId)
+    {
+        try
+        {
+            var existing = await _context.PassSubscriptions
+                .FirstOrDefaultAsync(s => s.PassId == passId && s.ApiKeyId == apiKeyId);
+
+            if (existing is not null)
+            {
+                _context.PassSubscriptions.Remove(existing);
+                await _context.SaveChangesAsync();
+            }
+
+            return Result.Success();
+        }
+        catch (Exception ex)
+        {
+            return Result.Failure(ex.Message);
+        }
+    }
+
     public async Task<Result> DeleteByPassIdAsync(Guid passId)
     {
         try

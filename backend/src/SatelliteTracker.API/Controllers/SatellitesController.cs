@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using SatelliteTracker.API.Authentication;
 using SatelliteTracker.API.DTOs;
 using SatelliteTracker.Database.Common;
 using SatelliteTracker.Database.Entities;
@@ -41,8 +43,9 @@ public class SatellitesController : BaseController
         return Respond(result, SatelliteDto.From);
     }
 
-    // POST: api/satellites 
+    // POST: api/satellites
     // accepts a CreateSatelliteRequest object in the request body, creates a new Satellite entity, and adds it to the database using the repository.
+    [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPost]
     public async Task<IActionResult> Add([FromBody] CreateSatelliteRequest request)
     {
@@ -64,6 +67,7 @@ public class SatellitesController : BaseController
 
     // PUT: api/satellites/{id}
     // updates an existing satellite by its unique identifier (GUID) using the data provided in the request body.
+    [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateSatelliteRequest request)
     {

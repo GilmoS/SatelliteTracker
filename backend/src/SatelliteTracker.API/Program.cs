@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi;
+using SatelliteTracker.API.Authentication;
 using SatelliteTracker.API.Jobs;
 using SatelliteTracker.API.Services;
 using SatelliteTracker.Database;
@@ -39,6 +40,15 @@ builder.Services.AddHttpClient<IN2YOClient, N2YOClient>();
 
 // Firebase
 builder.Services.AddSingleton<IFirebaseService, FirebaseService>();
+
+// Tester authentication (Milestone E, Step 1.3) — X-Api-Key header, see
+// SatelliteTracker.API.Authentication.ApiKeyAuthenticationHandler. Registered as the default
+// scheme so plain [Authorize] works without per-action scheme configuration. Deliberately
+// separate from the admin X-Admin-Key mechanism (RequireAdminKeyAttribute) — see CLAUDE.md.
+builder.Services
+    .AddAuthentication(ApiKeyAuthenticationOptions.SchemeName)
+    .AddScheme<ApiKeyAuthenticationOptions, ApiKeyAuthenticationHandler>(ApiKeyAuthenticationOptions.SchemeName, _ => { });
+builder.Services.AddAuthorization();
 
 // Calendar sync (ICS MVP; see OutlookServiceCollectionExtensions to swap to Graph)
 builder.Services.AddOutlookServiceModule();
@@ -87,5 +97,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors("DevFrontend");
+app.UseAuthentication();
+app.UseAuthorization();
 app.MapControllers();
 app.Run();
+
+// Exposed so SatelliteTracker.Tests can boot the real host via WebApplicationFactory<Program>.
+public partial class Program { }

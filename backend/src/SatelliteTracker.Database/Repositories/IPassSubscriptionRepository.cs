@@ -23,6 +23,14 @@ public interface IPassSubscriptionRepository
     Task<Result<PassSubscription>> SetNotifyAsync(Guid passId, Guid apiKeyId, bool notify);
 
     /// <summary>
+    /// Deletes the single (passId, apiKeyId) override row, if one exists — a no-op success if
+    /// not. Used by PATCH /api/passes/{id}/notify when a tester sets Notify back to true: since
+    /// true is the sparse default, the row is removed rather than overwritten with a redundant
+    /// "true" row, keeping the table strictly sparse.
+    /// </summary>
+    Task<Result> DeleteOverrideAsync(Guid passId, Guid apiKeyId);
+
+    /// <summary>
     /// Deletes all opt-out rows for a pass, independent of whether the Pass row itself is
     /// deleted. Not currently called by any job — see CLAUDE.md for the retention/cleanup note.
     /// </summary>

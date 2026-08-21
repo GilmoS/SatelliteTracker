@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using SatelliteTracker.API.Authentication;
 using SatelliteTracker.API.DTOs;
 using SatelliteTracker.Database.Repositories;
 using SatelliteTracker.OutlookService.Abstractions;
@@ -28,6 +30,9 @@ public class CalendarController : BaseController
     }
 
     // POST api/calendar/schedule
+    // Doesn't write to the DB beyond MarkOutlookSyncedAsync, but must still require a known
+    // tester — an anonymous, unauthenticated calendar-generation endpoint is an abuse/DoS surface.
+    [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPost("schedule")]
     public async Task<IActionResult> Schedule([FromBody] ScheduleCalendarRequest request)
     {

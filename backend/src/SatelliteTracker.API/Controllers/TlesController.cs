@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using SatelliteTracker.API.Authentication;
 using SatelliteTracker.API.DTOs;
 using SatelliteTracker.Database.Common;
 using SatelliteTracker.Database.Repositories;
@@ -50,6 +52,7 @@ public class TlesController : BaseController
         return Ok(result.Value!.Select(TleDto.From));
     }
 
+    [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPost("{satelliteId:guid}/fetch")]
     public async Task<IActionResult> Fetch(Guid satelliteId, CancellationToken ct)
     {

@@ -25,6 +25,21 @@ public class ApiKeyRepository : IApiKeyRepository
         }
     }
 
+    public async Task<Result<ApiKey>> GetByHashAsync(string keyHash)
+    {
+        try
+        {
+            var apiKey = await _context.ApiKeys.FirstOrDefaultAsync(a => a.KeyHash == keyHash);
+            return apiKey is null
+                ? Result<ApiKey>.Failure("No API key found for this hash.")
+                : Result<ApiKey>.Success(apiKey);
+        }
+        catch (Exception ex)
+        {
+            return Result<ApiKey>.Failure(ex.Message);
+        }
+    }
+
     public async Task<Result<ApiKey>> CreateAsync(ApiKey apiKey)
     {
         try
@@ -36,6 +51,23 @@ public class ApiKeyRepository : IApiKeyRepository
         catch (Exception ex)
         {
             return Result<ApiKey>.Failure(ex.Message);
+        }
+    }
+
+    public async Task<Result> UpdateLastUsedAtAsync(Guid apiKeyId, DateTimeOffset timestamp)
+    {
+        try
+        {
+            var apiKey = await _context.ApiKeys.FirstOrDefaultAsync(a => a.Id == apiKeyId);
+            if (apiKey is null) return Result.Failure($"ApiKey {apiKeyId} not found.");
+
+            apiKey.LastUsedAt = timestamp;
+            await _context.SaveChangesAsync();
+            return Result.Success();
+        }
+        catch (Exception ex)
+        {
+            return Result.Failure(ex.Message);
         }
     }
 }

@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using SatelliteTracker.API.Authentication;
 using SatelliteTracker.API.DTOs;
 using SatelliteTracker.Database.Entities;
 using SatelliteTracker.Database.Repositories;
@@ -27,6 +29,7 @@ public class NotesController : BaseController
 
 
     // POST /api/passes/{passId}/notes - Creates a new note for a specific pass
+    [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPost("/api/passes/{passId:guid}/notes")]
     public async Task<IActionResult> Add(Guid passId, [FromBody] CreateNoteRequest request)
     {
@@ -45,6 +48,7 @@ public class NotesController : BaseController
     }
 
     // PUT /api/notes/{id} - Updates an existing note by its ID
+    [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPut("/api/notes/{id:guid}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateNoteRequest request)
     {
@@ -61,6 +65,7 @@ public class NotesController : BaseController
     }
 
     // DELETE /api/notes/{id} - Deletes a note by its ID
+    [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpDelete("/api/notes/{id:guid}")]
     public async Task<IActionResult> Delete(Guid id)
     {
