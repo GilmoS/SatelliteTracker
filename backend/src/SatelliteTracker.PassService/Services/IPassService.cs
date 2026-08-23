@@ -11,4 +11,11 @@ public interface IPassService
     Task<Result<IEnumerable<Pass>>> GetUpcomingPassesAsync(Guid satelliteId);
     Task<Result<IEnumerable<Pass>>> GetPassHistoryAsync(Guid satelliteId);
     Task<Result<Pass>> GetPassByIdAsync(Guid passId);
+
+    /// <summary>
+    /// Computes the ground track for a specific, already-calculated pass across its stored
+    /// [Aos, Los] window, using the TLE that was in effect when the pass was calculated
+    /// (<see cref="Pass.TleId"/>) — not the satellite's currently-latest TLE.
+    /// </summary>
+    Task<Result<IEnumerable<GroundTrackPoint>>> GetPassTrackAsync(Guid passId);
 }

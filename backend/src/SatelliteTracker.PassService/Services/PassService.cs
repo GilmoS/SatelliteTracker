@@ -118,6 +118,35 @@ public class PassService : IPassService
     public async Task<Result<Pass>> GetPassByIdAsync(Guid passId)
         => await _passRepo.GetByIdAsync(passId);
 
+    // Computes the ground track for a specific pass, anchored to its stored TleId and [Aos, Los]
+    // window — deliberately NOT the satellite's latest TLE, so the track stays consistent with the
+    // AOS/LOS/max-elevation figures already shown to the user for this pass.
+    public async Task<Result<IEnumerable<GroundTrackPoint>>> GetPassTrackAsync(Guid passId)
+    {
+        var passResult = await _passRepo.GetByIdAsync(passId);
+        if (!passResult.IsSuccess)
+            return Result<IEnumerable<GroundTrackPoint>>.Failure(passResult.Error!);
+
+        var pass = passResult.Value!;
+
+        var tleResult = await _tleRepo.GetByIdAsync(pass.TleId);
+        if (!tleResult.IsSuccess)
+            return Result<IEnumerable<GroundTrackPoint>>.Failure(tleResult.Error!);
+
+        TleData tleData;
+        try
+        {
+            tleData = TleParser.Parse(tleResult.Value!.Line1, tleResult.Value!.Line2);
+        }
+        catch (TleParseException ex)
+        {
+            return Result<IEnumerable<GroundTrackPoint>>.Failure($"TLE parse error: {ex.Message}");
+        }
+
+        var points = GroundTrackCalculator.ComputeGroundTrack(tleData, pass.Aos, pass.Los);
+        return Result<IEnumerable<GroundTrackPoint>>.Success(points);
+    }
+
     // Computes the revolution number at a given pass time by advancing the TLE's Revolution
     // Number at Epoch by however many full orbits elapse between the TLE epoch and the pass AOS.
     // MeanMotion is in revs/day, so 1440 / MeanMotion gives the orbital period in minutes.
