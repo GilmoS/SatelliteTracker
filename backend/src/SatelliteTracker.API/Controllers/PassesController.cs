@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Memory;
 using SatelliteTracker.API.Authentication;
 using SatelliteTracker.API.DTOs;
 using SatelliteTracker.Database.Repositories;
@@ -15,11 +16,13 @@ public class PassesController : BaseController
 {
     private readonly IPassService _passService;
     private readonly IPassSubscriptionRepository _subscriptionRepo;
+    private readonly IMemoryCache _cache;
 
-    public PassesController(IPassService passService, IPassSubscriptionRepository subscriptionRepo)
+    public PassesController(IPassService passService, IPassSubscriptionRepository subscriptionRepo, IMemoryCache cache)
     {
         _passService = passService;
         _subscriptionRepo = subscriptionRepo;
+        _cache = cache;
     }
 
 
@@ -50,6 +53,33 @@ public class PassesController : BaseController
         var result = await _passService.GetPassByIdAsync(id);
         if (!result.IsSuccess) return ToError(result.Error!);
         return Ok(PassDto.From(result.Value!));
+    }
+
+
+    // GET api/passes/{id}/track
+    // Ground track for this specific, already-calculated pass — anchored to its stored TleId and
+    // fixed [Aos, Los] window. Distinct from RealTimeController.GetTrack (api/satellites/{id}/track),
+    // which is a live, "now"-anchored track pulled from N2YO off the satellite's current TLE. This
+    // result is deterministic per passId (same TleId, same fixed window), so it's cached for 1 hour
+    // rather than 5 minutes, and keyed by passId alone.
+    [HttpGet("{id:guid}/track")]
+    public async Task<IActionResult> GetTrack(Guid id)
+    {
+        var cacheKey = $"pass-track:{id}";
+        if (_cache.TryGetValue(cacheKey, out PassTrackDto? cached))
+            return Ok(cached);
+
+        var result = await _passService.GetPassTrackAsync(id);
+        if (!result.IsSuccess) return ToError(result.Error!);
+
+        var dto = new PassTrackDto
+        {
+            PassId = id,
+            Points = result.Value!.Select(PassTrackPointDto.From).ToList()
+        };
+
+        _cache.Set(cacheKey, dto, TimeSpan.FromHours(1));
+        return Ok(dto);
     }
 
 
