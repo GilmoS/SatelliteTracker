@@ -106,14 +106,39 @@ controller exists.
 
 ## Caching Strategy (IMemoryCache)
 
-| Endpoint         | TTL        | Reason                          |
-|------------------|------------|---------------------------------|
-| /position        | 30 seconds | Changes rapidly                 |
-| /track           | 5 minutes  | Changes slowly                  |
-| /passes          | 1 hour     | Pre-calculated, stable          |
-| /tles            | 2 hours    | N2YO updates infrequently       |
+| Endpoint                  | TTL        | Reason                              |
+|----------------------------|------------|--------------------------------------|
+| /satellites/{id}/position  | 30 seconds | Changes rapidly                     |
+| /satellites/{id}/track     | 5 minutes  | Live N2YO track, changes slowly     |
+| /passes/{id}/track         | 1 hour     | Deterministic per passId, see below |
+| /passes                    | 1 hour     | Pre-calculated, stable              |
+| /tles                      | 2 hours    | N2YO updates infrequently           |
 
 No Redis needed at this scale. IMemoryCache is built into .NET.
+
+### Two different `/track` endpoints — not a duplicate
+
+`GET /api/satellites/{id}/track` (`RealTimeController`) and `GET /api/passes/{id}/track`
+(`PassesController`) both return a list of lat/lng points but answer different questions and are
+not redundant:
+
+- **`/satellites/{id}/track`** is *live* — it calls N2YO for the satellite's recent actual
+  position history anchored to "right now." Used by the Android map's live nearest-pass view.
+  Cached 5 minutes, keyed by NORAD ID, because its answer changes as time passes.
+- **`/passes/{id}/track`** is *fixed* — it's the SGP4-computed ground track for one specific,
+  already-calculated `Pass`, over its stored `[Aos, Los]` window, propagated from the TLE that was
+  in effect when that pass was calculated (`Pass.TleId`) — deliberately **not** the satellite's
+  currently-latest TLE, so the track stays consistent with the AOS/LOS/max-elevation figures
+  already shown to the user for that pass. Works identically for future and historical passes; no
+  "is this pass in the past" flag or branch exists in the endpoint or its response — the client
+  already has AOS/LOS from the passes list and can compare against current time itself. Reuses the
+  existing SGP4 propagation logic (`Sgp4Calculator`) via a new `GroundTrackCalculator`, distinct
+  from `PassPredictor` (which searches for AOS/LOS windows in the first place, not given ones).
+  Because the inputs (`TleId`, `Aos`, `Los`) never change once a pass is calculated, its output is
+  fully deterministic per `passId` and cached for 1 hour, keyed by `passId` alone — no TLE
+  version/id needed in the key. **The computed track points are never persisted to the
+  database** — they're cache-only, recomputed on demand (rare, given the 1-hour cache); this is
+  derived/display data, not something the system needs to function.
 
 ---
 
@@ -396,7 +421,10 @@ Modules/{ModuleName}/
 - All endpoints prefixed with `/api`
 - All times in UTC (display conversion on client)
 - Response format: JSON
-- Real-time endpoints (/position, /track) do NOT hit DB — go through Cache → N2YO
+- Real-time endpoints (/satellites/{id}/position, /satellites/{id}/track) do NOT hit DB — go
+  through Cache → N2YO
+- /passes/{id}/track works from DB (Pass + its stored TleRecord) + SGP4, not N2YO — see the
+  caching table above for how it differs from /satellites/{id}/track
 - All other endpoints work from DB only
 
 ---
