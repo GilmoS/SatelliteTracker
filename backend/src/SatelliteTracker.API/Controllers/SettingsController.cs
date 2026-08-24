@@ -22,6 +22,9 @@ public class SettingsController : BaseController
     // GET: api/settings
     // Retrieves the current application settings.
     [HttpGet]
+    [ProducesResponseType(typeof(SettingsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> Get()
     {
         var result = await _repo.GetAsync();
@@ -38,6 +41,9 @@ public class SettingsController : BaseController
     // — gated the same way as the other mutating endpoints rather than left anonymous.
     [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPut]
+    [ProducesResponseType(typeof(SettingsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> Upsert([FromBody] UpdateSettingsRequest request)
     {
         var existing = await GetOrDefault(); // Retrieve existing settings or create default settings if none exist

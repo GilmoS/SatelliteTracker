@@ -20,6 +20,9 @@ public class NotesController : BaseController
 
     // GET /api/passes/{passId}/notes - Retrieves all notes associated with a specific pass
     [HttpGet("/api/passes/{passId:guid}/notes")]
+    [ProducesResponseType(typeof(IEnumerable<NoteDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> GetByPassId(Guid passId)
     {
         var result = await _repo.GetByPassIdAsync(passId);
@@ -31,6 +34,10 @@ public class NotesController : BaseController
     // POST /api/passes/{passId}/notes - Creates a new note for a specific pass
     [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPost("/api/passes/{passId:guid}/notes")]
+    [ProducesResponseType(typeof(NoteDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> Add(Guid passId, [FromBody] CreateNoteRequest request)
     {
         var note = new Note
@@ -50,6 +57,10 @@ public class NotesController : BaseController
     // PUT /api/notes/{id} - Updates an existing note by its ID
     [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPut("/api/notes/{id:guid}")]
+    [ProducesResponseType(typeof(NoteDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateNoteRequest request)
     {
         var getResult = await _repo.GetByIdAsync(id);
@@ -67,6 +78,10 @@ public class NotesController : BaseController
     // DELETE /api/notes/{id} - Deletes a note by its ID
     [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpDelete("/api/notes/{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> Delete(Guid id)
     {
         var result = await _repo.DeleteAsync(id);

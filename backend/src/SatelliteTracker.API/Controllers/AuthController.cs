@@ -26,6 +26,10 @@ public class AuthController : BaseController
     // Does NOT create a UserSettings row — that happens later, the first time Android sends an
     // FCM token (Milestone E, Step 1.4).
     [HttpPost("register")]
+    [ProducesResponseType(typeof(RegisterResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> Register([FromBody] RegisterRequest request)
     {
         var normalizedEmail = request.Email.Trim().ToLowerInvariant();

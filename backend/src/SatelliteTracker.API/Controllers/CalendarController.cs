@@ -34,6 +34,12 @@ public class CalendarController : BaseController
     // tester — an anonymous, unauthenticated calendar-generation endpoint is an abuse/DoS surface.
     [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPost("schedule")]
+    [Produces("text/calendar", "application/json")]
+    [ProducesResponseType(typeof(FileContentResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> Schedule([FromBody] ScheduleCalendarRequest request)
     {
         if (request.PassIds is null || request.PassIds.Count == 0)

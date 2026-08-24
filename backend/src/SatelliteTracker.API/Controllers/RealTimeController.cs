@@ -34,6 +34,9 @@ public class RealTimeController : BaseController
 
     // GET api/satellites/{id}/position - Retrieves the current position of a satellite by its ID
     [HttpGet("{id:guid}/position")]
+    [ProducesResponseType(typeof(PositionDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> GetPosition(Guid id, CancellationToken ct)
     {
         var satResult = await _satelliteRepo.GetByIdAsync(id);
@@ -65,6 +68,9 @@ public class RealTimeController : BaseController
 
     // GET api/satellites/{id}/track - Retrieves the recent track history of a satellite by its ID
     [HttpGet("{id:guid}/track")]
+    [ProducesResponseType(typeof(TrackDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> GetTrack(Guid id, CancellationToken ct)
     {
         var satResult = await _satelliteRepo.GetByIdAsync(id);
