@@ -6,6 +6,37 @@
     "version": "v1"
   },
   "paths": {
+    "/api/auth/register": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/calendar/schedule": {
       "post": {
         "tags": [
@@ -210,6 +241,29 @@
       }
     },
     "/api/passes/pass/{id}": {
+      "get": {
+        "tags": [
+          "Passes"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/passes/{id}/track": {
       "get": {
         "tags": [
           "Passes"
@@ -465,10 +519,51 @@
         }
       }
     },
-    "/api/settings/fcm-token": {
+    "/api/settings/me": {
+      "get": {
+        "tags": [
+          "SettingsMe"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
       "put": {
         "tags": [
-          "Settings"
+          "SettingsMe"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAlertMinutesRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAlertMinutesRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAlertMinutesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/settings/me/fcm-token": {
+      "put": {
+        "tags": [
+          "SettingsMe"
         ],
         "requestBody": {
           "content": {
@@ -608,6 +703,20 @@
         },
         "additionalProperties": false
       },
+      "RegisterRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "ScheduleCalendarRequest": {
         "type": "object",
         "properties": {
@@ -619,6 +728,20 @@
             },
             "nullable": true
           },
+          "alertMinutes": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateAlertMinutesRequest": {
+        "type": "object",
+        "properties": {
           "alertMinutes": {
             "type": "array",
             "items": {
@@ -675,14 +798,6 @@
       "UpdateSettingsRequest": {
         "type": "object",
         "properties": {
-          "alertMinutes": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "int32"
-            },
-            "nullable": true
-          },
           "outlookDays": {
             "type": "integer",
             "format": "int32",
@@ -704,6 +819,9 @@
   },
   "tags": [
     {
+      "name": "Auth"
+    },
+    {
       "name": "Calendar"
     },
     {
@@ -720,6 +838,9 @@
     },
     {
       "name": "Settings"
+    },
+    {
+      "name": "SettingsMe"
     },
     {
       "name": "Tles"
