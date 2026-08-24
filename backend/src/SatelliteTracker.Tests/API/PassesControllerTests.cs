@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Caching.Memory;
 using Moq;
 using SatelliteTracker.API.Authentication;
 using SatelliteTracker.API.Controllers;
@@ -10,6 +11,7 @@ using SatelliteTracker.Database;
 using SatelliteTracker.Database.Common;
 using SatelliteTracker.Database.Entities;
 using SatelliteTracker.Database.Repositories;
+using SatelliteTracker.PassService.SGP4;
 using SatelliteTracker.PassService.Services;
 using SatelliteTracker.Tests.Database.Helpers;
 using Xunit;
@@ -39,6 +41,10 @@ public class PassesControllerTests : IDisposable
     }
 
     private static PassesController BuildController(IPassSubscriptionRepository subscriptionRepo, Pass? pass, Guid apiKeyId)
+        => BuildControllerWithMock(subscriptionRepo, pass, apiKeyId).controller;
+
+    private static (PassesController controller, Mock<IPassService> passServiceMock) BuildControllerWithMock(
+        IPassSubscriptionRepository subscriptionRepo, Pass? pass, Guid apiKeyId, IMemoryCache? cache = null)
     {
         var passServiceMock = new Mock<IPassService>();
         passServiceMock
@@ -47,7 +53,7 @@ public class PassesControllerTests : IDisposable
                 ? Result<Pass>.Failure("Pass not found.")
                 : Result<Pass>.Success(pass));
 
-        var controller = new PassesController(passServiceMock.Object, subscriptionRepo);
+        var controller = new PassesController(passServiceMock.Object, subscriptionRepo, cache ?? new MemoryCache(new MemoryCacheOptions()));
 
         var identity = new ClaimsIdentity(
             [new Claim("api_key_id", apiKeyId.ToString())], authenticationType: "ApiKey");
@@ -56,7 +62,7 @@ public class PassesControllerTests : IDisposable
             HttpContext = new DefaultHttpContext { User = new ClaimsPrincipal(identity) }
         };
 
-        return controller;
+        return (controller, passServiceMock);
     }
 
     private (Satellite sat, TleRecord tle, ApiKey apiKey1, ApiKey apiKey2) Seed()
@@ -180,5 +186,62 @@ public class PassesControllerTests : IDisposable
         var tester2Effective = await _subscriptionRepo.GetEffectiveNotifyStatusAsync(pass.Id, apiKey2.Id);
         Assert.False(tester1Effective.Value);
         Assert.False(tester2Effective.Value);
+    }
+
+    // ── GetTrack ──────────────────────────────────────────────────────────────
+    // These exercise only the controller's routing/caching behavior with IPassService mocked —
+    // the real SGP4-backed track computation (correct TLE selection, point spanning) is covered
+    // at the service level in PassServiceTests.GetPassTrackAsync_* instead.
+
+    private static readonly IReadOnlyList<GroundTrackPoint> SampleTrack =
+    [
+        new GroundTrackPoint(32.0, 34.0, 400.0, DateTime.UtcNow),
+        new GroundTrackPoint(33.0, 35.0, 410.0, DateTime.UtcNow.AddSeconds(10))
+    ];
+
+    [Fact]
+    public async Task GetTrack_UnknownPassId_ReturnsNotFound()
+    {
+        var (controller, passServiceMock) = BuildControllerWithMock(_subscriptionRepo, pass: null, Guid.NewGuid());
+        passServiceMock
+            .Setup(s => s.GetPassTrackAsync(It.IsAny<Guid>()))
+            .ReturnsAsync(Result<IEnumerable<GroundTrackPoint>>.Failure("Pass not found."));
+
+        var result = await controller.GetTrack(Guid.NewGuid());
+
+        Assert.IsType<NotFoundObjectResult>(result);
+    }
+
+    [Fact]
+    public async Task GetTrack_ValidPassId_ReturnsOkWithPoints()
+    {
+        var passId = Guid.NewGuid();
+        var (controller, passServiceMock) = BuildControllerWithMock(_subscriptionRepo, pass: null, Guid.NewGuid());
+        passServiceMock
+            .Setup(s => s.GetPassTrackAsync(passId))
+            .ReturnsAsync(Result<IEnumerable<GroundTrackPoint>>.Success(SampleTrack));
+
+        var result = await controller.GetTrack(passId);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var dto = Assert.IsType<PassTrackDto>(ok.Value);
+        Assert.Equal(passId, dto.PassId);
+        Assert.Equal(SampleTrack.Count, dto.Points.Count);
+    }
+
+    [Fact]
+    public async Task GetTrack_CalledTwiceForSamePassId_OnlyComputesOnce()
+    {
+        var passId = Guid.NewGuid();
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        var (controller, passServiceMock) = BuildControllerWithMock(_subscriptionRepo, pass: null, Guid.NewGuid(), cache);
+        passServiceMock
+            .Setup(s => s.GetPassTrackAsync(passId))
+            .ReturnsAsync(Result<IEnumerable<GroundTrackPoint>>.Success(SampleTrack));
+
+        await controller.GetTrack(passId);
+        await controller.GetTrack(passId);
+
+        passServiceMock.Verify(s => s.GetPassTrackAsync(passId), Times.Once);
     }
 }

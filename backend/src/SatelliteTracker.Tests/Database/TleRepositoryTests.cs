@@ -101,6 +101,44 @@ public class TleRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task GetByIdAsync_ExistingRecord_ReturnsIt()
+    {
+        var sat = AddSatellite(25544);
+        var tle = MakeTle(sat.Id);
+        _context.TleRecords.Add(tle);
+        await _context.SaveChangesAsync();
+
+        var result = await _repo.GetByIdAsync(tle.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(tle.Id, result.Value!.Id);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_UnknownId_ReturnsFailure()
+    {
+        var result = await _repo.GetByIdAsync(Guid.NewGuid());
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("not found", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_ReturnsCorrectRecord_NotJustTheLatestForSatellite()
+    {
+        var sat = AddSatellite(25544);
+        var older = MakeTle(sat.Id, DateTime.UtcNow.AddHours(-5));
+        var newer = MakeTle(sat.Id, DateTime.UtcNow.AddHours(-1));
+        _context.TleRecords.AddRange(older, newer);
+        await _context.SaveChangesAsync();
+
+        var result = await _repo.GetByIdAsync(older.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(older.Id, result.Value!.Id);
+    }
+
+    [Fact]
     public async Task AddAsync_PersistsTleRecord()
     {
         var sat = AddSatellite(25544);

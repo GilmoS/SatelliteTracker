@@ -35,6 +35,22 @@ public class TleRepository : ITleRepository
         }
     }
 
+    // Retrieves a single TLE record by its own primary key, regardless of whether it's still the
+    // latest one fetched for its satellite. Used where a caller must pin its calculation to a
+    // specific TLE snapshot (e.g. a Pass's stored TleId) rather than "whatever is newest now".
+    public async Task<Result<TleRecord>> GetByIdAsync(Guid id)
+    {
+        try
+        {
+            var record = await _context.TleRecords.FindAsync(id);
+            return record is null ? Result<TleRecord>.Failure($"TLE record {id} not found.") : Result<TleRecord>.Success(record);
+        }
+        catch (Exception ex)
+        {
+            return Result<TleRecord>.Failure(ex.Message);
+        }
+    }
+
     // Retrieves historical TLE records for a satellite identified by its NORAD ID,
     public async Task<Result<IEnumerable<TleRecord>>> GetHistoryAsync(int noradId, DateTime from)
     {
