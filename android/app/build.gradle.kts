@@ -24,6 +24,11 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
+
+        // Dev backend listens on localhost:5076 (see backend/src/SatelliteTracker.API/Properties/
+        // launchSettings.json); 10.0.2.2 is the standard emulator alias for the host machine's
+        // localhost. Override per build type below, or via a real staging URL once one exists.
+        buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:5076/\"")
     }
 
     buildTypes {
@@ -40,6 +45,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     // Generated OpenAPI models land under build/generated/openapi and are added
@@ -118,13 +124,20 @@ dependencies {
 
     implementation(libs.retrofit.core)
     implementation(libs.retrofit.kotlinx.serialization.converter)
+    implementation(libs.okhttp.core)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.coroutines.core)
 
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
 
+    implementation(libs.androidx.security.crypto)
+
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.mockk)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
