@@ -95,8 +95,12 @@ emits a real UTC offset (`Z`), never a bare local-looking timestamp.
   `getKey()`/`saveKey()`. It's tested as an instrumented test (`androidTest/`), not a JVM unit
   test, because `EncryptedSharedPreferences` needs the real Android Keystore.
   `androidx.security:security-crypto`'s `EncryptedSharedPreferences`/`MasterKey` classes are
-  marked deprecated upstream with no released stable replacement yet — this is a known, accepted
-  tradeoff, not something to "fix" by swapping libraries.
+  marked deprecated upstream (`MasterKey`: "use `javax.crypto.KeyGenerator` with AndroidKeyStore
+  instead"; `EncryptedSharedPreferences`: "use `android.content.SharedPreferences` instead," i.e.
+  roll your own AndroidKeyStore-backed encryption) with no maintained replacement shipped — the
+  class itself is `@Suppress("DEPRECATION")`d with a comment explaining this, rather than hand-
+  rolling key management. This is a known, accepted tradeoff, not something to "fix" by swapping
+  libraries.
 - **`ApiKeyInterceptor`** (`data/remote/`) adds `X-Api-Key` to every outgoing request when a key
   is stored, and sends the request unmodified when none is stored — deliberately unconditional,
   with no per-endpoint logic. This is safe because anonymous GETs ignore the header (the backend
