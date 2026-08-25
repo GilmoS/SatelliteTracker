@@ -25,10 +25,20 @@ navigationCompose = "2.9.7"
 hilt = "2.57.1"
 hiltNavigationCompose = "1.2.0"
 retrofit = "3.0.0"
-kotlinxSerializationJson = "1.11.0"
+okhttp = "4.12.0"
+# Pinned below the newest release (1.11.0) deliberately: 1.11.0's kotlin-stdlib dependency
+# resolves to 2.3.20, which the project's Kotlin compiler (2.1.20, see the AGP-8/Kotlin-2.1
+# pin note above) can't read ("Module was compiled with an incompatible version of Kotlin" /
+# internal compiler error in compileDebugKotlin). 1.8.1 matches what
+# retrofit2:converter-kotlinx-serialization:3.0.0 itself requests, which stays on 2.1.x-compatible
+# kotlin-stdlib. Bump together with the `kotlin` version above, not independently.
+kotlinxSerializationJson = "1.8.1"
+kotlinxCoroutines = "1.10.2"
 room = "2.8.1"
+securityCrypto = "1.1.0"
 openapiGenerator = "7.11.0"
 junit = "4.13.2"
+mockk = "1.13.13"
 androidxTestExtJunit = "1.2.1"
 espressoCore = "3.6.1"
 
@@ -54,13 +64,20 @@ hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-com
 
 retrofit-core = { group = "com.squareup.retrofit2", name = "retrofit", version.ref = "retrofit" }
 retrofit-kotlinx-serialization-converter = { group = "com.squareup.retrofit2", name = "converter-kotlinx-serialization", version.ref = "retrofit" }
+okhttp-core = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
+kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
 
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 
+androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
+
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
 

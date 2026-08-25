@@ -28,6 +28,9 @@ public class PassesController : BaseController
 
     // GET api/passes/{satelliteId}
     [HttpGet("{satelliteId:guid}")]
+    [ProducesResponseType(typeof(IEnumerable<PassDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> GetUpcoming(Guid satelliteId)
     {
         var result = await _passService.GetUpcomingPassesAsync(satelliteId);
@@ -38,6 +41,9 @@ public class PassesController : BaseController
 
     // GET api/passes/{satelliteId}/history
     [HttpGet("{satelliteId:guid}/history")]
+    [ProducesResponseType(typeof(IEnumerable<PassDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> GetHistory(Guid satelliteId)
     {
         var result = await _passService.GetPassHistoryAsync(satelliteId);
@@ -48,6 +54,9 @@ public class PassesController : BaseController
 
     // GET api/passes/pass/{id}
     [HttpGet("pass/{id:guid}")]
+    [ProducesResponseType(typeof(PassDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await _passService.GetPassByIdAsync(id);
@@ -63,6 +72,9 @@ public class PassesController : BaseController
     // result is deterministic per passId (same TleId, same fixed window), so it's cached for 1 hour
     // rather than 5 minutes, and keyed by passId alone.
     [HttpGet("{id:guid}/track")]
+    [ProducesResponseType(typeof(PassTrackDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> GetTrack(Guid id)
     {
         var cacheKey = $"pass-track:{id}";
@@ -89,6 +101,10 @@ public class PassesController : BaseController
     // override row instead of writing a redundant "true" row.
     [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPatch("{id:guid}/notify")]
+    [ProducesResponseType(typeof(NotifyStatusDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> PatchNotify(Guid id, [FromBody] PatchNotifyRequest request)
     {
         var passResult = await _passService.GetPassByIdAsync(id);
@@ -110,6 +126,6 @@ public class PassesController : BaseController
         var effectiveResult = await _subscriptionRepo.GetEffectiveNotifyStatusAsync(id, apiKeyId);
         if (!effectiveResult.IsSuccess) return ToError(effectiveResult.Error!);
 
-        return Ok(new { passId = id, notify = effectiveResult.Value });
+        return Ok(new NotifyStatusDto(id, effectiveResult.Value));
     }
 }

@@ -486,3 +486,13 @@ $RECYCLE.BIN/
 # Firebase Service Account
 **/firebase-adminsdk*.json
 google-services.json
+
+# The [Dd]ebug/ and [Rr]elease/ patterns above target C# build output (bin/Debug, obj/Release,
+# etc.) but also match Android's legitimate build-variant source sets (android/app/src/debug/,
+# android/app/src/release/) anywhere in the repo, since gitignore patterns without a leading
+# slash match at any depth. Un-exclude those specifically rather than narrowing the generic
+# C# patterns themselves.
+!android/app/src/debug/
+!android/app/src/debug/**
+!android/app/src/release/
+!android/app/src/release/**

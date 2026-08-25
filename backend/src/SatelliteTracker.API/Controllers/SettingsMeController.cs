@@ -27,6 +27,8 @@ public class SettingsMeController : BaseController
     // computed default (AlertMinutes: [], FcmToken: null) — it never creates a row as a side
     // effect of reading.
     [HttpGet]
+    [ProducesResponseType(typeof(UserSettingsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Get()
     {
         var apiKeyId = User.GetApiKeyId();
@@ -39,6 +41,10 @@ public class SettingsMeController : BaseController
     // Upserts AlertMinutes only. On an existing row, FcmToken is left untouched — see
     // IUserSettingsRepository.UpsertAlertMinutesAsync.
     [HttpPut]
+    [ProducesResponseType(typeof(UserSettingsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> UpdateAlertMinutes([FromBody] UpdateAlertMinutesRequest request)
     {
         if (request.AlertMinutes.Any(m => !ValidAlertMinutes.Contains(m)))
@@ -60,6 +66,10 @@ public class SettingsMeController : BaseController
     // Upserts FcmToken only. On an existing row, AlertMinutes is left untouched — see
     // IUserSettingsRepository.UpsertFcmTokenAsync.
     [HttpPut("fcm-token")]
+    [ProducesResponseType(typeof(UserSettingsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> UpdateFcmToken([FromBody] UpdateFcmTokenRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.FcmToken))
