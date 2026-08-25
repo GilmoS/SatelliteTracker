@@ -5,9 +5,9 @@ Android client (Kotlin, Jetpack Compose) for the Satellite Pass Tracker. See the
 the Android app. Talks only to `SatelliteTracker.API`; never calls N2YO or Microsoft Graph
 directly (see repo-root CLAUDE.md, "Single Source of Truth Rules").
 
-This file currently covers only what's built as of Milestone E, Step 2.1 (networking + auth
-infrastructure). It'll grow as later steps (feature repositories, ViewModels, Compose screens)
-land.
+This file currently covers what's built as of Milestone E, Step 2.1 (networking + auth
+infrastructure) and Step 2.2 (Satellite/Pass/Notes repositories with Room caching). It'll grow as
+later steps (auth-flow repositories, ViewModels, Compose screens) land.
 
 ---
 
@@ -46,15 +46,17 @@ com.sattrakk.app/
 │   │   └── dto/                    Generated DTOs (never committed — see that dir's contents)
 │   ├── local/
 │   │   ├── ApiKeyStore.kt          EncryptedSharedPreferences wrapper
-│   │   ├── AppDatabase.kt, PassDao.kt, SatelliteDao.kt
-│   │   └── entity/                 Room @Entity classes (Pass, Satellite only)
+│   │   ├── AppDatabase.kt, PassDao.kt, SatelliteDao.kt, NoteDao.kt, CacheMetadataDao.kt
+│   │   └── entity/                 Room @Entity classes (Pass, Satellite, Note, CacheMetadata)
 │   ├── util/
-│   │   └── SafeApiCall.kt          Retrofit Response<T> -> ApiResult<T> mapping
-│   └── repository/                 Empty until steps 2.2/2.3
+│   │   ├── SafeApiCall.kt          Retrofit Response<T> -> ApiResult<T> mapping
+│   │   └── CachedNetworkFirst.kt   Shared TTL-gated caching decision tree (step 2.2)
+│   └── repository/                 SatelliteRepository, PassRepository, NotesRepository (step 2.2)
 ├── domain/
 │   ├── model/
-│   │   └── ApiResult.kt            Uniform outcome type for every repository call
-│   └── mapper/                     Empty until steps 2.2/2.3
+│   │   ├── ApiResult.kt            Uniform outcome type for every repository call
+│   │   └── Satellite.kt, Pass.kt, Note.kt, PassTrack.kt, NotifyStatus.kt (step 2.2)
+│   └── mapper/                     Dto <-> Entity <-> domain extension functions (step 2.2)
 ├── di/
 │   ├── NetworkModule.kt            OkHttpClient, Json, Retrofit, SatTrakkApi
 │   └── DatabaseModule.kt           Room AppDatabase + DAOs
@@ -143,13 +145,99 @@ place:
 
 ## Room — what's cached and why
 
-Per the repo-root CLAUDE.md's caching strategy, Room caches **only** `Pass` and `Satellite`
-(network-first, fall back to the cache on failure) — no other endpoint gets local caching; the
-backend's own real-time endpoints are explicitly non-cached-in-DB by design (repo-root CLAUDE.md,
-"Real-time endpoints ... do NOT hit DB"), and notes/settings/etc. don't need offline support yet.
-`PassEntity`/`SatelliteEntity` store UUID and timestamp fields as `String`/`Long` (epoch millis)
-rather than `java.util.UUID`/`java.time.OffsetDateTime`, so the entities need no Room
-`TypeConverter`s — DTO/entity/domain-model mapping is a step 2.2/2.3 concern, not this one.
+As of step 2.2, Room caches `Pass`, `Satellite`, and `Note` — all three follow the same
+TTL-gated, network-first, stale-on-`NetworkError`-only strategy (see below). No other endpoint
+gets local caching; the backend's own real-time endpoints are explicitly non-cached-in-DB by
+design (repo-root CLAUDE.md, "Real-time endpoints ... do NOT hit DB"), and settings/auth don't use
+Room at all (step 2.3 concern). `PassEntity`/`SatelliteEntity`/`NoteEntity` store UUID and
+timestamp fields as `String`/`Long` (epoch millis) rather than `java.util.UUID`/
+`java.time.OffsetDateTime`, so the entities need no Room `TypeConverter`s.
+
+### The TTL-gated caching strategy — apply this to any future cached repository too
+
+Every cached list read (`SatelliteRepository.getSatellites`, `PassRepository.getPasses`,
+`NotesRepository.getNotes`) follows the exact same decision tree, implemented once in
+`data/util/CachedNetworkFirst.kt`'s `cachedNetworkFirst()` rather than re-implemented per
+repository:
+
+1. Look up the `CacheMetadataEntity` row for that resource's cache key (see below). Its
+   **presence**, not whether the cached rows list happens to be non-empty, is what "is there any
+   cache at all" means — a satellite with zero upcoming passes, or a pass with zero notes, is a
+   legitimate *empty but cached* result, distinct from "never fetched."
+2. If a metadata row exists AND `now - lastFetchedAt < TTL` → return the Room rows directly, no
+   network call at all.
+3. Otherwise (missing or stale) → call the network:
+   - Success → overwrite the Room rows for that key, upsert the metadata row's timestamp, return
+     the fresh data.
+   - Failure, specifically `ApiResult.NetworkError` (no connectivity) → fall back to whatever Room
+     has for that key if the metadata row exists (even if stale); if the metadata row is absent,
+     propagate `NetworkError` rather than silently returning an empty list.
+   - Failure, any other `ApiResult` case (`AuthRequired`, `Error`) → propagate it as-is, never
+     fall back to stale cache — a stale-but-wrong-credentials or stale-but-500 situation must
+     surface the real error, not hide behind old data.
+4. `forceRefresh = true` (for a future pull-to-refresh) skips step 2 entirely and always goes to
+   step 3, with the same success/failure handling.
+
+**Cache keys** are per-resource strings, not a column on the cached entity itself, because fetch
+granularity differs per resource: `"satellites"` (one global key), `"passes:{satelliteId}"`,
+`"notes:{passId}"`. This is why `CacheMetadataEntity(cacheKey, lastFetchedAtEpochMillis)` is a
+small standalone table rather than a `lastFetchedAt` column on `PassEntity`/`SatelliteEntity`/
+`NoteEntity` — a column there would need one row's timestamp to represent a whole collection's
+fetch time, which doesn't fit when the collection can legitimately be empty.
+
+**TTLs** (chosen to match the backend's own `IMemoryCache` TTLs where one exists — there's no
+freshness benefit to the client polling faster than the backend itself refreshes its data):
+
+| Resource                    | TTL      | Reason                                                |
+|------------------------------|----------|--------------------------------------------------------|
+| Passes list (per satellite)  | 1 hour   | Matches backend `/passes` cache TTL                    |
+| Satellites list               | 24 hours | No backend cache TTL for this endpoint (changes rarely); client-side-only choice |
+| Notes (per pass)              | 1 hour   | Client-side choice; no equivalent backend cache exists for `/passes/{passId}/notes`, picked to match Passes' cadence |
+
+`PassRepository.getPassTrack` is deliberately **not** cached in Room — the backend already caches
+`GET /api/passes/{id}/track` server-side for 1 hour, keyed by `passId` alone (repo-root
+CLAUDE.md's caching table); a client-side cache on top would add no value. It's a straight
+`safeApiCall` passthrough.
+
+### Notes' asymmetry: cached reads, uncached writes
+
+Notes are user-editable, not purely server-computed like Pass/Satellite, so `NotesRepository`'s
+three write methods (`createNote`, `updateNote`, `deleteNote`) deliberately do **not** follow the
+caching strategy above:
+
+- They call the network directly via `safeApiCall`, with no Room read involved.
+- **No offline support, and nothing is queued** — a write with no connectivity returns
+  `NetworkError` like any other failure; the (future) UI is expected to surface that as "requires
+  connection," not silently retry later. This is a deliberate scope decision, not a gap to close.
+- On any non-`Success` result (including `NetworkError`), the local notes cache is left
+  completely untouched.
+
+### Immediate local cache update after a successful mutation
+
+Two write paths bypass the TTL window on purpose, so a tester's own action shows up immediately
+instead of up to an hour later:
+
+- `PassRepository.setNotify` — on a successful `PATCH /api/passes/{id}/notify`, updates the
+  cached `PassEntity.notify` column for that pass id directly (`PassDao.updateNotify`), without
+  waiting for the next TTL-driven `getPasses` refresh. On any non-`Success` result, the cache is
+  left untouched.
+- `NotesRepository.createNote` / `updateNote` / `deleteNote` — on success, insert/replace
+  (`NoteDao.insert`, REPLACE-on-conflict-by-id doubles as upsert) or remove
+  (`NoteDao.deleteById`) the affected row in the local cache immediately.
+
+Any future repository that adds its own mutating endpoint should follow this same pattern
+(mutate → on success, patch the one affected cache row directly) rather than inventing a new one.
+
+### `notify` is local-only state, not on `PassDto`
+
+`PassDto` (the list/detail response shape) has no `notify` field at all — effective per-tester
+notify status is sparse opt-out state living server-side in `PassSubscription` (repo-root
+CLAUDE.md), not on `Pass`. `PassEntity.notify` and domain `Pass.notify` exist purely as
+client-cached state: `PassRepository.getPasses`' network-success path merges in whatever `notify`
+value is already cached locally for each pass id (defaulting to `true`, the backend's own sparse
+default, only for a pass id seen for the first time) before writing the refreshed rows — without
+this merge, a tester's own `setNotify` toggle would be silently reverted by the very next
+TTL-driven or force-refreshed fetch.
 
 ## Base URL configuration
 
