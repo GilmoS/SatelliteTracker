@@ -22,6 +22,11 @@ interface PassDao {
     @Query("DELETE FROM passes WHERE satelliteId = :satelliteId")
     suspend fun deleteForSatellite(satelliteId: String)
 
+    // Used by PassRepository.setNotify to reflect a tester's own toggle immediately, without
+    // waiting for the next TTL-driven refresh. A no-op if the pass isn't currently cached.
+    @Query("UPDATE passes SET notify = :notify WHERE id = :id")
+    suspend fun updateNotify(id: String, notify: Boolean)
+
     @Transaction
     suspend fun replaceForSatellite(satelliteId: String, passes: List<PassEntity>) {
         deleteForSatellite(satelliteId)
