@@ -12,3 +12,13 @@ sealed class ApiResult<out T> {
     object AuthRequired : ApiResult<Nothing>()
     object NetworkError : ApiResult<Nothing>()
 }
+
+// Transforms a Success payload (e.g. a DTO list into domain models) while passing every other
+// outcome through unchanged. Used by every repository built on safeApiCall (steps 2.2+) instead
+// of re-implementing the same `when` on every call site.
+inline fun <T, R> ApiResult<T>.mapSuccess(transform: (T) -> R): ApiResult<R> = when (this) {
+    is ApiResult.Success -> ApiResult.Success(transform(data))
+    is ApiResult.Error -> this
+    is ApiResult.AuthRequired -> this
+    is ApiResult.NetworkError -> this
+}
