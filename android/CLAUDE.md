@@ -35,6 +35,26 @@ No `gradlew`/`gradlew.bat` wrapper scripts are committed yet — `gradle/wrapper
 pins the intended version (Gradle 9.3.1). Run the above via a local Gradle install matching that
 version, or Android Studio's Gradle sync, until the wrapper scripts are added.
 
+**Finding a local Gradle install, if `gradle` isn't on `PATH`**: don't conclude no usable Gradle
+exists just because `gradle -v`/`which gradle` comes up empty — check these before giving up,
+since a full filesystem `find`/recursive search is slow and often times out:
+- `$USERPROFILE/.gradle/wrapper/dists/gradle-<version>-bin/<hash>/gradle-<version>/bin/gradle.bat`
+  — a version-matching distribution is very likely already cached here from a prior Android
+  Studio sync (the `<hash>` segment is machine-specific, so glob for it rather than hardcoding).
+- `$ANDROID_HOME` (or Android Studio's own install dir under
+  `%LOCALAPPDATA%\Google\AndroidStudio*`) for a bundled Gradle/JDK.
+
+**If the run fails with `ERROR: JAVA_HOME is set to an invalid directory`**: the `JAVA_HOME`
+env var on this machine can point at a stale/nonexistent path even though a working JDK 21 is
+installed elsewhere (e.g. under `C:\Program Files\Microsoft\jdk-21.0.11.10-hotspot` rather than
+`C:\Program Files\Java\jdk-21`). Override `JAVA_HOME` for just that command rather than editing
+the environment, e.g.:
+```bash
+JAVA_HOME="C:\Program Files\Microsoft\jdk-21.0.11.10-hotspot" \
+  "$USERPROFILE/.gradle/wrapper/dists/gradle-9.3.1-bin/<hash>/gradle-9.3.1/bin/gradle.bat" \
+  :app:testDebugUnitTest
+```
+
 ---
 
 ## Package structure
