@@ -4,8 +4,8 @@ import com.sattrakk.app.data.local.CacheMetadataDao
 import com.sattrakk.app.data.local.PassDao
 import com.sattrakk.app.data.remote.SatTrakkApi
 import com.sattrakk.app.data.remote.dto.PatchNotifyRequest
+import com.sattrakk.app.data.util.SafeApiCaller
 import com.sattrakk.app.data.util.cachedNetworkFirst
-import com.sattrakk.app.data.util.safeApiCall
 import com.sattrakk.app.domain.mapper.toDomain
 import com.sattrakk.app.domain.mapper.toEntity
 import com.sattrakk.app.domain.model.ApiResult
@@ -22,7 +22,8 @@ import javax.inject.Singleton
 class PassRepository @Inject constructor(
     private val api: SatTrakkApi,
     private val passDao: PassDao,
-    private val cacheMetadataDao: CacheMetadataDao
+    private val cacheMetadataDao: CacheMetadataDao,
+    private val safeApiCall: SafeApiCaller
 ) {
 
     // TTL-gated network-first read, keyed per satelliteId — see android/CLAUDE.md. `notify` isn't

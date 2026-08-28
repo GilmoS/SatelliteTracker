@@ -6,6 +6,8 @@ import com.sattrakk.app.data.local.entity.CacheMetadataEntity
 import com.sattrakk.app.data.local.entity.NoteEntity
 import com.sattrakk.app.data.remote.SatTrakkApi
 import com.sattrakk.app.data.remote.dto.NoteDto
+import com.sattrakk.app.data.session.SessionManager
+import com.sattrakk.app.data.util.SafeApiCaller
 import com.sattrakk.app.domain.model.ApiResult
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -28,6 +30,7 @@ class NotesRepositoryTest {
     private val api = mockk<SatTrakkApi>()
     private val noteDao = mockk<NoteDao>(relaxUnitFun = true)
     private val cacheMetadataDao = mockk<CacheMetadataDao>(relaxUnitFun = true)
+    private val safeApiCall = SafeApiCaller(mockk<SessionManager>(relaxUnitFun = true))
     private lateinit var repository: NotesRepository
 
     private val passId = UUID.randomUUID()
@@ -52,7 +55,7 @@ class NotesRepositoryTest {
 
     @Before
     fun setUp() {
-        repository = NotesRepository(api, noteDao, cacheMetadataDao)
+        repository = NotesRepository(api, noteDao, cacheMetadataDao, safeApiCall)
     }
 
     @Test

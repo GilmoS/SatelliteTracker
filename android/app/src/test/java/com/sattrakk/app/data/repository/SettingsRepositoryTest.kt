@@ -4,6 +4,8 @@ import com.sattrakk.app.data.remote.SatTrakkApi
 import com.sattrakk.app.data.remote.dto.UpdateAlertMinutesRequest
 import com.sattrakk.app.data.remote.dto.UpdateFcmTokenRequest
 import com.sattrakk.app.data.remote.dto.UserSettingsDto
+import com.sattrakk.app.data.session.SessionManager
+import com.sattrakk.app.data.util.SafeApiCaller
 import com.sattrakk.app.domain.model.ApiResult
 import io.mockk.coEvery
 import io.mockk.mockk
@@ -22,11 +24,12 @@ import retrofit2.Response
 class SettingsRepositoryTest {
 
     private val api = mockk<SatTrakkApi>()
+    private val safeApiCall = SafeApiCaller(mockk<SessionManager>(relaxUnitFun = true))
     private lateinit var repository: SettingsRepository
 
     @Before
     fun setUp() {
-        repository = SettingsRepository(api)
+        repository = SettingsRepository(api, safeApiCall)
     }
 
     @Test

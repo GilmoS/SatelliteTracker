@@ -6,6 +6,8 @@ import com.sattrakk.app.data.local.entity.CacheMetadataEntity
 import com.sattrakk.app.data.local.entity.SatelliteEntity
 import com.sattrakk.app.data.remote.SatTrakkApi
 import com.sattrakk.app.data.remote.dto.SatelliteDto
+import com.sattrakk.app.data.session.SessionManager
+import com.sattrakk.app.data.util.SafeApiCaller
 import com.sattrakk.app.domain.model.ApiResult
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -28,6 +30,7 @@ class SatelliteRepositoryTest {
     private val api = mockk<SatTrakkApi>()
     private val satelliteDao = mockk<SatelliteDao>(relaxUnitFun = true)
     private val cacheMetadataDao = mockk<CacheMetadataDao>(relaxUnitFun = true)
+    private val safeApiCall = SafeApiCaller(mockk<SessionManager>(relaxUnitFun = true))
     private lateinit var repository: SatelliteRepository
 
     private val satelliteId = UUID.randomUUID()
@@ -52,7 +55,7 @@ class SatelliteRepositoryTest {
 
     @Before
     fun setUp() {
-        repository = SatelliteRepository(api, satelliteDao, cacheMetadataDao)
+        repository = SatelliteRepository(api, satelliteDao, cacheMetadataDao, safeApiCall)
     }
 
     @Test

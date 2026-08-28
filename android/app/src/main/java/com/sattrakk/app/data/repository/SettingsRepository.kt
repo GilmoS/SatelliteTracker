@@ -3,7 +3,7 @@ package com.sattrakk.app.data.repository
 import com.sattrakk.app.data.remote.SatTrakkApi
 import com.sattrakk.app.data.remote.dto.UpdateAlertMinutesRequest
 import com.sattrakk.app.data.remote.dto.UpdateFcmTokenRequest
-import com.sattrakk.app.data.util.safeApiCall
+import com.sattrakk.app.data.util.SafeApiCaller
 import com.sattrakk.app.domain.mapper.toDomain
 import com.sattrakk.app.domain.model.ApiResult
 import com.sattrakk.app.domain.model.UserSettings
@@ -16,7 +16,8 @@ import javax.inject.Singleton
 // the existing TTL-gated pattern (data/util/CachedNetworkFirst.kt) rather than a new one.
 @Singleton
 class SettingsRepository @Inject constructor(
-    private val api: SatTrakkApi
+    private val api: SatTrakkApi,
+    private val safeApiCall: SafeApiCaller
 ) {
 
     // Always succeeds for an authenticated tester — one who's never written to either field gets

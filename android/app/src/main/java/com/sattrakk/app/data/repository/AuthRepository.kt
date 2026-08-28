@@ -3,7 +3,7 @@ package com.sattrakk.app.data.repository
 import com.sattrakk.app.data.local.ApiKeyStore
 import com.sattrakk.app.data.remote.SatTrakkApi
 import com.sattrakk.app.data.remote.dto.RegisterRequest
-import com.sattrakk.app.data.util.safeApiCall
+import com.sattrakk.app.data.util.SafeApiCaller
 import com.sattrakk.app.domain.model.ApiResult
 import com.sattrakk.app.domain.model.mapSuccess
 import javax.inject.Inject
@@ -16,7 +16,8 @@ import javax.inject.Singleton
 @Singleton
 class AuthRepository @Inject constructor(
     private val api: SatTrakkApi,
-    private val apiKeyStore: ApiKeyStore
+    private val apiKeyStore: ApiKeyStore,
+    private val safeApiCall: SafeApiCaller
 ) {
 
     // On any non-Success result (403 not allowlisted, 409 already registered, NetworkError, ...)

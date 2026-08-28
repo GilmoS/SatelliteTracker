@@ -8,6 +8,8 @@ import com.sattrakk.app.data.remote.SatTrakkApi
 import com.sattrakk.app.data.remote.dto.NotifyStatusDto
 import com.sattrakk.app.data.remote.dto.PassDto
 import com.sattrakk.app.data.remote.dto.PassTrackDto
+import com.sattrakk.app.data.session.SessionManager
+import com.sattrakk.app.data.util.SafeApiCaller
 import com.sattrakk.app.domain.model.ApiResult
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -32,6 +34,7 @@ class PassRepositoryTest {
     private val api = mockk<SatTrakkApi>()
     private val passDao = mockk<PassDao>(relaxUnitFun = true)
     private val cacheMetadataDao = mockk<CacheMetadataDao>(relaxUnitFun = true)
+    private val safeApiCall = SafeApiCaller(mockk<SessionManager>(relaxUnitFun = true))
     private lateinit var repository: PassRepository
 
     private val satelliteId = UUID.randomUUID()
@@ -71,7 +74,7 @@ class PassRepositoryTest {
 
     @Before
     fun setUp() {
-        repository = PassRepository(api, passDao, cacheMetadataDao)
+        repository = PassRepository(api, passDao, cacheMetadataDao, safeApiCall)
     }
 
     @Test
