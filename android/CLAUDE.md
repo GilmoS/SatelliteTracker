@@ -6,8 +6,11 @@ the Android app. Talks only to `SatelliteTracker.API`; never calls N2YO or Micro
 directly (see repo-root CLAUDE.md, "Single Source of Truth Rules").
 
 This file currently covers what's built as of Milestone E, Step 2.1 (networking + auth
-infrastructure) and Step 2.2 (Satellite/Pass/Notes repositories with Room caching). It'll grow as
-later steps (auth-flow repositories, ViewModels, Compose screens) land.
+infrastructure), Step 2.2 (Satellite/Pass/Notes repositories with Room caching), and Step 2.3
+(`AuthRepository`/`SettingsRepository`). **Step 2 (the entire Android data layer — networking,
+auth, caching, all repositories) is now complete.** Step 3 (Dashboard + Pass Details Modal, the
+first screen with real ViewModels/UI wired to this data layer) is next; this file will grow again
+once that lands.
 
 ---
 
@@ -32,6 +35,26 @@ No `gradlew`/`gradlew.bat` wrapper scripts are committed yet — `gradle/wrapper
 pins the intended version (Gradle 9.3.1). Run the above via a local Gradle install matching that
 version, or Android Studio's Gradle sync, until the wrapper scripts are added.
 
+**Finding a local Gradle install, if `gradle` isn't on `PATH`**: don't conclude no usable Gradle
+exists just because `gradle -v`/`which gradle` comes up empty — check these before giving up,
+since a full filesystem `find`/recursive search is slow and often times out:
+- `$USERPROFILE/.gradle/wrapper/dists/gradle-<version>-bin/<hash>/gradle-<version>/bin/gradle.bat`
+  — a version-matching distribution is very likely already cached here from a prior Android
+  Studio sync (the `<hash>` segment is machine-specific, so glob for it rather than hardcoding).
+- `$ANDROID_HOME` (or Android Studio's own install dir under
+  `%LOCALAPPDATA%\Google\AndroidStudio*`) for a bundled Gradle/JDK.
+
+**If the run fails with `ERROR: JAVA_HOME is set to an invalid directory`**: the `JAVA_HOME`
+env var on this machine can point at a stale/nonexistent path even though a working JDK 21 is
+installed elsewhere (e.g. under `C:\Program Files\Microsoft\jdk-21.0.11.10-hotspot` rather than
+`C:\Program Files\Java\jdk-21`). Override `JAVA_HOME` for just that command rather than editing
+the environment, e.g.:
+```bash
+JAVA_HOME="C:\Program Files\Microsoft\jdk-21.0.11.10-hotspot" \
+  "$USERPROFILE/.gradle/wrapper/dists/gradle-9.3.1-bin/<hash>/gradle-9.3.1/bin/gradle.bat" \
+  :app:testDebugUnitTest
+```
+
 ---
 
 ## Package structure
@@ -51,12 +74,14 @@ com.sattrakk.app/
 │   ├── util/
 │   │   ├── SafeApiCall.kt          Retrofit Response<T> -> ApiResult<T> mapping
 │   │   └── CachedNetworkFirst.kt   Shared TTL-gated caching decision tree (step 2.2)
-│   └── repository/                 SatelliteRepository, PassRepository, NotesRepository (step 2.2)
+│   └── repository/                 SatelliteRepository, PassRepository, NotesRepository (step 2.2),
+│                                    AuthRepository, SettingsRepository (step 2.3)
 ├── domain/
 │   ├── model/
 │   │   ├── ApiResult.kt            Uniform outcome type for every repository call
-│   │   └── Satellite.kt, Pass.kt, Note.kt, PassTrack.kt, NotifyStatus.kt (step 2.2)
-│   └── mapper/                     Dto <-> Entity <-> domain extension functions (step 2.2)
+│   │   ├── Satellite.kt, Pass.kt, Note.kt, PassTrack.kt, NotifyStatus.kt (step 2.2)
+│   │   └── UserSettings.kt         (step 2.3)
+│   └── mapper/                     Dto <-> Entity <-> domain extension functions (step 2.2/2.3)
 ├── di/
 │   ├── NetworkModule.kt            OkHttpClient, Json, Retrofit, SatTrakkApi
 │   └── DatabaseModule.kt           Room AppDatabase + DAOs
@@ -149,7 +174,8 @@ As of step 2.2, Room caches `Pass`, `Satellite`, and `Note` — all three follow
 TTL-gated, network-first, stale-on-`NetworkError`-only strategy (see below). No other endpoint
 gets local caching; the backend's own real-time endpoints are explicitly non-cached-in-DB by
 design (repo-root CLAUDE.md, "Real-time endpoints ... do NOT hit DB"), and settings/auth don't use
-Room at all (step 2.3 concern). `PassEntity`/`SatelliteEntity`/`NoteEntity` store UUID and
+Room at all — see "Auth-flow repositories" below for what step 2.3 built instead.
+`PassEntity`/`SatelliteEntity`/`NoteEntity` store UUID and
 timestamp fields as `String`/`Long` (epoch millis) rather than `java.util.UUID`/
 `java.time.OffsetDateTime`, so the entities need no Room `TypeConverter`s.
 
@@ -238,6 +264,38 @@ value is already cached locally for each pass id (defaulting to `true`, the back
 default, only for a pass id seen for the first time) before writing the refreshed rows — without
 this merge, a tester's own `setNotify` toggle would be silently reverted by the very next
 TTL-driven or force-refreshed fetch.
+
+## Auth-flow repositories — AuthRepository and SettingsRepository (Step 2.3)
+
+Closes out Step 2 (the Android data layer) in full. Both repositories are direct `safeApiCall`
+passthroughs with **no Room caching**, unlike Pass/Satellite/Notes — this is an explicit decision,
+not a gap: settings/auth data is per-tester, low-volume, and always needs a live round trip
+(registration especially). If local caching becomes necessary later, it should follow the existing
+TTL-gated pattern in `data/util/CachedNetworkFirst.kt` (see above) rather than inventing a new one.
+
+- **`AuthRepository.register(email, displayName)`** calls `POST /api/auth/register` and, on
+  success, calls the existing `ApiKeyStore.saveKey(...)` (step 2.1) with the raw key from
+  `RegisterResponse.apiKey` immediately — **this repository is the single place in the app that
+  ever handles the raw API key**, since it's returned by the backend exactly once, at this exact
+  moment (repo-root CLAUDE.md's beta allowlist section). The raw key is never returned up to a
+  ViewModel/UI layer; storage happens at the repository boundary. On any non-`Success` result
+  (`403` not allowlisted, `409` already registered, `NetworkError`, ...), `saveKey` is never
+  called — covered explicitly by `AuthRepositoryTest`, since a leaked key on a failed registration
+  would be a serious regression.
+- **`SettingsRepository`** wraps the three `/api/settings/me*` endpoints:
+  - `getSettings()` — `GET /api/settings/me`, mapped to domain `UserSettings`. Always succeeds for
+    an authenticated tester; a tester who's never written to either field gets the backend's
+    computed default (empty `alertMinutes`, null `fcmToken`), never a `404`, so there's no
+    "not found yet" branch on the client.
+  - `updateAlertMinutes(minutes)` — `PUT /api/settings/me`, returns the updated `UserSettings`.
+  - `updateFcmToken(token)` — `PUT /api/settings/me/fcm-token`. Returns the updated
+    `UserSettings` (not `Unit`) because that endpoint's real response shape, per the regenerated
+    OpenAPI spec, is the same `UserSettingsDto` the other two return.
+- **`domain/model/UserSettings.kt`** (`alertMinutes: List<Int>`, `fcmToken: String?`) and its
+  mapper (`domain/mapper/UserSettingsMappers.kt`) follow the same convention as every other
+  DTO/domain pair: `alertMinutes` is `requireNotNull`-mapped (the backend always returns a list,
+  even empty), while `fcmToken` stays nullable since null is a legitimate, expected value, not a
+  contract violation.
 
 ## Base URL configuration
 
