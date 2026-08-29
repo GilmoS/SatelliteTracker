@@ -16,8 +16,17 @@ interface PassDao {
     @Query("SELECT * FROM passes WHERE satelliteId = :satelliteId ORDER BY aosEpochMillis ASC")
     suspend fun getCachedForSatellite(satelliteId: String): List<PassEntity>
 
+    @Query("SELECT * FROM passes WHERE id = :id")
+    suspend fun getById(id: String): PassEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(passes: List<PassEntity>)
+
+    // Single-row insert-or-replace for PassRepository.getPassById's cold-deep-link fetch — NOT
+    // replaceForSatellite, which deletes and replaces every row for a satellite and would wipe out
+    // the rest of that satellite's cached passes for a fetch that only concerns one pass.
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(pass: PassEntity)
 
     @Query("DELETE FROM passes WHERE satelliteId = :satelliteId")
     suspend fun deleteForSatellite(satelliteId: String)

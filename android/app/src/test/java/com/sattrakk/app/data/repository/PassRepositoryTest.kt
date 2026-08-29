@@ -19,6 +19,8 @@ import java.io.IOException
 import java.time.OffsetDateTime
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
@@ -35,6 +37,10 @@ class PassRepositoryTest {
     private val passDao = mockk<PassDao>(relaxUnitFun = true)
     private val cacheMetadataDao = mockk<CacheMetadataDao>(relaxUnitFun = true)
     private val safeApiCall = SafeApiCaller(mockk<SessionManager>(relaxUnitFun = true))
+    // Unconfined so the fire-and-forget background refresh launched by getPassById runs eagerly
+    // to completion before getPassById returns, keeping tests deterministic without needing to
+    // separately await it.
+    private val applicationScope = CoroutineScope(Dispatchers.Unconfined)
     private lateinit var repository: PassRepository
 
     private val satelliteId = UUID.randomUUID()
@@ -74,7 +80,7 @@ class PassRepositoryTest {
 
     @Before
     fun setUp() {
-        repository = PassRepository(api, passDao, cacheMetadataDao, safeApiCall)
+        repository = PassRepository(api, passDao, cacheMetadataDao, safeApiCall, applicationScope)
     }
 
     @Test
@@ -203,5 +209,80 @@ class PassRepositoryTest {
 
         assertTrue(result is ApiResult.NetworkError)
         coVerify(exactly = 0) { passDao.updateNotify(any(), any()) }
+    }
+
+    @Test
+    fun `getPassById returns Room row directly without calling network`() = runTest {
+        coEvery { passDao.getById(passId.toString()) } returns cachedEntity
+
+        val result = repository.getPassById(passId.toString())
+
+        assertTrue(result is ApiResult.Success)
+        assertEquals(passId.toString(), (result as ApiResult.Success).data.id)
+        coVerify(exactly = 0) { api.getPassById(any()) }
+    }
+
+    @Test
+    fun `getPassById cache miss with network success upserts single row, leaves list CacheMetadata untouched, and triggers background refresh`() =
+        runTest {
+            coEvery { passDao.getById(passId.toString()) } returns null
+            coEvery { api.getPassById(passId) } returns Response.success(passDto())
+            // Background getPasses(satelliteId) call: keep its own cache fresh so it returns
+            // straight from Room with no network call and no CacheMetadata write of its own —
+            // isolating what getPassById's own fetch does or doesn't touch.
+            coEvery { cacheMetadataDao.get(cacheKey) } returns CacheMetadataEntity(cacheKey, System.currentTimeMillis())
+            coEvery { passDao.getCachedForSatellite(satelliteId.toString()) } returns listOf(cachedEntity)
+
+            val result = repository.getPassById(passId.toString())
+
+            assertTrue(result is ApiResult.Success)
+            assertEquals(passId.toString(), (result as ApiResult.Success).data.id)
+            assertTrue(result.data.notify) // no prior cached value -> defaults to true
+
+            val slot = slot<PassEntity>()
+            coVerify(exactly = 1) { passDao.upsert(capture(slot)) }
+            assertEquals(passId.toString(), slot.captured.id)
+
+            coVerify(exactly = 0) { cacheMetadataDao.upsert(any()) }
+            // Background refresh triggered: it reads the satellite's cached passes as part of its
+            // own logic, which only happens if getPasses(satelliteId) actually ran.
+            coVerify(exactly = 1) { passDao.getCachedForSatellite(satelliteId.toString()) }
+        }
+
+    @Test
+    fun `getPassById cache miss with network Error propagates it, never upserts, never triggers background refresh`() = runTest {
+        coEvery { passDao.getById(passId.toString()) } returns null
+        val errorBody = """{"error":"boom"}""".toResponseBody("application/json".toMediaType())
+        coEvery { api.getPassById(passId) } returns Response.error(500, errorBody)
+
+        val result = repository.getPassById(passId.toString())
+
+        assertTrue(result is ApiResult.Error)
+        coVerify(exactly = 0) { passDao.upsert(any()) }
+        coVerify(exactly = 0) { passDao.getCachedForSatellite(any()) }
+    }
+
+    @Test
+    fun `getPassById cache miss with network AuthRequired propagates it, never upserts, never triggers background refresh`() = runTest {
+        coEvery { passDao.getById(passId.toString()) } returns null
+        coEvery { api.getPassById(passId) } returns Response.error(401, "".toResponseBody(null))
+
+        val result = repository.getPassById(passId.toString())
+
+        assertTrue(result is ApiResult.AuthRequired)
+        coVerify(exactly = 0) { passDao.upsert(any()) }
+        coVerify(exactly = 0) { passDao.getCachedForSatellite(any()) }
+    }
+
+    @Test
+    fun `getPassById cache miss with network NetworkError propagates it, never upserts, never triggers background refresh`() = runTest {
+        coEvery { passDao.getById(passId.toString()) } returns null
+        coEvery { api.getPassById(passId) } throws IOException("offline")
+
+        val result = repository.getPassById(passId.toString())
+
+        assertTrue(result is ApiResult.NetworkError)
+        coVerify(exactly = 0) { passDao.upsert(any()) }
+        coVerify(exactly = 0) { passDao.getCachedForSatellite(any()) }
     }
 }

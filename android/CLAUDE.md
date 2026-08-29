@@ -88,7 +88,8 @@ com.sattrakk.app/
 ├── di/
 │   ├── NetworkModule.kt            OkHttpClient, Json, Retrofit, SatTrakkApi
 │   ├── DatabaseModule.kt           Room AppDatabase + DAOs
-│   └── ClockModule.kt              java.time.Clock, for testable "now" (step 3.1)
+│   ├── ClockModule.kt              java.time.Clock, for testable "now" (step 3.1)
+│   └── CoroutineScopeModule.kt     @ApplicationScope CoroutineScope, for fire-and-forget work outliving a caller
 ├── ui/
 │   └── dashboard/
 │       ├── DashboardUiState.kt     SatelliteTabState + DashboardUiState (step 3.1)
@@ -382,6 +383,39 @@ value is already cached locally for each pass id (defaulting to `true`, the back
 default, only for a pass id seen for the first time) before writing the refreshed rows — without
 this merge, a tester's own `setNotify` toggle would be silently reverted by the very next
 TTL-driven or force-refreshed fetch.
+
+### `PassRepository.getPassById` — point lookup, deliberately outside the TTL/CacheMetadata system
+
+`getPassById(passId)` exists for the cold-deep-link case: the app opened fresh from a push
+notification (or any other path) where this specific pass was never loaded via `getPasses`, so
+it isn't in Room yet. It follows a Room-first/network-fallback shape like the list reads, but is
+**not** wired into `cachedNetworkFirst`/`CacheMetadataEntity` at all:
+
+1. `PassDao.getById(passId)` — if found, return it mapped to domain immediately. No network call.
+2. If not found, `GET /api/passes/{id}` via `safeApiCall`, mapped to domain with `notify = true`
+   (no prior local value to preserve — same default-for-new-pass rule `getPasses`' merge already
+   uses).
+3. On success: upsert the single row into Room via the new `PassDao.upsert` (single-row
+   insert-or-replace — **not** `replaceForSatellite`, which deletes and replaces every row for a
+   satellite and would wipe out the rest of that satellite's already-cached passes for a fetch
+   that only concerns one pass). The satellite's passes-list `CacheMetadataEntity` row is never
+   read or written by this path — this is a point lookup, not a refresh of that cached collection,
+   and touching its timestamp would make a subsequent `getPasses()` call wrongly believe the full
+   list was just re-fetched when it wasn't.
+4. On any failure (`Error`, `AuthRequired`, `NetworkError`), propagate it as-is — there's nothing
+   to fall back to for a passId Room has never seen.
+
+**Fire-and-forget background list refresh**: on a successful single-pass fetch, `getPassById`
+also triggers `getPasses(satelliteId, forceRefresh = false)` for the pass's own satellite, without
+awaiting it and without letting its outcome affect what `getPassById` returns — a "since we're
+here" convenience so the Dashboard's list is more likely to already include this pass by the time
+the user navigates back to it, not a correctness requirement. It's launched on a new
+process-lifetime `@ApplicationScope` `CoroutineScope` (`di/CoroutineScopeModule.kt`,
+`SupervisorJob() + Dispatchers.IO`) rather than `viewModelScope`, because the caller of
+`getPassById` (e.g. a ViewModel scoped to a pass-details dialog destination) may be cleared before
+the background refresh finishes — `viewModelScope` would cancel it mid-flight. No DI concept for
+this existed before this method; add future fire-and-forget work to the same scope rather than
+inventing another one.
 
 ## Auth-flow repositories — AuthRepository and SettingsRepository (Step 2.3)
 
