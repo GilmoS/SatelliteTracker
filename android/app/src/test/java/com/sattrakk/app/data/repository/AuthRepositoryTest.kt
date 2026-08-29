@@ -3,6 +3,8 @@ package com.sattrakk.app.data.repository
 import com.sattrakk.app.data.local.ApiKeyStore
 import com.sattrakk.app.data.remote.SatTrakkApi
 import com.sattrakk.app.data.remote.dto.RegisterResponse
+import com.sattrakk.app.data.session.SessionManager
+import com.sattrakk.app.data.util.SafeApiCaller
 import com.sattrakk.app.domain.model.ApiResult
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -20,11 +22,12 @@ class AuthRepositoryTest {
 
     private val api = mockk<SatTrakkApi>()
     private val apiKeyStore = mockk<ApiKeyStore>(relaxUnitFun = true)
+    private val safeApiCall = SafeApiCaller(mockk<SessionManager>(relaxUnitFun = true))
     private lateinit var repository: AuthRepository
 
     @Before
     fun setUp() {
-        repository = AuthRepository(api, apiKeyStore)
+        repository = AuthRepository(api, apiKeyStore, safeApiCall)
     }
 
     @Test

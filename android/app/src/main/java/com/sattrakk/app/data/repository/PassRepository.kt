@@ -4,8 +4,9 @@ import com.sattrakk.app.data.local.CacheMetadataDao
 import com.sattrakk.app.data.local.PassDao
 import com.sattrakk.app.data.remote.SatTrakkApi
 import com.sattrakk.app.data.remote.dto.PatchNotifyRequest
+import com.sattrakk.app.data.util.SafeApiCaller
 import com.sattrakk.app.data.util.cachedNetworkFirst
-import com.sattrakk.app.data.util.safeApiCall
+import com.sattrakk.app.di.ApplicationScope
 import com.sattrakk.app.domain.mapper.toDomain
 import com.sattrakk.app.domain.mapper.toEntity
 import com.sattrakk.app.domain.model.ApiResult
@@ -17,12 +18,16 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 @Singleton
 class PassRepository @Inject constructor(
     private val api: SatTrakkApi,
     private val passDao: PassDao,
-    private val cacheMetadataDao: CacheMetadataDao
+    private val cacheMetadataDao: CacheMetadataDao,
+    private val safeApiCall: SafeApiCaller,
+    @ApplicationScope private val applicationScope: CoroutineScope
 ) {
 
     // TTL-gated network-first read, keyed per satelliteId — see android/CLAUDE.md. `notify` isn't
@@ -53,6 +58,35 @@ class PassRepository @Inject constructor(
     // passthrough via safeApiCall.
     suspend fun getPassTrack(passId: String): ApiResult<PassTrack> =
         safeApiCall { api.getPassTrack(UUID.fromString(passId)) }.mapSuccess { it.toDomain() }
+
+    // Room-first, network-fallback single-pass lookup for the cold-deep-link case (app opened
+    // fresh from a push notification, or any other case where this pass was never loaded via
+    // getPasses). Deliberately does NOT participate in the TTL/CacheMetadata system — this is a
+    // point lookup, not a refresh of the satellite's passes-list cache, so it never reads or
+    // writes that list's CacheMetadata row. See android/CLAUDE.md.
+    suspend fun getPassById(passId: String): ApiResult<Pass> {
+        val cached = passDao.getById(passId)
+        if (cached != null) {
+            return ApiResult.Success(cached.toDomain())
+        }
+
+        // No prior local value to preserve for a pass never seen before — same default-for-new-
+        // pass rule getPasses' merge logic already uses.
+        val result = safeApiCall { api.getPassById(UUID.fromString(passId)) }
+            .mapSuccess { it.toDomain(notify = true) }
+
+        if (result is ApiResult.Success) {
+            passDao.upsert(result.data.toEntity())
+            // Fire-and-forget "since we're here" convenience refresh of the pass's own
+            // satellite's list, so the Dashboard is more likely to already show this pass on
+            // return — not a correctness requirement, so it must never affect what this method
+            // returns. Launched on the application-lifetime scope (not viewModelScope) since the
+            // caller (e.g. a dialog-scoped ViewModel) may be cleared before this finishes.
+            applicationScope.launch { getPasses(result.data.satelliteId, forceRefresh = false) }
+        }
+
+        return result
+    }
 
     // On success, updates the cached PassEntity's notify column immediately so the pass list the
     // tester is looking at reflects their own toggle right away, rather than up to PASSES_TTL_MILLIS

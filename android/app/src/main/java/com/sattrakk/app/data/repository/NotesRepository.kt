@@ -5,8 +5,8 @@ import com.sattrakk.app.data.local.NoteDao
 import com.sattrakk.app.data.remote.SatTrakkApi
 import com.sattrakk.app.data.remote.dto.CreateNoteRequest
 import com.sattrakk.app.data.remote.dto.UpdateNoteRequest
+import com.sattrakk.app.data.util.SafeApiCaller
 import com.sattrakk.app.data.util.cachedNetworkFirst
-import com.sattrakk.app.data.util.safeApiCall
 import com.sattrakk.app.domain.mapper.toDomain
 import com.sattrakk.app.domain.mapper.toEntity
 import com.sattrakk.app.domain.model.ApiResult
@@ -26,7 +26,8 @@ import javax.inject.Singleton
 class NotesRepository @Inject constructor(
     private val api: SatTrakkApi,
     private val noteDao: NoteDao,
-    private val cacheMetadataDao: CacheMetadataDao
+    private val cacheMetadataDao: CacheMetadataDao,
+    private val safeApiCall: SafeApiCaller
 ) {
 
     suspend fun getNotes(passId: String, forceRefresh: Boolean = false): ApiResult<List<Note>> =

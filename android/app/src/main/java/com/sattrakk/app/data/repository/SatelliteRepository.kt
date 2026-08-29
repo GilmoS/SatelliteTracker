@@ -3,8 +3,8 @@ package com.sattrakk.app.data.repository
 import com.sattrakk.app.data.local.CacheMetadataDao
 import com.sattrakk.app.data.local.SatelliteDao
 import com.sattrakk.app.data.remote.SatTrakkApi
+import com.sattrakk.app.data.util.SafeApiCaller
 import com.sattrakk.app.data.util.cachedNetworkFirst
-import com.sattrakk.app.data.util.safeApiCall
 import com.sattrakk.app.domain.mapper.toDomain
 import com.sattrakk.app.domain.mapper.toEntity
 import com.sattrakk.app.domain.model.ApiResult
@@ -22,7 +22,8 @@ import javax.inject.Singleton
 class SatelliteRepository @Inject constructor(
     private val api: SatTrakkApi,
     private val satelliteDao: SatelliteDao,
-    private val cacheMetadataDao: CacheMetadataDao
+    private val cacheMetadataDao: CacheMetadataDao,
+    private val safeApiCall: SafeApiCaller
 ) {
 
     suspend fun getSatellites(forceRefresh: Boolean = false): ApiResult<List<Satellite>> =

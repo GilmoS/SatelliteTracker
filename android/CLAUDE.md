@@ -6,11 +6,12 @@ the Android app. Talks only to `SatelliteTracker.API`; never calls N2YO or Micro
 directly (see repo-root CLAUDE.md, "Single Source of Truth Rules").
 
 This file currently covers what's built as of Milestone E, Step 2.1 (networking + auth
-infrastructure), Step 2.2 (Satellite/Pass/Notes repositories with Room caching), and Step 2.3
-(`AuthRepository`/`SettingsRepository`). **Step 2 (the entire Android data layer — networking,
-auth, caching, all repositories) is now complete.** Step 3 (Dashboard + Pass Details Modal, the
-first screen with real ViewModels/UI wired to this data layer) is next; this file will grow again
-once that lands.
+infrastructure), Step 2.2 (Satellite/Pass/Notes repositories with Room caching), Step 2.3
+(`AuthRepository`/`SettingsRepository`), and Step 3.1 (`SessionManager` + `DashboardViewModel` +
+`DashboardUiState` — logic only, no UI yet). **Step 2 (the entire Android data layer) is
+complete.** Step 3.1 adds the app's first ViewModel and the global session-invalidation
+mechanism; the rest of Step 3 (Dashboard Composable UI, Pass Details Modal, Settings ViewModel)
+is next — this file will grow again once those land.
 
 ---
 
@@ -71,8 +72,10 @@ com.sattrakk.app/
 │   │   ├── ApiKeyStore.kt          EncryptedSharedPreferences wrapper
 │   │   ├── AppDatabase.kt, PassDao.kt, SatelliteDao.kt, NoteDao.kt, CacheMetadataDao.kt
 │   │   └── entity/                 Room @Entity classes (Pass, Satellite, Note, CacheMetadata)
+│   ├── session/
+│   │   └── SessionManager.kt       Global SessionState (Valid/RequiresReauth) (step 3.1)
 │   ├── util/
-│   │   ├── SafeApiCall.kt          Retrofit Response<T> -> ApiResult<T> mapping
+│   │   ├── SafeApiCaller.kt        Retrofit Response<T> -> ApiResult<T> mapping, injects SessionManager (step 3.1)
 │   │   └── CachedNetworkFirst.kt   Shared TTL-gated caching decision tree (step 2.2)
 │   └── repository/                 SatelliteRepository, PassRepository, NotesRepository (step 2.2),
 │                                    AuthRepository, SettingsRepository (step 2.3)
@@ -84,7 +87,13 @@ com.sattrakk.app/
 │   └── mapper/                     Dto <-> Entity <-> domain extension functions (step 2.2/2.3)
 ├── di/
 │   ├── NetworkModule.kt            OkHttpClient, Json, Retrofit, SatTrakkApi
-│   └── DatabaseModule.kt           Room AppDatabase + DAOs
+│   ├── DatabaseModule.kt           Room AppDatabase + DAOs
+│   ├── ClockModule.kt              java.time.Clock, for testable "now" (step 3.1)
+│   └── CoroutineScopeModule.kt     @ApplicationScope CoroutineScope, for fire-and-forget work outliving a caller
+├── ui/
+│   └── dashboard/
+│       ├── DashboardUiState.kt     SatelliteTabState + DashboardUiState (step 3.1)
+│       └── DashboardViewModel.kt   Dashboard screen logic — no Composable yet (step 3.1)
 ```
 
 ---
@@ -135,7 +144,7 @@ emits a real UTC offset (`Z`), never a bare local-looking timestamp.
   section), and `POST /api/auth/register` is the one endpoint that must keep working with no key
   stored yet.
 
-## ApiResult and safeApiCall — the uniform result contract
+## ApiResult and SafeApiCaller — the uniform result contract
 
 `domain/model/ApiResult.kt` is what every future repository method returns:
 
@@ -148,25 +157,135 @@ sealed class ApiResult<out T> {
 }
 ```
 
-`data/util/SafeApiCall.kt`'s `safeApiCall { ... }` wraps a Retrofit call and produces this —
-every repository built in steps 2.2/2.3 must use it rather than handling
+`data/util/SafeApiCaller.kt`'s `SafeApiCaller` wraps a Retrofit call and produces this — every
+repository built in steps 2.2/2.3+ must use it rather than handling
 Retrofit/OkHttp/kotlinx.serialization exceptions itself, so this mapping only exists in one
 place:
 
-- HTTP 401 → `AuthRequired`, always — regardless of which endpoint returned it. This is the
+- HTTP 401 → `AuthRequired`, always — regardless of which endpoint returned it, **and** calls
+  `SessionManager.markReauthRequired()` (step 3.1 — see below) at this exact point. This is the
   single point of truth for "the stored key is missing/invalid/inactive" across the whole app;
-  every future ViewModel must treat it the same way (route to a re-registration flow), matching
-  the backend's uniform 401 body for all three cases (see repo-root CLAUDE.md).
+  every ViewModel observes `SessionManager.sessionState` to react (route to a re-registration
+  flow), matching the backend's uniform 401 body for all three cases (see repo-root CLAUDE.md).
 - Other non-2xx codes → `Error(code, message)`, where `message` is parsed from the response body
   if it matches the backend's `{"error": "..."}` shape, else a generic
-  `"Request failed with status {code}"`.
-- `IOException` (thrown by the call itself, e.g. no connectivity) → `NetworkError`.
+  `"Request failed with status {code}"`. Does **not** touch `SessionManager`.
+- `IOException` (thrown by the call itself, e.g. no connectivity) → `NetworkError`. Does **not**
+  touch `SessionManager`.
 - Success → `Success(body)`.
 - Success is decided by `response.isSuccessful` alone, not "successful and body non-null" — some
   endpoints (e.g. `DELETE /api/notes/{id}`) return 200 with no content, and `SatTrakkApi` declares
   those as `Response<Void>` (body always `null` by design) rather than `Response<Unit>` (would
   make kotlinx.serialization try to decode an empty body and throw). Treating a null body as
   failure would misclassify every one of those calls.
+
+**`SafeApiCaller` is a class (`@Singleton`, `@Inject constructor(sessionManager: SessionManager)`
+with `operator fun invoke`), not a free top-level function like the original step 2.1 design** —
+it needs `SessionManager`, and every repository already follows the `@Singleton`/`@Inject
+constructor` DI pattern for its own dependencies, so injecting `SafeApiCaller` the same way (as a
+constructor property literally named `safeApiCall`) meant every existing `safeApiCall { api.foo()
+}` call site across all five repositories kept working unchanged — only the constructor
+parameter and import changed. This was a deliberate choice over threading a `SessionManager`
+parameter through every individual call site by hand.
+
+## SessionManager — global re-authentication state (Step 3.1)
+
+`data/session/SessionManager.kt`:
+
+```kotlin
+sealed interface SessionState {
+    object Valid : SessionState
+    object RequiresReauth : SessionState
+}
+
+@Singleton
+class SessionManager @Inject constructor() {
+    val sessionState: StateFlow<SessionState> // backed by a MutableStateFlow, default Valid
+    fun markReauthRequired()
+    fun markValid()
+}
+```
+
+Session invalidation is modeled as **state, not a one-shot event stream** — per current official
+Android guidance (state-driven UI over event-driven), so a future root composable can observe
+`sessionState` and react correctly regardless of how many times it's (re)collected across
+recomposition/process death, rather than consuming a single navigation event that could be missed
+across a config change. **`SafeApiCaller` is the single writer of `RequiresReauth`**, at the exact
+point a 401 is mapped to `ApiResult.AuthRequired` (see above) — no repository or ViewModel calls
+`SessionManager` directly for this. `markValid()` is called after a successful re-registration,
+once that flow exists in a future step (it exists on `SessionManager` now but has no caller yet).
+
+## DashboardViewModel — dashboard screen logic (Step 3.1)
+
+`ui/dashboard/DashboardViewModel.kt` + `DashboardUiState.kt`. This is the first ViewModel in the
+app and the first thing wired to the Step 2 data layer; there is deliberately no Composable/UI
+built against it yet (that's a later step) — it's covered entirely by
+`DashboardViewModelTest`.
+
+- **Generic over whatever satellites the backend returns — never hardcoded to EROS C3 /
+  RUNNER 1.** `DashboardUiState.Content.tabs: List<SatelliteTabState>` is built from
+  `SatelliteRepository.getSatellites()`'s actual result, one tab per satellite, with no assumption
+  about count or identity. The default selected tab uses `Satellite.isDefault` (already present on
+  the domain model from step 2.2) rather than always picking the first satellite in the list.
+- **Per-satellite passes are loaded in parallel** (`async`/`awaitAll`) on init, since they're
+  independent of each other.
+- **Per-tab error handling, not whole-screen**: if `getSatellites()` itself fails, the whole
+  screen is `DashboardUiState.Error`. But if satellites load fine and only one satellite's
+  `getPasses()` call fails, that tab keeps `passes = emptyList()` (or its last-known list, if a
+  poll/refresh fails after an earlier success) and gets `SatelliteTabState.loadError: String?`
+  set, while the other tabs are unaffected — chosen over failing the whole screen because one
+  satellite's endpoint having a bad moment shouldn't blank out data the user can already see for
+  the others. This field is not part of the original task sketch; it was added specifically to
+  support this behavior.
+- **5-minute polling relies entirely on the existing 1-hour Passes TTL (step 2.2's
+  `cachedNetworkFirst`) — it does NOT mean a network call every 5 minutes.** The poll loop calls
+  `PassRepository.getPasses(satelliteId, forceRefresh = false)` for every loaded tab every 5
+  minutes; most of those calls are served straight from the still-fresh Room cache with no network
+  hit at all, and only actually reach the backend once the 1-hour TTL has elapsed. **Do not** turn
+  this into an unconditional network poll later — the whole point of the TTL layer is that callers
+  above it don't need to reason about freshness themselves.
+- **`refresh()` (for a future pull-to-refresh) force-refreshes only the currently selected tab**,
+  not every satellite — the user pulling to refresh is asking about what they're looking at.
+- **`selectTab()` is a pure local state update** — it never calls a repository — but it does
+  restart the countdown ticker (below) for the newly selected satellite.
+- **Countdown ticker**: for the selected tab only, a `viewModelScope` coroutine recomputes
+  `Duration.between(now, nextUpcomingPass.aos)` every second (`delay(1000)` loop) and writes it to
+  that tab's `nextPassCountdown`. Recomputed from scratch each tick (not decremented from a
+  captured value) so a poll/refresh landing mid-countdown is picked up on the very next tick, and
+  it self-corrects for `delay()` drift. Only one ticker runs at a time — `selectTab()` cancels the
+  previous one and starts a new one for the newly selected tab; a non-selected tab's
+  `nextPassCountdown` simply stays whatever it last was (usually `null`, since it's never ticked
+  until selected). "Now" comes from an injected `java.time.Clock` (`di/ClockModule.kt`, defaults
+  to `Clock.systemUTC()`) rather than `OffsetDateTime.now()` directly, specifically so tests can
+  substitute a `Clock` driven by `kotlinx-coroutines-test` virtual time.
+  - **Countdown-reaches-zero edge case (not specified by the original task, resolved here):**
+    `nextPassCountdown` always means "time until the next pass whose AOS is still in the future."
+    Once a pass's AOS arrives, it no longer qualifies as "next" and the ticker automatically rolls
+    over to whatever pass comes after it (or `null` if none remain) — there is no separate
+    "in-progress" state surfaced through this field; a pass currently between its own AOS and LOS
+    is simply not reflected by `nextPassCountdown` at all. An equally reasonable alternative would
+    have been to hold at zero or expose an explicit "in progress" state until LOS — flagged here
+    rather than silently decided, per the task's own instructions.
+
+**Testing note**: `DashboardViewModelTest` deliberately does **not** use `runTest { }` at all.
+`viewModelScope`'s polling/countdown coroutines run for the ViewModel's whole lifetime and are
+only ever cancelled by `ViewModel.onCleared()`/`clear()`, both `protected`/`internal` in AndroidX
+Lifecycle (verified against the actual resolved 2.9.4 sources) and unreachable from a plain unit
+test — so those `while (isActive) { ...; delay(x) }` loops never finish on their own.
+`kotlinx-coroutines-test`'s `runTest { }` runs an implicit "drain to idle" pass at the end of the
+test body, and once `Dispatchers.Main` has been redirected to a `TestDispatcher` (via
+`MainDispatcherRule`'s `Dispatchers.setMain(...)`), that drain ends up processing Main's queue
+too — even with no `TestDispatcher` explicitly passed into `runTest(...)` — so it can never reach
+idle. Confirmed twice via `jstack` thread dumps during this step's development: the test thread
+pegged at ~100% CPU indefinitely inside `TestCoroutineScheduler.advanceUntilIdleOr`, reached from
+`runTest`'s own internal builder. The actual fix: nothing in these test bodies is itself a suspend
+call — the ViewModel's own coroutines do the suspending; reading `uiState.value` and MockK's
+`coEvery`/`coVerify` are plain synchronous calls — so each `@Test` is a normal, non-suspend
+function that drives `mainDispatcherRule.testDispatcher.scheduler` directly via its plain
+(non-suspend) `runCurrent()`/`advanceTimeBy()` methods. There is then no `runTest` drain to ever
+get stuck on. Any future ViewModel test with a long-lived polling/ticker coroutine should follow
+the same pattern (no `runTest`, drive the Main `TestDispatcher`'s scheduler directly) rather than
+wrapping the test body in `runTest { }`.
 
 ## Room — what's cached and why
 
@@ -264,6 +383,39 @@ value is already cached locally for each pass id (defaulting to `true`, the back
 default, only for a pass id seen for the first time) before writing the refreshed rows — without
 this merge, a tester's own `setNotify` toggle would be silently reverted by the very next
 TTL-driven or force-refreshed fetch.
+
+### `PassRepository.getPassById` — point lookup, deliberately outside the TTL/CacheMetadata system
+
+`getPassById(passId)` exists for the cold-deep-link case: the app opened fresh from a push
+notification (or any other path) where this specific pass was never loaded via `getPasses`, so
+it isn't in Room yet. It follows a Room-first/network-fallback shape like the list reads, but is
+**not** wired into `cachedNetworkFirst`/`CacheMetadataEntity` at all:
+
+1. `PassDao.getById(passId)` — if found, return it mapped to domain immediately. No network call.
+2. If not found, `GET /api/passes/{id}` via `safeApiCall`, mapped to domain with `notify = true`
+   (no prior local value to preserve — same default-for-new-pass rule `getPasses`' merge already
+   uses).
+3. On success: upsert the single row into Room via the new `PassDao.upsert` (single-row
+   insert-or-replace — **not** `replaceForSatellite`, which deletes and replaces every row for a
+   satellite and would wipe out the rest of that satellite's already-cached passes for a fetch
+   that only concerns one pass). The satellite's passes-list `CacheMetadataEntity` row is never
+   read or written by this path — this is a point lookup, not a refresh of that cached collection,
+   and touching its timestamp would make a subsequent `getPasses()` call wrongly believe the full
+   list was just re-fetched when it wasn't.
+4. On any failure (`Error`, `AuthRequired`, `NetworkError`), propagate it as-is — there's nothing
+   to fall back to for a passId Room has never seen.
+
+**Fire-and-forget background list refresh**: on a successful single-pass fetch, `getPassById`
+also triggers `getPasses(satelliteId, forceRefresh = false)` for the pass's own satellite, without
+awaiting it and without letting its outcome affect what `getPassById` returns — a "since we're
+here" convenience so the Dashboard's list is more likely to already include this pass by the time
+the user navigates back to it, not a correctness requirement. It's launched on a new
+process-lifetime `@ApplicationScope` `CoroutineScope` (`di/CoroutineScopeModule.kt`,
+`SupervisorJob() + Dispatchers.IO`) rather than `viewModelScope`, because the caller of
+`getPassById` (e.g. a ViewModel scoped to a pass-details dialog destination) may be cleared before
+the background refresh finishes — `viewModelScope` would cancel it mid-flight. No DI concept for
+this existed before this method; add future fire-and-forget work to the same scope rather than
+inventing another one.
 
 ## Auth-flow repositories — AuthRepository and SettingsRepository (Step 2.3)
 
