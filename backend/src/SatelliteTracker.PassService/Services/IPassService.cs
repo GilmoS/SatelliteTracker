@@ -9,7 +9,13 @@ public interface IPassService
 {
     Task<Result<IEnumerable<PassResult>>> CalculateAndSavePassesAsync(Guid satelliteId, CancellationToken ct = default);
     Task<Result<IEnumerable<Pass>>> GetUpcomingPassesAsync(Guid satelliteId);
-    Task<Result<IEnumerable<Pass>>> GetPassHistoryAsync(Guid satelliteId);
+
+    /// <summary>
+    /// Retrieves the satellite's pass history (up to 6 months back), applying <paramref name="query"/>'s
+    /// optional per-field filters and pagination. See <see cref="IPassRepository.GetHistoryAsync"/>.
+    /// </summary>
+    Task<Result<PagedResult<Pass>>> GetPassHistoryAsync(Guid satelliteId, PassHistoryQuery query);
+
     Task<Result<Pass>> GetPassByIdAsync(Guid passId);
 
     /// <summary>

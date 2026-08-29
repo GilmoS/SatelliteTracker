@@ -110,9 +110,10 @@ public class PassService : IPassService
     public async Task<Result<IEnumerable<Pass>>> GetUpcomingPassesAsync(Guid satelliteId)
         => await _passRepo.GetUpcomingAsync(satelliteId, DateTime.UtcNow, DateTime.UtcNow.AddDays(7));
 
-    // This method retrieves the pass history of a satellite from the database for the past 6 months.
-    public async Task<Result<IEnumerable<Pass>>> GetPassHistoryAsync(Guid satelliteId)
-        => await _passRepo.GetHistoryAsync(satelliteId, DateTime.UtcNow.AddMonths(-6));
+    // This method retrieves the paginated, filterable pass history of a satellite from the
+    // database for the past 6 months.
+    public async Task<Result<PagedResult<Pass>>> GetPassHistoryAsync(Guid satelliteId, PassHistoryQuery query)
+        => await _passRepo.GetHistoryAsync(satelliteId, DateTime.UtcNow.AddMonths(-6), query);
 
     // This method retrieves a specific pass by its ID from the database.
     public async Task<Result<Pass>> GetPassByIdAsync(Guid passId)
