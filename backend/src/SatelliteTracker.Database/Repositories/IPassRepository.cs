@@ -8,7 +8,15 @@ namespace SatelliteTracker.Database.Repositories;
 public interface IPassRepository
 {
     Task<Result<IEnumerable<Pass>>> GetUpcomingAsync(Guid satelliteId, DateTime from, DateTime to);
-    Task<Result<IEnumerable<Pass>>> GetHistoryAsync(Guid satelliteId, DateTime from);
+
+    /// <summary>
+    /// Returns completed passes (Los in the past, Aos on/after <paramref name="from"/>) for a
+    /// satellite, further narrowed by <paramref name="query"/>'s optional per-field filters
+    /// (AND-combined), ordered by Aos descending (most recent first — fixed, not configurable),
+    /// and paged. <see cref="PagedResult{T}.HasMore"/> is computed by fetching PageSize+1 rows.
+    /// </summary>
+    Task<Result<PagedResult<Pass>>> GetHistoryAsync(Guid satelliteId, DateTime from, PassHistoryQuery query);
+
     Task<Result<Pass>> GetByIdAsync(Guid id);
     Task<Result<Pass>> AddAsync(Pass pass);
     Task<Result<bool>> AddRangeAsync(IEnumerable<Pass> passes);

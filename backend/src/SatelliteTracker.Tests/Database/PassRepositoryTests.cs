@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using SatelliteTracker.Database;
 using Xunit;
+using SatelliteTracker.Database.Common;
 using SatelliteTracker.Database.Entities;
 using SatelliteTracker.Database.Repositories;
 using SatelliteTracker.Tests.Database.Helpers;
@@ -99,11 +100,183 @@ public class PassRepositoryTests : IDisposable
         _context.Passes.AddRange(past, future);
         await _context.SaveChangesAsync();
 
-        var result = await _repo.GetHistoryAsync(sat.Id, DateTime.UtcNow.AddDays(-7));
+        var result = await _repo.GetHistoryAsync(sat.Id, DateTime.UtcNow.AddDays(-7), new PassHistoryQuery());
 
         Assert.True(result.IsSuccess);
-        Assert.Single(result.Value!);
-        Assert.Equal(past.Id, result.Value!.First().Id);
+        Assert.Single(result.Value!.Items);
+        Assert.Equal(past.Id, result.Value!.Items.First().Id);
+    }
+
+    // ── GetHistoryAsync — pagination + filters ──────────────────────────────
+
+    [Fact]
+    public async Task GetHistoryAsync_NoParams_ReturnsMostRecentFirst_DefaultPageAndSize()
+    {
+        var (sat, tle) = Seed();
+        var older = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-5));
+        var newer = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-1));
+        _context.Passes.AddRange(older, newer);
+        await _context.SaveChangesAsync();
+
+        var result = await _repo.GetHistoryAsync(sat.Id, DateTime.UtcNow.AddMonths(-6), new PassHistoryQuery());
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, result.Value!.Page);
+        Assert.Equal(50, result.Value!.PageSize);
+        Assert.False(result.Value!.HasMore);
+        Assert.Equal([newer.Id, older.Id], result.Value!.Items.Select(p => p.Id));
+    }
+
+    [Fact]
+    public async Task GetHistoryAsync_ExactlyPageSizeRows_HasMoreIsFalse()
+    {
+        var (sat, tle) = Seed();
+        for (int i = 0; i < 3; i++)
+            _context.Passes.Add(MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-1 - i)));
+        await _context.SaveChangesAsync();
+
+        var query = new PassHistoryQuery { PageSize = 3 };
+        var result = await _repo.GetHistoryAsync(sat.Id, DateTime.UtcNow.AddMonths(-6), query);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(3, result.Value!.Items.Count);
+        Assert.False(result.Value!.HasMore);
+    }
+
+    [Fact]
+    public async Task GetHistoryAsync_PageSizePlusOneRowsAvailable_HasMoreIsTrue()
+    {
+        var (sat, tle) = Seed();
+        for (int i = 0; i < 4; i++)
+            _context.Passes.Add(MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-1 - i)));
+        await _context.SaveChangesAsync();
+
+        var query = new PassHistoryQuery { PageSize = 3 };
+        var result = await _repo.GetHistoryAsync(sat.Id, DateTime.UtcNow.AddMonths(-6), query);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(3, result.Value!.Items.Count);
+        Assert.True(result.Value!.HasMore);
+    }
+
+    [Fact]
+    public async Task GetHistoryAsync_PageBeyondAvailableData_ReturnsEmptyAndHasMoreFalse()
+    {
+        var (sat, tle) = Seed();
+        _context.Passes.Add(MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-1)));
+        await _context.SaveChangesAsync();
+
+        var query = new PassHistoryQuery { Page = 5, PageSize = 10 };
+        var result = await _repo.GetHistoryAsync(sat.Id, DateTime.UtcNow.AddMonths(-6), query);
+
+        Assert.True(result.IsSuccess);
+        Assert.Empty(result.Value!.Items);
+        Assert.False(result.Value!.HasMore);
+    }
+
+    [Fact]
+    public async Task GetHistoryAsync_OrbitNumberRange_ReturnsOnlyMatchingRows()
+    {
+        var (sat, tle) = Seed();
+        var low = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-3));
+        low.OrbitNumber = 100;
+        var mid = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-2));
+        mid.OrbitNumber = 150;
+        var high = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-1));
+        high.OrbitNumber = 200;
+        _context.Passes.AddRange(low, mid, high);
+        await _context.SaveChangesAsync();
+
+        var query = new PassHistoryQuery { OrbitNumberFrom = 120, OrbitNumberTo = 180 };
+        var result = await _repo.GetHistoryAsync(sat.Id, DateTime.UtcNow.AddMonths(-6), query);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal([mid.Id], result.Value!.Items.Select(p => p.Id));
+    }
+
+    [Fact]
+    public async Task GetHistoryAsync_MaxElevationRange_ReturnsOnlyMatchingRows()
+    {
+        var (sat, tle) = Seed();
+        var low = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-3));
+        low.MaxElevation = 10;
+        var mid = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-2));
+        mid.MaxElevation = 45;
+        var high = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-1));
+        high.MaxElevation = 80;
+        _context.Passes.AddRange(low, mid, high);
+        await _context.SaveChangesAsync();
+
+        var query = new PassHistoryQuery { MaxElevationFrom = 30, MaxElevationTo = 60 };
+        var result = await _repo.GetHistoryAsync(sat.Id, DateTime.UtcNow.AddMonths(-6), query);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal([mid.Id], result.Value!.Items.Select(p => p.Id));
+    }
+
+    [Fact]
+    public async Task GetHistoryAsync_AosRange_ReturnsOnlyMatchingRows()
+    {
+        var (sat, tle) = Seed();
+        var earlier = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-10));
+        var target = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-5));
+        var later = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-1));
+        _context.Passes.AddRange(earlier, target, later);
+        await _context.SaveChangesAsync();
+
+        var query = new PassHistoryQuery
+        {
+            AosFrom = DateTime.UtcNow.AddDays(-6),
+            AosTo = DateTime.UtcNow.AddDays(-4)
+        };
+        var result = await _repo.GetHistoryAsync(sat.Id, DateTime.UtcNow.AddMonths(-6), query);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal([target.Id], result.Value!.Items.Select(p => p.Id));
+    }
+
+    [Fact]
+    public async Task GetHistoryAsync_LosRange_ReturnsOnlyMatchingRows()
+    {
+        var (sat, tle) = Seed();
+        var earlier = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-10));
+        var target = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-5));
+        var later = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-1));
+        _context.Passes.AddRange(earlier, target, later);
+        await _context.SaveChangesAsync();
+
+        var query = new PassHistoryQuery
+        {
+            LosFrom = target.Los.AddMinutes(-1),
+            LosTo = target.Los.AddMinutes(1)
+        };
+        var result = await _repo.GetHistoryAsync(sat.Id, DateTime.UtcNow.AddMonths(-6), query);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal([target.Id], result.Value!.Items.Select(p => p.Id));
+    }
+
+    [Fact]
+    public async Task GetHistoryAsync_MultipleFiltersCombined_AndsThemTogether()
+    {
+        var (sat, tle) = Seed();
+        // Matches orbitNumberFrom but not aosTo — must be excluded when both filters apply.
+        var orbitMatchOnly = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-1));
+        orbitMatchOnly.OrbitNumber = 200;
+        // Matches aosTo but not orbitNumberFrom — must be excluded when both filters apply.
+        var aosMatchOnly = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-9));
+        aosMatchOnly.OrbitNumber = 50;
+        // Matches both.
+        var both = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-8));
+        both.OrbitNumber = 200;
+        _context.Passes.AddRange(orbitMatchOnly, aosMatchOnly, both);
+        await _context.SaveChangesAsync();
+
+        var query = new PassHistoryQuery { OrbitNumberFrom = 100, AosTo = DateTime.UtcNow.AddDays(-7) };
+        var result = await _repo.GetHistoryAsync(sat.Id, DateTime.UtcNow.AddMonths(-6), query);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal([both.Id], result.Value!.Items.Select(p => p.Id));
     }
 
     [Fact]

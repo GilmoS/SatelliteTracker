@@ -29,21 +29,48 @@ public class PassRepository : IPassRepository
         }
     }
 
-    // Retrieves historical satellite passes for a specific satellite that occurred after a specified date.
-    public async Task<Result<IEnumerable<Pass>>> GetHistoryAsync(Guid satelliteId, DateTime from)
+    // Retrieves historical satellite passes for a specific satellite that occurred after a
+    // specified date, applying query's optional per-field filters (AND-combined) server-side via
+    // EF Core query composition, ordered by Aos descending, and paged. HasMore is determined by
+    // fetching PageSize+1 rows rather than a separate COUNT query.
+    public async Task<Result<PagedResult<Pass>>> GetHistoryAsync(Guid satelliteId, DateTime from, PassHistoryQuery query)
     {
         try
         {
-            var passes = await _context.Passes
-                .Where(p => p.SatelliteId == satelliteId && p.Los < DateTime.UtcNow && p.Aos >= from)
+            var passesQuery = _context.Passes
+                .Where(p => p.SatelliteId == satelliteId && p.Los < DateTime.UtcNow && p.Aos >= from);
+
+            if (query.OrbitNumberFrom.HasValue)
+                passesQuery = passesQuery.Where(p => p.OrbitNumber >= query.OrbitNumberFrom.Value);
+            if (query.OrbitNumberTo.HasValue)
+                passesQuery = passesQuery.Where(p => p.OrbitNumber <= query.OrbitNumberTo.Value);
+            if (query.MaxElevationFrom.HasValue)
+                passesQuery = passesQuery.Where(p => p.MaxElevation >= query.MaxElevationFrom.Value);
+            if (query.MaxElevationTo.HasValue)
+                passesQuery = passesQuery.Where(p => p.MaxElevation <= query.MaxElevationTo.Value);
+            if (query.AosFrom.HasValue)
+                passesQuery = passesQuery.Where(p => p.Aos >= query.AosFrom.Value);
+            if (query.AosTo.HasValue)
+                passesQuery = passesQuery.Where(p => p.Aos <= query.AosTo.Value);
+            if (query.LosFrom.HasValue)
+                passesQuery = passesQuery.Where(p => p.Los >= query.LosFrom.Value);
+            if (query.LosTo.HasValue)
+                passesQuery = passesQuery.Where(p => p.Los <= query.LosTo.Value);
+
+            var passes = await passesQuery
                 .OrderByDescending(p => p.Aos)
+                .Skip((query.Page - 1) * query.PageSize)
+                .Take(query.PageSize + 1)
                 .ToListAsync();
 
-            return Result<IEnumerable<Pass>>.Success(passes);
+            var hasMore = passes.Count > query.PageSize;
+            var items = hasMore ? passes.Take(query.PageSize).ToList() : passes;
+
+            return Result<PagedResult<Pass>>.Success(new PagedResult<Pass>(items, query.Page, query.PageSize, hasMore));
         }
         catch (Exception ex)
         {
-            return Result<IEnumerable<Pass>>.Failure(ex.Message);
+            return Result<PagedResult<Pass>>.Failure(ex.Message);
         }
     }
 
