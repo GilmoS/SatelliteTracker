@@ -7,11 +7,13 @@ directly (see repo-root CLAUDE.md, "Single Source of Truth Rules").
 
 This file currently covers what's built as of Milestone E, Step 2.1 (networking + auth
 infrastructure), Step 2.2 (Satellite/Pass/Notes repositories with Room caching), Step 2.3
-(`AuthRepository`/`SettingsRepository`), and Step 3.1 (`SessionManager` + `DashboardViewModel` +
-`DashboardUiState` — logic only, no UI yet). **Step 2 (the entire Android data layer) is
-complete.** Step 3.1 adds the app's first ViewModel and the global session-invalidation
-mechanism; the rest of Step 3 (Dashboard Composable UI, Pass Details Modal, Settings ViewModel)
-is next — this file will grow again once those land.
+(`AuthRepository`/`SettingsRepository`), Step 3.1 (`SessionManager` + `DashboardViewModel` +
+`DashboardUiState` — logic only, no UI yet), and the Full Pass List screen's data layer
+(`PassRepository.getPassHistory`, `HistoryLoadStateEntity`/Dao, `FullPassListViewModel` +
+`FullPassListUiState` — logic only, no UI yet, see below). **Step 2 (the entire Android data
+layer) is complete.** The rest of Step 3 (Dashboard Composable UI, Pass Details Modal, Settings
+ViewModel, and a Composable for the Full Pass List screen) is next — this file will grow again
+once those land.
 
 ---
 
@@ -70,30 +72,38 @@ com.sattrakk.app/
 │   │   └── dto/                    Generated DTOs (never committed — see that dir's contents)
 │   ├── local/
 │   │   ├── ApiKeyStore.kt          EncryptedSharedPreferences wrapper
-│   │   ├── AppDatabase.kt, PassDao.kt, SatelliteDao.kt, NoteDao.kt, CacheMetadataDao.kt
-│   │   └── entity/                 Room @Entity classes (Pass, Satellite, Note, CacheMetadata)
+│   │   ├── AppDatabase.kt, PassDao.kt, SatelliteDao.kt, NoteDao.kt, CacheMetadataDao.kt,
+│   │   │                          HistoryLoadStateDao.kt (Full Pass List screen)
+│   │   └── entity/                 Room @Entity classes (Pass, Satellite, Note, CacheMetadata,
+│   │                                HistoryLoadState)
 │   ├── session/
 │   │   └── SessionManager.kt       Global SessionState (Valid/RequiresReauth) (step 3.1)
 │   ├── util/
 │   │   ├── SafeApiCaller.kt        Retrofit Response<T> -> ApiResult<T> mapping, injects SessionManager (step 3.1)
 │   │   └── CachedNetworkFirst.kt   Shared TTL-gated caching decision tree (step 2.2)
-│   └── repository/                 SatelliteRepository, PassRepository, NotesRepository (step 2.2),
-│                                    AuthRepository, SettingsRepository (step 2.3)
+│   └── repository/                 SatelliteRepository, PassRepository (getPasses/getPassHistory/
+│                                    etc.), NotesRepository (step 2.2), AuthRepository,
+│                                    SettingsRepository (step 2.3)
 ├── domain/
 │   ├── model/
 │   │   ├── ApiResult.kt            Uniform outcome type for every repository call
 │   │   ├── Satellite.kt, Pass.kt, Note.kt, PassTrack.kt, NotifyStatus.kt (step 2.2)
-│   │   └── UserSettings.kt         (step 2.3)
-│   └── mapper/                     Dto <-> Entity <-> domain extension functions (step 2.2/2.3)
+│   │   ├── UserSettings.kt         (step 2.3)
+│   │   └── TimeWindow.kt, PassHistoryFilter.kt, PagedResult.kt (Full Pass List screen)
+│   └── mapper/                     Dto <-> Entity <-> domain extension functions (step 2.2/2.3),
+│                                    PassHistoryFilterMappers.kt (Full Pass List screen)
 ├── di/
 │   ├── NetworkModule.kt            OkHttpClient, Json, Retrofit, SatTrakkApi
 │   ├── DatabaseModule.kt           Room AppDatabase + DAOs
 │   ├── ClockModule.kt              java.time.Clock, for testable "now" (step 3.1)
 │   └── CoroutineScopeModule.kt     @ApplicationScope CoroutineScope, for fire-and-forget work outliving a caller
 ├── ui/
-│   └── dashboard/
-│       ├── DashboardUiState.kt     SatelliteTabState + DashboardUiState (step 3.1)
-│       └── DashboardViewModel.kt   Dashboard screen logic — no Composable yet (step 3.1)
+│   ├── dashboard/
+│   │   ├── DashboardUiState.kt     SatelliteTabState + DashboardUiState (step 3.1)
+│   │   └── DashboardViewModel.kt   Dashboard screen logic — no Composable yet (step 3.1)
+│   └── fullpasslist/
+│       ├── FullPassListUiState.kt  PassListFilter + FullPassListUiState (Full Pass List screen)
+│       └── FullPassListViewModel.kt Full Pass List screen logic — no Composable yet
 ```
 
 ---
@@ -286,6 +296,110 @@ function that drives `mainDispatcherRule.testDispatcher.scheduler` directly via 
 get stuck on. Any future ViewModel test with a long-lived polling/ticker coroutine should follow
 the same pattern (no `runTest`, drive the Main `TestDispatcher`'s scheduler directly) rather than
 wrapping the test body in `runTest { }`.
+
+## Full Pass List screen — history pagination + merged upcoming/history list (Milestone E)
+
+A separate destination from the Dashboard (reachable via a button from Dashboard and the bottom
+navbar, not built yet — no Composable exists for this screen). One continuous, mixed-chronology
+list for a single satellite at a time: already-loaded upcoming passes (existing `PassRepository
+.getPasses`) combined with paginated historical passes (`PassRepository.getPassHistory`, backed by
+the backend's paginated pass-history endpoint — repo-root CLAUDE.md), filterable by
+Upcoming/History/All plus a time window and a minimum elevation. `FullPassListViewModel` +
+`FullPassListUiState` (`ui/fullpasslist/`) cover the logic; `PassRepository.getPassHistory` +
+`HistoryLoadStateEntity`/`HistoryLoadStateDao` (`data/local/`) cover the data layer. Covered by
+`PassRepositoryHistoryTest` and `FullPassListViewModelTest`.
+
+### `HistoryLoadStateEntity` vs. `CacheMetadataEntity` — load-state tracking, not a TTL
+
+`HistoryLoadStateEntity` (`satelliteId`, `isFullyLoaded`, `lastVerifiedAtEpochMillis`) is **not**
+another `CacheMetadataEntity` row and does not go through `cachedNetworkFirst`. It does not
+duplicate `PassEntity`/`PassDao` either — historical and upcoming passes share the exact same
+`passes` table (consistent with the backend's own single-table model), so the only new state is
+"has this satellite's full history ever been paginated to its true end."
+
+- `CacheMetadataEntity` answers "was this cached at all, and is it within its TTL" — a pure
+  time-based freshness check, used identically for every TTL-gated resource (satellites, passes,
+  notes).
+- `HistoryLoadStateEntity` answers a different question: "is every historical pass for this
+  satellite already sitting in Room, so a filtered/paginated request never needs the network at
+  all." `lastVerifiedAtEpochMillis` still gates a 1h freshness window (so a fully-loaded satellite
+  isn't re-verified against the backend on every screen visit), but that's layered on top of the
+  `isFullyLoaded` flag, not a replacement for it — a fresh-but-`isFullyLoaded = false` state still
+  always calls the network.
+
+### The critical distinction: `isFullyLoaded` only ever comes from an UNFILTERED fetch
+
+`PassRepository.getPassHistory`'s decision tree: if `HistoryLoadStateEntity.isFullyLoaded` is true
+and its `lastVerifiedAtEpochMillis` is within the 1h freshness window, every request — for ANY
+filter or page — is served entirely from Room (`PassDao.getFilteredForSatellite`, which mirrors
+the backend's own filter semantics and its "query `pageSize + 1` rows to compute `hasMore`" trick,
+repo-root CLAUDE.md). Otherwise the backend's paginated history endpoint is called, results are
+upserted via the existing single-row `PassDao.upsert` (the same one `getPassById` uses — never
+`replaceForSatellite`, which would wipe the rest of the satellite's cached passes), and:
+
+**A network fetch is only allowed to set `isFullyLoaded = true` when the query was UNFILTERED
+(`ResolvedHistoryQuery.isUnfiltered` — no `aosFrom`/`aosTo`/`maxElevationFrom` at all) AND
+`hasMore` came back false.** A filtered fetch reaching `hasMore = false` means only that *that
+filtered query* is exhausted — e.g. paginating all of "Last24h" to its end says nothing about
+whether the other ~6 months of history are cached — and must never be read as "the whole dataset
+is loaded." Being mid-pagination doesn't set it either (`hasMore` is only false on a query's last
+page by definition). `PassRepositoryHistoryTest` has an explicit test for exactly this: a filtered
+fetch with `hasMore = false` leaves `HistoryLoadStateDao.upsert` uncalled.
+
+This is where it gets non-obvious enough to flag twice: **`TimeWindow`'s three relative cases
+(`Last24h`/`Last48h`/`Last7Days`) always resolve a non-null `aosFrom`**, so none of them can ever
+produce an unfiltered query — only `TimeWindow.Custom(from = null, to = null)` with no
+`minMaxElevation` can. `Custom`'s bounds are therefore deliberately independent and nullable
+(`from: OffsetDateTime?`, `to: OffsetDateTime?`), not the non-null pair a literal reading of the
+original task sketch (`Custom(from, to)`) might suggest — without that, `isFullyLoaded` would be
+permanently unreachable, untestable dead code, since there's no separate "All time" case. This
+isn't scope creep, it's what makes the mechanism actually work; see `TimeWindow`'s and
+`PassHistoryFilterMappers.kt`'s doc comments. In practice, under the current Composable-less state
+of this screen, nothing yet drives a `Custom(null, null)` request — this will matter once a real
+"browse all history" UI affordance exists.
+
+### The ALL filter's merge/sort logic, and why upcoming is re-sorted rather than re-queried
+
+`FullPassListViewModel.loadAll()` fetches upcoming (via the *existing*, unmodified
+`PassRepository.getPasses` — its own TTL/Room-first caching is reused as-is, no new caching logic
+was added for this screen) and the first history page in parallel (`async`/`awaitAll`, same shape
+as `DashboardViewModel`'s per-tab loading). `getPasses` returns ascending-by-AOS because
+`DashboardViewModel` depends on that order — changing it would break the Dashboard — so this
+screen re-sorts that same result descending **locally, in memory**, with no new query, rather than
+asking `getPasses` for a different order. History is already descending by AOS (the backend's
+fixed sort order). The merged `passes` list is upcoming-descending first, then history-descending,
+so the whole list reads newest-first end to end.
+
+`nearestPassId` is a boundary marker between the two portions, not a generic "closest pass to now"
+pick — meaningless (and left `null`) in UPCOMING-only or HISTORY-only views, since there's only
+one portion to show. Chosen resolution, flagged as a deliberate edge-case call rather than the only
+reasonable one: the last upcoming pass in display order (smallest AOS still `>= now`, i.e. the row
+sitting just above the boundary), or — if there are no upcoming passes at all — the first
+(most recent) history pass instead.
+
+Pagination (`loadMore()`) only ever fetches the next history page and appends it to the tail of
+`passes`; the upcoming portion, already fully loaded up front, is never re-fetched or disturbed —
+this works identically whether the current filter is HISTORY or ALL, since in both cases the tail
+of the list is always the history portion.
+
+### Filter changes always reset and reload from scratch
+
+Changing `filter`, `timeWindow`, or `minMaxElevation` (`setFilter`/`setTimeWindow`/
+`setMinMaxElevation`) resets `historyPage` to 1 and rebuilds `passes` from scratch — it's treated
+as a new query, not an incremental update. There's no free-text search on this screen (filters
+only), so there's deliberately no "clear search restores scroll position" behavior to preserve —
+don't add it back in; it doesn't apply here.
+
+### Duration and pass-direction filters are NOT implemented
+
+Only `timeWindow` (→ `aosFrom`/`aosTo`) and `minMaxElevation` (→ `maxElevationFrom`) are real,
+backed filters. Any duration- or pass-direction-based filter controls visible in a shared design
+mockup for this screen are **not** implemented — those fields don't exist as backend filter params
+(repo-root CLAUDE.md's paginated pass history section only defines `orbitNumberFrom/To`,
+`maxElevationFrom/To`, `aosFrom/To`, `losFrom/To`, and even of those, only the two mapped here are
+exposed by `PassHistoryFilter`). Flag this explicitly to whoever wires the Composable UI up next.
+
+---
 
 ## Room — what's cached and why
 
