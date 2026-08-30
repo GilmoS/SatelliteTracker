@@ -5,6 +5,7 @@ import com.sattrakk.app.data.remote.dto.CreateSatelliteRequest
 import com.sattrakk.app.data.remote.dto.NoteDto
 import com.sattrakk.app.data.remote.dto.NotifyStatusDto
 import com.sattrakk.app.data.remote.dto.PassDto
+import com.sattrakk.app.data.remote.dto.PassDtoPagedResultDto
 import com.sattrakk.app.data.remote.dto.PassTrackDto
 import com.sattrakk.app.data.remote.dto.PatchNotifyRequest
 import com.sattrakk.app.data.remote.dto.PositionDto
@@ -21,6 +22,7 @@ import com.sattrakk.app.data.remote.dto.UpdateNoteRequest
 import com.sattrakk.app.data.remote.dto.UpdateSatelliteRequest
 import com.sattrakk.app.data.remote.dto.UpdateSettingsRequest
 import com.sattrakk.app.data.remote.dto.UserSettingsDto
+import java.time.OffsetDateTime
 import java.util.UUID
 import okhttp3.ResponseBody
 import retrofit2.Response
@@ -31,6 +33,7 @@ import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
+import retrofit2.http.Query
 import retrofit2.http.Streaming
 
 // Endpoint grouping and doc comments mirror the backend's controller layout (see backend
@@ -85,8 +88,22 @@ interface SatTrakkApi {
     @GET("api/passes/{satelliteId}")
     suspend fun getUpcomingPasses(@Path("satelliteId") satelliteId: UUID): Response<List<PassDto>>
 
+    // Paginated + filterable history for the Full Pass List screen (Milestone E) — see repo-root
+    // CLAUDE.md's paginated pass history section. `page`/`pageSize` are always sent explicitly
+    // (PassRepository.getPassHistory never relies on the backend's own defaults); the four filter
+    // params are optional/independently-applicable range filters, AND-combined by the backend when
+    // more than one is set. orbitNumberFrom/To and losFrom/To exist on the backend but aren't
+    // exposed by the Android filter model (PassHistoryFilter only carries a time window ->
+    // aosFrom/aosTo and a minimum elevation -> maxElevationFrom) — see TimeWindow's doc comment.
     @GET("api/passes/{satelliteId}/history")
-    suspend fun getPassHistory(@Path("satelliteId") satelliteId: UUID): Response<List<PassDto>>
+    suspend fun getPassHistory(
+        @Path("satelliteId") satelliteId: UUID,
+        @Query("page") page: Int,
+        @Query("pageSize") pageSize: Int,
+        @Query("maxElevationFrom") maxElevationFrom: Double? = null,
+        @Query("aosFrom") aosFrom: OffsetDateTime? = null,
+        @Query("aosTo") aosTo: OffsetDateTime? = null
+    ): Response<PassDtoPagedResultDto>
 
     @GET("api/passes/pass/{id}")
     suspend fun getPassById(@Path("id") id: UUID): Response<PassDto>

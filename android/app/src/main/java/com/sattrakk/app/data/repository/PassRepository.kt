@@ -1,19 +1,26 @@
 package com.sattrakk.app.data.repository
 
 import com.sattrakk.app.data.local.CacheMetadataDao
+import com.sattrakk.app.data.local.HistoryLoadStateDao
 import com.sattrakk.app.data.local.PassDao
+import com.sattrakk.app.data.local.entity.HistoryLoadStateEntity
 import com.sattrakk.app.data.remote.SatTrakkApi
 import com.sattrakk.app.data.remote.dto.PatchNotifyRequest
 import com.sattrakk.app.data.util.SafeApiCaller
 import com.sattrakk.app.data.util.cachedNetworkFirst
 import com.sattrakk.app.di.ApplicationScope
+import com.sattrakk.app.domain.mapper.resolve
 import com.sattrakk.app.domain.mapper.toDomain
 import com.sattrakk.app.domain.mapper.toEntity
 import com.sattrakk.app.domain.model.ApiResult
 import com.sattrakk.app.domain.model.NotifyStatus
+import com.sattrakk.app.domain.model.PagedResult
 import com.sattrakk.app.domain.model.Pass
+import com.sattrakk.app.domain.model.PassHistoryFilter
 import com.sattrakk.app.domain.model.PassTrack
 import com.sattrakk.app.domain.model.mapSuccess
+import java.time.Clock
+import java.time.OffsetDateTime
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -27,7 +34,9 @@ class PassRepository @Inject constructor(
     private val passDao: PassDao,
     private val cacheMetadataDao: CacheMetadataDao,
     private val safeApiCall: SafeApiCaller,
-    @ApplicationScope private val applicationScope: CoroutineScope
+    @ApplicationScope private val applicationScope: CoroutineScope,
+    private val historyLoadStateDao: HistoryLoadStateDao,
+    private val clock: Clock
 ) {
 
     // TTL-gated network-first read, keyed per satelliteId — see android/CLAUDE.md. `notify` isn't
@@ -102,8 +111,101 @@ class PassRepository @Inject constructor(
         return result.mapSuccess { it.toDomain() }
     }
 
+    // Paginated, filterable per-satellite pass history for the Full Pass List screen (Milestone
+    // E) — see android/CLAUDE.md's "Full Pass List" section for the full decision tree.
+    //
+    // 1. If HistoryLoadStateEntity says this satellite's full history is loaded AND that record is
+    //    still within the freshness window, serve entirely from Room — filter + paginate locally,
+    //    zero network calls, for ANY filter/page (not just the unfiltered case).
+    // 2. Otherwise call the backend's paginated history endpoint, upsert results into the existing
+    //    PassDao (single-row `upsert`, the same one getPassById uses — never `replaceForSatellite`,
+    //    which would wipe out the rest of this satellite's cached passes).
+    // 3. IMPORTANT, easy to get backwards: a network fetch only marks isFullyLoaded = true when
+    //    BOTH hasMore is false AND the query was unfiltered (ResolvedHistoryQuery.isUnfiltered) —
+    //    a filtered fetch (or a mid-pagination one) reaching the end of ITS OWN result set says
+    //    nothing about whether the satellite's full, unfiltered history is cached. See
+    //    domain/mapper/PassHistoryFilterMappers.kt and TimeWindow's doc comments: under
+    //    Last24h/Last48h/Last7Days this branch never fires (they always resolve a non-null
+    //    aosFrom) — only TimeWindow.Custom(null, null) with no minMaxElevation reaches it.
+    suspend fun getPassHistory(
+        satelliteId: String,
+        page: Int,
+        filter: PassHistoryFilter
+    ): ApiResult<PagedResult<Pass>> {
+        val now = OffsetDateTime.now(clock)
+        val query = filter.resolve(now)
+
+        val loadState = historyLoadStateDao.get(satelliteId)
+        val isFreshAndFullyLoaded = loadState != null &&
+            loadState.isFullyLoaded &&
+            now.toInstant().toEpochMilli() - loadState.lastVerifiedAtEpochMillis < HISTORY_FRESHNESS_TTL_MILLIS
+
+        if (isFreshAndFullyLoaded) {
+            val rows = passDao.getFilteredForSatellite(
+                satelliteId = satelliteId,
+                aosFromMillis = query.aosFrom?.toInstant()?.toEpochMilli(),
+                aosToMillis = query.aosTo?.toInstant()?.toEpochMilli(),
+                maxElevationFrom = query.maxElevationFrom,
+                limit = HISTORY_PAGE_SIZE + 1,
+                offset = (page - 1) * HISTORY_PAGE_SIZE
+            )
+            val hasMore = rows.size > HISTORY_PAGE_SIZE
+            return ApiResult.Success(
+                PagedResult(
+                    items = rows.take(HISTORY_PAGE_SIZE).map { it.toDomain() },
+                    page = page,
+                    pageSize = HISTORY_PAGE_SIZE,
+                    hasMore = hasMore
+                )
+            )
+        }
+
+        val networkResult = safeApiCall {
+            api.getPassHistory(
+                satelliteId = UUID.fromString(satelliteId),
+                page = page,
+                pageSize = HISTORY_PAGE_SIZE,
+                maxElevationFrom = query.maxElevationFrom,
+                aosFrom = query.aosFrom,
+                aosTo = query.aosTo
+            )
+        }
+
+        return networkResult.mapSuccess { dto ->
+            // Same notify-preservation rule as getPasses/getPassById's merge: a pass id already
+            // cached keeps whatever notify value it has locally; a pass seen for the first time
+            // defaults to true (the backend's own sparse opt-out default).
+            val passes = dto.items.orEmpty().map { passDto ->
+                val id = requireNotNull(passDto.id) { "PassDto.id" }.toString()
+                val existingNotify = passDao.getById(id)?.notify ?: true
+                passDto.toDomain(notify = existingNotify)
+            }
+            passes.forEach { passDao.upsert(it.toEntity()) }
+
+            val hasMore = dto.hasMore ?: false
+            if (query.isUnfiltered && !hasMore) {
+                historyLoadStateDao.upsert(
+                    HistoryLoadStateEntity(
+                        satelliteId = satelliteId,
+                        isFullyLoaded = true,
+                        lastVerifiedAtEpochMillis = now.toInstant().toEpochMilli()
+                    )
+                )
+            }
+
+            PagedResult(
+                items = passes,
+                page = dto.page ?: page,
+                pageSize = dto.pageSize ?: HISTORY_PAGE_SIZE,
+                hasMore = hasMore
+            )
+        }
+    }
+
     private companion object {
         val PASSES_TTL_MILLIS = TimeUnit.HOURS.toMillis(1)
+        val HISTORY_FRESHNESS_TTL_MILLIS = TimeUnit.HOURS.toMillis(1)
+        const val HISTORY_PAGE_SIZE = 50
         fun cacheKeyForSatellite(satelliteId: String) = "passes:$satelliteId"
     }
 }
