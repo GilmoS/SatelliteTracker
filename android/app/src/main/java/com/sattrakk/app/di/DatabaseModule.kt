@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import com.sattrakk.app.data.local.AppDatabase
 import com.sattrakk.app.data.local.CacheMetadataDao
+import com.sattrakk.app.data.local.HistoryLoadStateDao
 import com.sattrakk.app.data.local.NoteDao
 import com.sattrakk.app.data.local.PassDao
 import com.sattrakk.app.data.local.SatelliteDao
@@ -40,4 +41,7 @@ object DatabaseModule {
 
     @Provides
     fun provideCacheMetadataDao(database: AppDatabase): CacheMetadataDao = database.cacheMetadataDao()
+
+    @Provides
+    fun provideHistoryLoadStateDao(database: AppDatabase): HistoryLoadStateDao = database.historyLoadStateDao()
 }

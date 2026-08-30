@@ -31,6 +31,32 @@ interface PassDao {
     @Query("DELETE FROM passes WHERE satelliteId = :satelliteId")
     suspend fun deleteForSatellite(satelliteId: String)
 
+    // Local filtered + paginated read for PassRepository.getPassHistory's Room-fresh-and-fully-
+    // loaded path (Full Pass List screen, Milestone E). Mirrors the backend's own filter semantics
+    // (aos range + maxElevation floor) and its "query pageSize + 1 rows, check for the extra one"
+    // hasMore trick (see repo-root CLAUDE.md's paginated pass history section), so the Room path
+    // and the network path behave identically from the caller's point of view. Each `:x IS NULL OR
+    // ...` clause makes that bound a no-op when the caller's filter didn't set it.
+    @Query(
+        """
+        SELECT * FROM passes
+        WHERE satelliteId = :satelliteId
+        AND (:aosFromMillis IS NULL OR aosEpochMillis >= :aosFromMillis)
+        AND (:aosToMillis IS NULL OR aosEpochMillis <= :aosToMillis)
+        AND (:maxElevationFrom IS NULL OR maxElevation >= :maxElevationFrom)
+        ORDER BY aosEpochMillis DESC
+        LIMIT :limit OFFSET :offset
+        """
+    )
+    suspend fun getFilteredForSatellite(
+        satelliteId: String,
+        aosFromMillis: Long?,
+        aosToMillis: Long?,
+        maxElevationFrom: Double?,
+        limit: Int,
+        offset: Int
+    ): List<PassEntity>
+
     // Used by PassRepository.setNotify to reflect a tester's own toggle immediately, without
     // waiting for the next TTL-driven refresh. A no-op if the pass isn't currently cached.
     @Query("UPDATE passes SET notify = :notify WHERE id = :id")

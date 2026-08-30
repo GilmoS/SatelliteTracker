@@ -1,6 +1,7 @@
 package com.sattrakk.app.data.repository
 
 import com.sattrakk.app.data.local.CacheMetadataDao
+import com.sattrakk.app.data.local.HistoryLoadStateDao
 import com.sattrakk.app.data.local.PassDao
 import com.sattrakk.app.data.local.entity.CacheMetadataEntity
 import com.sattrakk.app.data.local.entity.PassEntity
@@ -16,7 +17,10 @@ import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
 import java.io.IOException
+import java.time.Clock
+import java.time.Instant
 import java.time.OffsetDateTime
+import java.time.ZoneOffset
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
@@ -41,6 +45,9 @@ class PassRepositoryTest {
     // to completion before getPassById returns, keeping tests deterministic without needing to
     // separately await it.
     private val applicationScope = CoroutineScope(Dispatchers.Unconfined)
+    private val historyLoadStateDao = mockk<HistoryLoadStateDao>(relaxUnitFun = true)
+    private val fixedInstant: Instant = Instant.parse("2026-08-30T00:00:00Z")
+    private val clock: Clock = Clock.fixed(fixedInstant, ZoneOffset.UTC)
     private lateinit var repository: PassRepository
 
     private val satelliteId = UUID.randomUUID()
@@ -80,7 +87,9 @@ class PassRepositoryTest {
 
     @Before
     fun setUp() {
-        repository = PassRepository(api, passDao, cacheMetadataDao, safeApiCall, applicationScope)
+        repository = PassRepository(
+            api, passDao, cacheMetadataDao, safeApiCall, applicationScope, historyLoadStateDao, clock
+        )
     }
 
     @Test
