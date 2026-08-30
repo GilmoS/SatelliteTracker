@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Caching.Memory;
 using SatelliteTracker.API.Authentication;
 using SatelliteTracker.API.DTOs;
+using SatelliteTracker.Database.Common;
 using SatelliteTracker.Database.Repositories;
 using SatelliteTracker.PassService.Services;
 
@@ -40,15 +41,55 @@ public class PassesController : BaseController
 
 
     // GET api/passes/{satelliteId}/history
+    // Paginated + filterable, unlike GetUpcoming above — see CLAUDE.md's Pass History section for
+    // why this endpoint returns a PagedResultDto envelope instead of a bare array. All filters are
+    // optional and independently AND-combined; sort order is fixed (Aos descending) and not
+    // configurable. hasMore is computed by the repository fetching pageSize+1 rows.
+    private const int MaxPageSize = 200;
+
     [HttpGet("{satelliteId:guid}/history")]
-    [ProducesResponseType(typeof(IEnumerable<PassDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(PagedResultDto<PassDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
     [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
-    public async Task<IActionResult> GetHistory(Guid satelliteId)
+    public async Task<IActionResult> GetHistory(
+        Guid satelliteId,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
+        [FromQuery] int? orbitNumberFrom = null,
+        [FromQuery] int? orbitNumberTo = null,
+        [FromQuery] decimal? maxElevationFrom = null,
+        [FromQuery] decimal? maxElevationTo = null,
+        [FromQuery] DateTime? aosFrom = null,
+        [FromQuery] DateTime? aosTo = null,
+        [FromQuery] DateTime? losFrom = null,
+        [FromQuery] DateTime? losTo = null)
     {
-        var result = await _passService.GetPassHistoryAsync(satelliteId);
+        if (page < 1)
+            return BadRequest(new { error = "page must be at least 1." });
+        if (pageSize < 1 || pageSize > MaxPageSize)
+            return BadRequest(new { error = $"pageSize must be between 1 and {MaxPageSize}." });
+
+        var query = new PassHistoryQuery
+        {
+            Page = page,
+            PageSize = pageSize,
+            OrbitNumberFrom = orbitNumberFrom,
+            OrbitNumberTo = orbitNumberTo,
+            MaxElevationFrom = maxElevationFrom,
+            MaxElevationTo = maxElevationTo,
+            AosFrom = aosFrom,
+            AosTo = aosTo,
+            LosFrom = losFrom,
+            LosTo = losTo
+        };
+
+        var result = await _passService.GetPassHistoryAsync(satelliteId, query);
         if (!result.IsSuccess) return ToError(result.Error!);
-        return Ok(result.Value!.Select(PassDto.From));
+
+        var paged = result.Value!;
+        return Ok(new PagedResultDto<PassDto>(
+            paged.Items.Select(PassDto.From).ToList(), paged.Page, paged.PageSize, paged.HasMore));
     }
 
 

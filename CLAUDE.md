@@ -140,6 +140,32 @@ not redundant:
   database** — they're cache-only, recomputed on demand (rare, given the 1-hour cache); this is
   derived/display data, not something the system needs to function.
 
+### Paginated + filterable pass history — `GET /api/passes/{satelliteId}/history`
+
+Built for the Android full-history screen (6 months of passes per satellite, scrollable with a
+filter panel). `GET /api/passes/{satelliteId}` (upcoming passes) is untouched — it stays
+unpaginated; Android's history screen sources upcoming/future passes from that endpoint
+separately, not from this one.
+
+- **Response is a paginated envelope, not a bare array** — `{ items, page, pageSize, hasMore }` —
+  a deliberate, documented exception to the bare-array convention every other list endpoint in
+  this API follows (see `PagedResultDto<T>`). Pagination needs metadata (page/pageSize/hasMore)
+  that a bare array has no way to carry.
+- **`hasMore` is computed by querying `pageSize + 1` rows** and checking whether the extra row
+  came back, rather than a separate `COUNT` query — cheaper, and avoids a second round-trip.
+- **Filters**: `orbitNumberFrom`/`orbitNumberTo` (int), `maxElevationFrom`/`maxElevationTo`
+  (decimal), `aosFrom`/`aosTo` and `losFrom`/`losTo` (ISO 8601 datetime) — all optional, inclusive
+  range filters, independently applicable and **AND-combined** when more than one is present (e.g.
+  `orbitNumberFrom` + `aosTo` together narrow the result, neither is ignored). Applied server-side
+  via conditional EF Core `Where` composition in `PassRepository.GetHistoryAsync` — never fetched
+  in full and filtered in memory. `pageSize` is capped (200) and rejected with `400` above the cap
+  (and below 1); `page` below 1 is also rejected with `400`.
+- **Sort order is fixed**: Aos descending (most recent first). Configurable/explicit sort-order
+  selection is an intentional future enhancement, not an oversight — don't build it speculatively.
+- Still reads only from the `passes` table — no schema changes. `PassHistoryQuery` and
+  `PagedResult<T>` (`SatelliteTracker.Database.Common`) carry the filter/pagination inputs and
+  output shape across the repository/service/API layers.
+
 ---
 
 ## Database — PostgreSQL

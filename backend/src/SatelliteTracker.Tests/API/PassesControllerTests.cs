@@ -244,4 +244,98 @@ public class PassesControllerTests : IDisposable
 
         passServiceMock.Verify(s => s.GetPassTrackAsync(passId), Times.Once);
     }
+
+    // ── GetHistory ────────────────────────────────────────────────────────────
+    // IPassService is mocked here — the actual filtering/pagination composition is covered at the
+    // repository level in PassRepositoryTests; these exercise only the controller's validation and
+    // request/response mapping.
+
+    private static readonly IReadOnlyList<Pass> SampleHistory =
+    [
+        new() { Id = Guid.NewGuid(), SatelliteId = Guid.NewGuid(), Aos = DateTime.UtcNow.AddDays(-1), Los = DateTime.UtcNow.AddDays(-1).AddMinutes(10) }
+    ];
+
+    [Fact]
+    public async Task GetHistory_PageSizeAboveCap_ReturnsBadRequestWithoutCallingService()
+    {
+        var (controller, passServiceMock) = BuildControllerWithMock(_subscriptionRepo, pass: null, Guid.NewGuid());
+
+        var result = await controller.GetHistory(Guid.NewGuid(), pageSize: 201);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        passServiceMock.Verify(
+            s => s.GetPassHistoryAsync(It.IsAny<Guid>(), It.IsAny<PassHistoryQuery>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task GetHistory_PageBelowOne_ReturnsBadRequestWithoutCallingService()
+    {
+        var (controller, passServiceMock) = BuildControllerWithMock(_subscriptionRepo, pass: null, Guid.NewGuid());
+
+        var result = await controller.GetHistory(Guid.NewGuid(), page: 0);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        passServiceMock.Verify(
+            s => s.GetPassHistoryAsync(It.IsAny<Guid>(), It.IsAny<PassHistoryQuery>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task GetHistory_ValidParams_BuildsQueryFromAllProvidedFiltersAndReturnsPagedEnvelope()
+    {
+        var satelliteId = Guid.NewGuid();
+        var (controller, passServiceMock) = BuildControllerWithMock(_subscriptionRepo, pass: null, Guid.NewGuid());
+        PassHistoryQuery? capturedQuery = null;
+        passServiceMock
+            .Setup(s => s.GetPassHistoryAsync(satelliteId, It.IsAny<PassHistoryQuery>()))
+            .Callback<Guid, PassHistoryQuery>((_, q) => capturedQuery = q)
+            .ReturnsAsync(Result<PagedResult<Pass>>.Success(new PagedResult<Pass>(SampleHistory, 2, 25, true)));
+
+        var aosFrom = DateTime.UtcNow.AddDays(-10);
+        var aosTo = DateTime.UtcNow.AddDays(-1);
+        var result = await controller.GetHistory(
+            satelliteId,
+            page: 2,
+            pageSize: 25,
+            orbitNumberFrom: 10,
+            orbitNumberTo: 20,
+            maxElevationFrom: 30m,
+            maxElevationTo: 60m,
+            aosFrom: aosFrom,
+            aosTo: aosTo,
+            losFrom: null,
+            losTo: null);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var dto = Assert.IsType<PagedResultDto<PassDto>>(ok.Value);
+        Assert.Single(dto.Items);
+        Assert.Equal(2, dto.Page);
+        Assert.Equal(25, dto.PageSize);
+        Assert.True(dto.HasMore);
+
+        Assert.NotNull(capturedQuery);
+        Assert.Equal(2, capturedQuery!.Page);
+        Assert.Equal(25, capturedQuery.PageSize);
+        Assert.Equal(10, capturedQuery.OrbitNumberFrom);
+        Assert.Equal(20, capturedQuery.OrbitNumberTo);
+        Assert.Equal(30m, capturedQuery.MaxElevationFrom);
+        Assert.Equal(60m, capturedQuery.MaxElevationTo);
+        Assert.Equal(aosFrom, capturedQuery.AosFrom);
+        Assert.Equal(aosTo, capturedQuery.AosTo);
+        Assert.Null(capturedQuery.LosFrom);
+        Assert.Null(capturedQuery.LosTo);
+    }
+
+    [Fact]
+    public async Task GetHistory_ServiceFailure_ReturnsError()
+    {
+        var satelliteId = Guid.NewGuid();
+        var (controller, passServiceMock) = BuildControllerWithMock(_subscriptionRepo, pass: null, Guid.NewGuid());
+        passServiceMock
+            .Setup(s => s.GetPassHistoryAsync(satelliteId, It.IsAny<PassHistoryQuery>()))
+            .ReturnsAsync(Result<PagedResult<Pass>>.Failure("Satellite not found."));
+
+        var result = await controller.GetHistory(satelliteId);
+
+        Assert.IsType<NotFoundObjectResult>(result);
+    }
 }

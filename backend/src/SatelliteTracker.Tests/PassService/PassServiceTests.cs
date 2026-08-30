@@ -230,14 +230,15 @@ public class PassServiceTests
     {
         var (service, _, _, passRepo) = CreateService();
         var expected = new List<Pass> { new() { Id = Guid.NewGuid(), SatelliteId = TestSatelliteId } };
+        var query = new PassHistoryQuery();
 
-        passRepo.Setup(r => r.GetHistoryAsync(TestSatelliteId, It.IsAny<DateTime>()))
-            .ReturnsAsync(Result<IEnumerable<Pass>>.Success(expected));
+        passRepo.Setup(r => r.GetHistoryAsync(TestSatelliteId, It.IsAny<DateTime>(), query))
+            .ReturnsAsync(Result<PagedResult<Pass>>.Success(new PagedResult<Pass>(expected, query.Page, query.PageSize, false)));
 
-        var result = await service.GetPassHistoryAsync(TestSatelliteId);
+        var result = await service.GetPassHistoryAsync(TestSatelliteId, query);
 
         Assert.True(result.IsSuccess);
-        Assert.Single(result.Value!);
+        Assert.Single(result.Value!.Items);
     }
 
     // ── GetPassByIdAsync ─────────────────────────────────────────────────────
