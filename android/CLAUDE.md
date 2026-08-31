@@ -437,6 +437,15 @@ this doesn't introduce that pattern for the first time). This survives app resta
 in-memory ViewModel state) but is device-local only: reinstalling the app or switching devices
 resets it to "nothing hidden" — an accepted, deliberate tradeoff, not a bug to fix.
 
+**DataStore enforces a single live instance per backing file, within a process** — opening a
+second `DataStore` (even a distinct instance) against the same file while the first is still open
+throws (`IllegalStateException` from `OkioStorage`), discovered when
+`HiddenSatellitesStoreTest` originally tried to open a second instance to verify persistence
+"survives a restart." This is a non-issue for the real app (`DataStoreModule` provides exactly one
+Hilt singleton, so only one instance ever exists at a time), so nothing was worked around — the
+test was adjusted to not open a second concurrent instance instead. Keep this in mind if a future
+DataStore-backed store's test tries the same "reopen and re-read" pattern.
+
 ### `NotificationPermissionManager` — read-only POST_NOTIFICATIONS status
 
 ViewModels must not touch `Context`/`Activity` directly (testability, lifecycle-safety) — this is
