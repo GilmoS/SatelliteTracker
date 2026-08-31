@@ -8,12 +8,13 @@ directly (see repo-root CLAUDE.md, "Single Source of Truth Rules").
 This file currently covers what's built as of Milestone E, Step 2.1 (networking + auth
 infrastructure), Step 2.2 (Satellite/Pass/Notes repositories with Room caching), Step 2.3
 (`AuthRepository`/`SettingsRepository`), Step 3.1 (`SessionManager` + `DashboardViewModel` +
-`DashboardUiState` — logic only, no UI yet), and the Full Pass List screen's data layer
+`DashboardUiState` — logic only, no UI yet), the Full Pass List screen's data layer
 (`PassRepository.getPassHistory`, `HistoryLoadStateEntity`/Dao, `FullPassListViewModel` +
-`FullPassListUiState` — logic only, no UI yet, see below). **Step 2 (the entire Android data
-layer) is complete.** The rest of Step 3 (Dashboard Composable UI, Pass Details Modal, Settings
-ViewModel, and a Composable for the Full Pass List screen) is next — this file will grow again
-once those land.
+`FullPassListUiState` — logic only, no UI yet, see below), and the Settings screen's logic layer
+(`HiddenSatellitesStore`, `NotificationPermissionManager`, `SettingsViewModel` +
+`SettingsUiState` — logic only, no UI yet, see below). **Step 2 (the entire Android data layer)
+is complete.** The rest of Step 3 (Dashboard Composable UI, Pass Details Modal, and Composables
+for the Full Pass List and Settings screens) is next — this file will grow again once those land.
 
 ---
 
@@ -72,10 +73,13 @@ com.sattrakk.app/
 │   │   └── dto/                    Generated DTOs (never committed — see that dir's contents)
 │   ├── local/
 │   │   ├── ApiKeyStore.kt          EncryptedSharedPreferences wrapper
+│   │   ├── HiddenSatellitesStore.kt DataStore-backed, local-only hidden-satellite ids (Settings screen)
 │   │   ├── AppDatabase.kt, PassDao.kt, SatelliteDao.kt, NoteDao.kt, CacheMetadataDao.kt,
 │   │   │                          HistoryLoadStateDao.kt (Full Pass List screen)
 │   │   └── entity/                 Room @Entity classes (Pass, Satellite, Note, CacheMetadata,
 │   │                                HistoryLoadState)
+│   ├── permission/
+│   │   └── NotificationPermissionManager.kt  Read-only POST_NOTIFICATIONS status wrapper (Settings screen)
 │   ├── session/
 │   │   └── SessionManager.kt       Global SessionState (Valid/RequiresReauth) (step 3.1)
 │   ├── util/
@@ -96,14 +100,19 @@ com.sattrakk.app/
 │   ├── NetworkModule.kt            OkHttpClient, Json, Retrofit, SatTrakkApi
 │   ├── DatabaseModule.kt           Room AppDatabase + DAOs
 │   ├── ClockModule.kt              java.time.Clock, for testable "now" (step 3.1)
-│   └── CoroutineScopeModule.kt     @ApplicationScope CoroutineScope, for fire-and-forget work outliving a caller
+│   ├── CoroutineScopeModule.kt     @ApplicationScope CoroutineScope, for fire-and-forget work outliving a caller
+│   ├── DataStoreModule.kt          Preferences DataStore singleton + HiddenSatellitesStore binding (Settings screen)
+│   └── PermissionModule.kt         NotificationPermissionManager binding (Settings screen)
 ├── ui/
 │   ├── dashboard/
 │   │   ├── DashboardUiState.kt     SatelliteTabState + DashboardUiState (step 3.1)
 │   │   └── DashboardViewModel.kt   Dashboard screen logic — no Composable yet (step 3.1)
-│   └── fullpasslist/
-│       ├── FullPassListUiState.kt  PassListFilter + FullPassListUiState (Full Pass List screen)
-│       └── FullPassListViewModel.kt Full Pass List screen logic — no Composable yet
+│   ├── fullpasslist/
+│   │   ├── FullPassListUiState.kt  PassListFilter + FullPassListUiState (Full Pass List screen)
+│   │   └── FullPassListViewModel.kt Full Pass List screen logic — no Composable yet
+│   └── settings/
+│       ├── SettingsUiState.kt      SatelliteVisibility + SettingsUiState (Settings screen)
+│       └── SettingsViewModel.kt    Settings screen logic — no Composable yet
 ```
 
 ---
@@ -398,6 +407,141 @@ mockup for this screen are **not** implemented — those fields don't exist as b
 (repo-root CLAUDE.md's paginated pass history section only defines `orbitNumberFrom/To`,
 `maxElevationFrom/To`, `aosFrom/To`, `losFrom/To`, and even of those, only the two mapped here are
 exposed by `PassHistoryFilter`). Flag this explicitly to whoever wires the Composable UI up next.
+
+---
+
+## Settings screen — hidden satellites, permission status, alert-minute preferences (Milestone E)
+
+A separate destination from Dashboard and Full Pass List (no Composable exists for this screen
+yet — the screen is designed separately and will be wired to this logic layer in a later step).
+Covers three independent concerns: which satellites are hidden from the Dashboard (purely local),
+notification permission status (read-only), and the tester's alert-minute/push preferences
+(backend-synced). `HiddenSatellitesStore` (`data/local/`), `NotificationPermissionManager`
+(`data/permission/`), and `SettingsViewModel` + `SettingsUiState` (`ui/settings/`) cover this.
+Covered by `HiddenSatellitesStoreTest`, `NotificationPermissionManagerTest`, and
+`SettingsViewModelTest`.
+
+### `HiddenSatellitesStore` — DataStore-backed, local-only, deliberately not synced
+
+Which satellites are hidden from the Dashboard is a purely visual/local preference — it does
+**not** sync to the backend, does **not** touch `UserSettings`/`SettingsRepository`, and has no
+functional significance beyond what the Dashboard chooses to fetch/show. Backed by Preferences
+DataStore (`androidx.datastore:datastore-preferences`), not Room — a single `stringSetPreferencesKey`
+is a simple string-set preference, not structured/relational data that would benefit from a table.
+`di/DataStoreModule.kt` provides one process-lifetime `DataStore<Preferences>` singleton (via the
+standard `by preferencesDataStore(name = ...)` `Context` extension, one file backing every local
+preference key added here or later) and binds `HiddenSatellitesStore` to its
+`DataStoreHiddenSatellitesStore` implementation, following the same `object` module / `@Provides`
+style every other DI module in this app uses (no `@Binds` abstract-class module exists here, so
+this doesn't introduce that pattern for the first time). This survives app restarts (unlike
+in-memory ViewModel state) but is device-local only: reinstalling the app or switching devices
+resets it to "nothing hidden" — an accepted, deliberate tradeoff, not a bug to fix.
+
+### `NotificationPermissionManager` — read-only POST_NOTIFICATIONS status
+
+ViewModels must not touch `Context`/`Activity` directly (testability, lifecycle-safety) — this is
+the single place permission state is read. It only **reports** status; it does **not** itself
+trigger the system permission dialog — that has to happen from an Activity/Composable in a future
+UI step (e.g. via `rememberLauncherForActivityResult`).
+
+- Below API 33 (`TIRAMISU`), `POST_NOTIFICATIONS` doesn't exist as a runtime permission (granted
+  at install time), so `isGranted()` unconditionally returns `true` and `shouldShowRationale()`
+  unconditionally returns `false` on those devices, without calling into
+  `ContextCompat`/`ActivityCompat` at all.
+- **`shouldShowRationale` takes an `Activity` parameter, not the no-arg signature the original
+  task sketch listed** — flagged explicitly rather than silently decided, since the literal sketch
+  can't actually be implemented correctly. The only platform API for this
+  (`ActivityCompat.shouldShowRequestPermissionRationale`) is defined on `Activity`, with no
+  `Context`-only overload available down to this app's `minSdk` 29 —
+  `PackageManager`'s own `Context`-based `shouldShowRequestPermissionRationale` wasn't added until
+  API 34, which would leave API 33 (where `POST_NOTIFICATIONS` first exists) with no way to ask at
+  all. Rather than holding an `Activity` reference in the `@Singleton` manager (a leak risk) or
+  unsafely casting the injected Application `Context` to `Activity` (would crash — an Application
+  is never an `Activity`), the caller supplies its own `Activity` at call time (sourced from the
+  future UI layer, e.g. `LocalContext.current as Activity` in a Composable), and it is never
+  stored. `isGranted()` stays `Context`-only via `@ApplicationContext` injection, since
+  `ContextCompat.checkSelfPermission` doesn't have this problem.
+- `SettingsViewModel.refreshPermissionStatus(activity)` mirrors this — it takes an `Activity`
+  parameter it forwards straight through and never retains, meant to be called from the UI layer's
+  onResume-equivalent lifecycle hook once that UI exists (permission state can change externally,
+  e.g. the user grants it from system settings while the app is backgrounded). `SettingsViewModel`
+  itself never holds an `Activity` reference.
+- Testability note: `AndroidNotificationPermissionManager` exposes an `internal var
+  sdkIntOverrideForTests: Int?` so `NotificationPermissionManagerTest` can exercise both the
+  below-33 and 33+ branches without a reflection hack on the JVM-unit-test environment's
+  `Build.VERSION.SDK_INT` (which is `0` there and not realistically fakeable via reflection — it's
+  a `static final` field). This is a plain mutable property, not a constructor parameter with a
+  default, specifically because Dagger/Hilt does not evaluate Kotlin default parameter values for
+  `@Inject` constructors — a default-valued constructor param would force Dagger to look for a
+  binding for that param's type and fail the build.
+
+### `SettingsUiState.sendPushEnabled` is a computed property, not a stored field
+
+The original task sketch listed `sendPushEnabled: Boolean` inline among `SettingsUiState`'s other
+fields with the comment "derived: `alertMinutes.isNotEmpty()`". It's implemented as a Kotlin
+computed property (`val sendPushEnabled get() = alertMinutes.isNotEmpty()`) rather than a second
+stored constructor field, so it can never drift out of sync with `alertMinutes` via a `copy()` call
+that updates one but not the other — a class of bug a stored field would allow. This preserves the
+exact same "derived" meaning the sketch specified; only the mechanism differs.
+
+### `sendPush` is a UI-level concept over the existing `alertMinutes` semantics — not a new backend field
+
+Turning push off (`SettingsViewModel.setSendPushEnabled(false)`) calls
+`SettingsRepository.updateAlertMinutes(emptyList())`, which the backend already treats as "no
+alerts" (repo-root CLAUDE.md — this was established when `UserSettings`/`/api/settings/me` was
+designed, not new behavior introduced here). There is no separate `sendPushEnabled` flag persisted
+anywhere, client or server — it's purely `alertMinutes.isNotEmpty()`.
+
+### `lastNonEmptyAlertMinutes` is in-memory only — explicitly not persisted
+
+`SettingsUiState.lastNonEmptyAlertMinutes` lets `setSendPushEnabled(true)` restore whatever
+alert-minute selection was in effect before the tester last turned push off, without asking them to
+re-pick it. It is **never** written to `SettingsRepository`, `HiddenSatellitesStore`, or any other
+persistence layer, and resets to empty on process death — turning push off, killing the app, and
+reopening it loses the "remembered" selection. This is an accepted tradeoff, not a bug: **do not**
+"fix" it into a persisted field later without deliberate discussion, since persisting it would mean
+inventing new backend state (or an ambiguous local/server split) for what is currently a pure,
+harmless UX nicety.
+
+- **`setSendPushEnabled(true)` with no `lastNonEmptyAlertMinutes` to restore** (e.g. a fresh app
+  start where the tester hasn't toggled push off-then-on again this session) is a genuine edge case
+  the original task flagged as having two defensible resolutions. Chosen here: `SettingsUiState
+  .needsAlertMinutesSelection` is set to `true`, `alertMinutes` is left untouched, and **no backend
+  call is made** — silently picking default alert minutes on the tester's behalf was rejected as
+  the wrong call, since there's no principled default to guess. The future UI is expected to prompt
+  the tester to pick at least one alert minute when this flag is set. Cleared by the next
+  successful `updateAlertMinutes` call (including one driven by `setSendPushEnabled` itself).
+
+### `addSatellite()`/`removeSatellite()` are explicit stubs, not implemented
+
+No backend support exists for tester-driven satellite catalog management yet (repo-root
+CLAUDE.md's MVP scope already treats satellite search/add as deferred). Both methods call **no**
+repository — they only set `SettingsUiState.stubMessage` to a fixed string
+(`"Adding satellites isn't available yet"`), consumed by `consumeStubMessage()`. This is a
+dedicated field rather than reusing `error`, so a future UI can render it as an informational
+snackbar rather than an error state, and so a future implementer doesn't mistake silence here for
+"nothing to do."
+
+### No logout
+
+Explicitly out of scope for this screen — `SessionManager.markValid()` remains uncalled (it exists
+for a future re-registration flow, per step 3.1's original design) and `SettingsViewModel` has no
+action that touches `SessionManager` at all. Session invalidation stays triggered only by the
+backend's own 401 responses, exactly as step 3.1 established.
+
+### Initial load: `combine()` over satellites + hidden ids, not a one-shot merge
+
+`SettingsViewModel` holds the backend-fetched satellite catalog in a private `loadedSatellites:
+MutableStateFlow<List<Satellite>>`, set once after a successful `SatelliteRepository.getSatellites()`
+call on `init`, and combines it with `HiddenSatellitesStore.hiddenSatelliteIds` (a continuously-
+collected `Flow`) via `kotlinx.coroutines.flow.combine` to build `SettingsUiState.satellites`. This
+means a `toggleSatelliteVisibility` call's effect on `uiState.satellites` flows through the same
+`combine` collector that seeded the initial value, rather than being patched into `uiState`
+directly by `toggleSatelliteVisibility` itself — one code path, not two, for keeping the visibility
+list in sync with the store. `alertMinutes`/`UserSettings` and `satellites`/`Satellite` are fetched
+in parallel (`async`/`awaitAll`) on `init`, matching `DashboardViewModel`'s and
+`FullPassListViewModel`'s existing per-source-parallel-load shape; a failure on one side doesn't
+blank the other, and `error` describes only the side that failed.
 
 ---
 
