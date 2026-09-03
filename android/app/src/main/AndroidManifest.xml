@@ -4,6 +4,11 @@
     <!-- Required: the app talks only to the SatTrakk backend, never N2YO/Graph directly. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Runtime-requested on API 33+ only (see NotificationPermissionManager); below 33 it's
+         granted at install time and this declaration has no runtime-prompt effect. Needed for FCM
+         push notifications (Milestone D) to actually surface to the user on 33+. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Declared ahead of Milestone F (Sky View / ARCore) — not used by any
          screen yet. CAMERA + high-rate motion sensors are what ARCore needs
          for camera-overlay pass tracking; requesting them at runtime and
