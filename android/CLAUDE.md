@@ -10,11 +10,13 @@ infrastructure), Step 2.2 (Satellite/Pass/Notes repositories with Room caching),
 (`AuthRepository`/`SettingsRepository`), Step 3.1 (`SessionManager` + `DashboardViewModel` +
 `DashboardUiState` — logic only, no UI yet), the Full Pass List screen's data layer
 (`PassRepository.getPassHistory`, `HistoryLoadStateEntity`/Dao, `FullPassListViewModel` +
-`FullPassListUiState` — logic only, no UI yet, see below), and the Settings screen's logic layer
+`FullPassListUiState` — logic only, no UI yet, see below), the Settings screen's logic layer
 (`HiddenSatellitesStore`, `NotificationPermissionManager`, `SettingsViewModel` +
-`SettingsUiState` — logic only, no UI yet, see below). **Step 2 (the entire Android data layer)
-is complete.** The rest of Step 3 (Dashboard Composable UI, Pass Details Modal, and Composables
-for the Full Pass List and Settings screens) is next — this file will grow again once those land.
+`SettingsUiState` — logic only, no UI yet, see below), and the Pass Details Modal's logic layer
+(`PassDetailsUiState`, `PassDetailsEvent`, `PassDetailsViewModel` — logic only, no UI yet, see
+below). **Step 2 (the entire Android data layer) and Step 3 (the entire ViewModel/UiState layer
+for Dashboard, Full Pass List, Settings, and Pass Details) are both complete.** What's next is
+Composable/UI wiring for all four screens — this file will grow again once those land.
 
 ---
 
@@ -110,9 +112,13 @@ com.sattrakk.app/
 │   ├── fullpasslist/
 │   │   ├── FullPassListUiState.kt  PassListFilter + FullPassListUiState (Full Pass List screen)
 │   │   └── FullPassListViewModel.kt Full Pass List screen logic — no Composable yet
-│   └── settings/
-│       ├── SettingsUiState.kt      SatelliteVisibility + SettingsUiState (Settings screen)
-│       └── SettingsViewModel.kt    Settings screen logic — no Composable yet
+│   ├── settings/
+│   │   ├── SettingsUiState.kt      SatelliteVisibility + SettingsUiState (Settings screen)
+│   │   └── SettingsViewModel.kt    Settings screen logic — no Composable yet
+│   └── passdetails/
+│       ├── PassDetailsUiState.kt   EditingNoteState + PassDetailsUiState (Pass Details Modal)
+│       ├── PassDetailsEvent.kt     One-shot NavigateToMap event (Pass Details Modal)
+│       └── PassDetailsViewModel.kt Pass Details Modal logic — no Composable yet
 ```
 
 ---
@@ -551,6 +557,88 @@ list in sync with the store. `alertMinutes`/`UserSettings` and `satellites`/`Sat
 in parallel (`async`/`awaitAll`) on `init`, matching `DashboardViewModel`'s and
 `FullPassListViewModel`'s existing per-source-parallel-load shape; a failure on one side doesn't
 blank the other, and `error` describes only the side that failed.
+
+---
+
+## Pass Details Modal — pass detail + notes editing (Milestone E, Step 3 complete)
+
+Set up as a `passdetails/{passId}` screen destination by the nav scaffolding, but functions as a
+modal dialog over the Dashboard/Full Pass List, not a full-screen navigation target — no
+Composable exists for this yet (designed separately). Builds entirely on the existing
+`PassRepository` (`getPassById`, `setNotify`) and `NotesRepository` (`getNotes`/`createNote`/
+`updateNote`/`deleteNote`) — no new repository methods, no backend changes.
+`PassDetailsUiState`/`PassDetailsEvent`/`PassDetailsViewModel` (`ui/passdetails/`) cover this.
+Covered by `PassDetailsViewModelTest`. **This closes out Step 3's ViewModel/UiState layer in
+full** — Dashboard, Full Pass List, Settings, and Pass Details are now all done at the
+ViewModel/UiState level; the remaining work is Composable/UI wiring for all four, not more
+ViewModel work.
+
+### Notes editing is dialog-based, not inline — `EditingNoteState`
+
+Per a confirmed design decision, note creation/editing happens through a dialog, not inline in the
+notes list. `PassDetailsUiState.notes` is always plain, read-only/display-only data regardless of
+dialog state; `editingNote: EditingNoteState?` is the only thing that drives whether the dialog is
+showing and whether it's create-mode (`EditingNoteState.NewNote`) or edit-mode
+(`EditingNoteState.ExistingNote(noteId, currentContent)`). `openNewNoteDialog()`/
+`openEditNoteDialog(noteId)`/`closeNoteDialog()` only ever touch this one field — none of them
+call a repository. `closeNoteDialog()` in particular discards any in-progress edit with no draft
+persistence, by design (matches `SettingsViewModel`'s stubs in spirit: local-only UI state, not
+backed by anything durable).
+
+### Full-state error on `getPassById` failure vs. partial content on `getNotes` failure
+
+Pass and notes are loaded in parallel on `init` (same `async`/`awaitAll` shape as
+`DashboardViewModel`'s per-tab loading and `FullPassListViewModel.loadAll`), but the two failures
+are handled asymmetrically, deliberately:
+
+- **`getPassById` fails → the entire `PassDetailsUiState` becomes an error state**: `pass` stays
+  `null`, `error` is set, and `notes` is left empty even if `getNotes` succeeded in parallel — its
+  result is discarded outright. Rationale: without the pass itself (AOS/LOS/elevation/notify —
+  the primary content this whole modal exists to show), there's not enough left to justify
+  rendering anything.
+- **`getPassById` succeeds but `getNotes` fails → partial content**: `pass` is shown normally,
+  `notes` is an empty list, and `error` is set to describe the notes failure. Rationale: notes are
+  secondary/supplementary content — losing them for one load shouldn't hide the primary content
+  the user actually opened this modal to see.
+
+This is the opposite asymmetry from `DashboardViewModel`'s per-tab philosophy (there, *every*
+tab's own failure is isolated and never blanks the *other* tabs) — here there are only two, and
+one is strictly primary over the other, which is why one failure mode blanks everything and the
+other doesn't.
+
+### No optimistic updates — every mutation waits for repository confirmation
+
+`toggleNotify()`, `saveNote()`, and `deleteNote()` all update `PassDetailsUiState` only after their
+repository call returns `ApiResult.Success`, never before:
+
+- `toggleNotify()` calls `PassRepository.setNotify(passId, !currentNotify)` and only flips
+  `pass.notify` once the response's `NotifyStatus.notify` comes back — on failure, `pass` is left
+  completely unchanged (no flip-then-revert flicker).
+- `saveNote(content)` calls `NotesRepository.createNote`/`updateNote` (chosen by whichever
+  `EditingNoteState` is currently active) and only closes the dialog and patches `notes` once the
+  call succeeds. **On failure the dialog stays open and `editingNote` is left untouched** — the
+  user's typed content is never discarded on a failed save, so they can retry without retyping.
+  Success patches `notes` directly from the repository call's own returned `Note` (both
+  `createNote`/`updateNote` already return the saved `Note` — see `NotesRepository`) rather than
+  re-fetching via `getNotes`.
+- `deleteNote(noteId)` only removes the note from `notes` once `NotesRepository.deleteNote`
+  succeeds; on failure the note stays in the list, since the deletion didn't actually happen.
+
+This is consistent with `NotesRepository`'s own step-2.2 no-offline-writes design (see "Notes'
+asymmetry" below) — a general `error` message is considered sufficient for every mutation failure
+here, including `NetworkError`; there's no dedicated "requires connection" UI state.
+
+### `PassDetailsEvent` — the app's first Channel-based one-shot event stream
+
+"Show on map" (`showOnMap()`) is a pure one-shot navigation signal — it emits
+`PassDetailsEvent.NavigateToMap(passId)` via a `Channel<PassDetailsEvent>`/`receiveAsFlow()` and
+makes no `PassDetailsUiState` change at all. This follows the state-vs-event distinction
+`SessionManager` established in step 3.1 (session invalidity is *state* because it must survive
+recomposition/process death; navigation here is genuinely one-time, the official Android
+guidance's own carve-out for staying event-based) — but no prior event-channel convention existed
+in the codebase to match, since every earlier ViewModel used only `StateFlow`. This establishes
+that pattern for future screens. **The Map screen doesn't exist yet (step 6), so this event
+currently has no listener — that's expected, not a gap;** it's built ready for that future wiring.
 
 ---
 
