@@ -96,10 +96,14 @@ fun MainNavHost(navController: NavHostController = rememberNavController()) {
                     navArgument("satelliteId") { type = NavType.StringType },
                     navArgument("satelliteName") { type = NavType.StringType },
                 ),
-            ) { backStackEntry ->
+            ) {
+                // No satelliteId/satelliteName passed explicitly -- FullPassListViewModel reads
+                // both from this same backstack entry's SavedStateHandle via hiltViewModel().
                 FullPassListScreen(
-                    satelliteId = backStackEntry.arguments?.getString("satelliteId").orEmpty(),
-                    satelliteName = backStackEntry.arguments?.getString("satelliteName").orEmpty(),
+                    onBackClick = { navController.popBackStack() },
+                    onPassClick = { passId ->
+                        navController.navigate(SatTrakkDestination.PassDetails.buildRoute(passId))
+                    },
                 )
             }
             dialog(
