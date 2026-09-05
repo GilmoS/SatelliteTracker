@@ -217,12 +217,14 @@ class DashboardViewModelTest {
 
         var tab = (viewModel.uiState.value as DashboardUiState.Content).tabs.first()
         assertEquals(Duration.ofSeconds(130), tab.nextPassCountdown)
+        assertEquals(pass1, tab.nextPass)
 
         advanceTimeBy(60_000)
         runCurrent()
 
         tab = (viewModel.uiState.value as DashboardUiState.Content).tabs.first()
         assertEquals(Duration.ofSeconds(70), tab.nextPassCountdown)
+        assertEquals(pass1, tab.nextPass)
     }
 
     @Test
@@ -240,6 +242,7 @@ class DashboardViewModelTest {
 
         val tab = (viewModel.uiState.value as DashboardUiState.Content).tabs.first()
         assertEquals(Duration.ofSeconds(14), tab.nextPassCountdown) // 20 - 6
+        assertEquals(passB, tab.nextPass)
     }
 
     @Test

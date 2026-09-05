@@ -172,7 +172,7 @@ class DashboardViewModel @Inject constructor(
                         val now = OffsetDateTime.now(clock)
                         val next = tab.passes.filter { it.aos.isAfter(now) }.minByOrNull { it.aos }
                         val countdown = next?.let { Duration.between(now, it.aos) }
-                        updateCountdown(satelliteId, countdown)
+                        updateCountdown(satelliteId, countdown, next)
                     }
                 }
                 delay(1000)
@@ -180,11 +180,15 @@ class DashboardViewModel @Inject constructor(
         }
     }
 
-    private fun updateCountdown(satelliteId: String, countdown: Duration?) {
+    private fun updateCountdown(satelliteId: String, countdown: Duration?, nextPass: Pass?) {
         val current = _uiState.value
         if (current !is DashboardUiState.Content) return
         val updatedTabs = current.tabs.map { tab ->
-            if (tab.satelliteId == satelliteId) tab.copy(nextPassCountdown = countdown) else tab
+            if (tab.satelliteId == satelliteId) {
+                tab.copy(nextPassCountdown = countdown, nextPass = nextPass)
+            } else {
+                tab
+            }
         }
         _uiState.value = current.copy(tabs = updatedTabs)
     }
