@@ -19,10 +19,13 @@ for Dashboard, Full Pass List, Settings, and Pass Details) are both complete.**
 
 Also built: the navigation graph (`MainNavHost`, all 6 routes), the app-root session-state
 wrapper (`SatTrakkApp`/`ReauthScreen`), the M3 theme (`ui/theme/`, extracted from the design MCP),
-and the Dashboard screen's real Composable content — see "Navigation, session wrapper, M3 theme,
-and the Dashboard screen" below. **Dashboard is the only screen with real content; Full Pass
-List, Settings, Pass Details, Map, and Sky View all still have placeholder-only Composables** —
-this file will grow again once those land.
+the Dashboard screen's real Composable content (see "Navigation, session wrapper, M3 theme, and
+the Dashboard screen" below), and the Full Pass List screen + Filter Modal's real Composable
+content (`FullPassListScreen.kt`, `FilterModalSheet.kt` — see "Full Pass List screen + Filter
+Modal — Composable/UI" below), including one small ViewModel addition,
+`FullPassListViewModel.resetFilters()`. **Dashboard and Full Pass List are the only screens with
+real content; Settings, Pass Details, Map, and Sky View all still have placeholder-only
+Composables** — this file will grow again once those land.
 
 ---
 
@@ -122,8 +125,9 @@ com.sattrakk.app/
 │   │   └── DashboardScreen.kt       Real Composable content — see below
 │   ├── fullpasslist/
 │   │   ├── FullPassListUiState.kt   PassListFilter + FullPassListUiState (Full Pass List screen)
-│   │   ├── FullPassListViewModel.kt Full Pass List screen logic
-│   │   └── FullPassListScreen.kt    Placeholder only — see below
+│   │   ├── FullPassListViewModel.kt Full Pass List screen logic (+ resetFilters(), added this task)
+│   │   ├── FullPassListScreen.kt    Real Composable content — see below
+│   │   └── FilterModalSheet.kt      Filter Modal bottom sheet — see below
 │   ├── settings/
 │   │   ├── SettingsUiState.kt      SatelliteVisibility + SettingsUiState (Settings screen)
 │   │   ├── SettingsViewModel.kt    Settings screen logic
@@ -138,7 +142,8 @@ com.sattrakk.app/
 ├── navigation/
 │   ├── SatTrakkApp.kt               App root: SatTrakkTheme + SessionManager switch (see below)
 │   ├── SatTrakkNavHost.kt           SatTrakkDestination routes + MainNavHost (Scaffold + bottom nav)
-│   └── NavIcons.kt                  Small original Canvas-drawn nav/FAB/chevron icons (see below)
+│   └── NavIcons.kt                  Small original Canvas-drawn icons: nav/FAB/chevron, plus
+│                                      back arrow/filter/close (added for Full Pass List)
 ```
 
 ---
@@ -644,6 +649,151 @@ mockup for this screen are **not** implemented — those fields don't exist as b
 (repo-root CLAUDE.md's paginated pass history section only defines `orbitNumberFrom/To`,
 `maxElevationFrom/To`, `aosFrom/To`, `losFrom/To`, and even of those, only the two mapped here are
 exposed by `PassHistoryFilter`). Flag this explicitly to whoever wires the Composable UI up next.
+
+---
+
+## Full Pass List screen + Filter Modal — Composable/UI (Milestone E)
+
+Replaces the placeholder from the nav-graph task with real content: `FullPassListScreen.kt`
+(`ui/fullpasslist/`) and `FilterModalSheet.kt`, wired to the already-complete
+`FullPassListViewModel`/`FullPassListUiState` above, plus one small ViewModel addition
+(`resetFilters()`). Driven by the code truth map's Screens 2/8 (Upcoming), 3/8 (History), and 4/8
+(Filter Modal) verdicts. Does **not** touch Dashboard, Settings, Pass Details, Map, or Sky View.
+
+### `resetFilters()` and the `DEFAULT_TIME_WINDOW`/`DEFAULT_MIN_MAX_ELEVATION` constants
+
+`FullPassListViewModel` gained `fun resetFilters()`, resetting `timeWindow` and `minMaxElevation`
+(not `filter` — the Upcoming/History/All choice isn't a Filter Modal control, and "reset filters"
+shouldn't silently switch the user off whichever of the three they're looking at) to two new
+public companion constants, `DEFAULT_TIME_WINDOW` (`TimeWindow.Last7Days`) and
+`DEFAULT_MIN_MAX_ELEVATION` (`null`) — the same values the initial `FullPassListUiState` already
+used inline. Making them public, named constants (rather than leaving the defaults as inline
+literals) means the Composable layer's filter-badge-count and active-filter-chip derivation (see
+below) compares against the exact same "default" `FullPassListViewModel` itself uses, instead of
+a second hardcoded copy that could drift. Like the existing setters, `resetFilters()` no-ops (no
+reload) if already at the defaults. Covered by two new `FullPassListViewModelTest` cases.
+
+### Single-satellite scope is final — not a gap
+
+`FullPassListViewModel` stays permanently scoped to one `satelliteId` via `SavedStateHandle`. The
+design mockup's "All / EROS C3 / RUNNER-1 / VENμS" satellite-tabs row (Screen 2/8) and the Filter
+Modal's satellite multi-select chips (Screen 4/8) are both omitted entirely — there is no
+multi-satellite aggregation anywhere in this ViewModel, and none was added. **If multi-satellite
+browsing becomes a real requirement later, it needs a deliberate `FullPassListViewModel` redesign,
+not a quick UI addition** — the current architecture (one `satelliteId` nav arg, one Room
+history-load-state row per satellite, one merged list) assumes a single satellite per screen
+instance throughout.
+
+### Three-state segmented control, ALL as the real default — a deliberate deviation from the design
+
+The design mockup shows a two-way Upcoming/History toggle. The actual control is a three-way
+`SingleChoiceSegmentedButtonRow` (`PassListFilter.UPCOMING`/`.HISTORY`/`.ALL`), with **ALL as the
+default on screen entry** (already `FullPassListUiState`'s initial value — no ViewModel change was
+needed for this part) — a single continuous chronological list, upcoming-first then history, per
+`FullPassListViewModel`'s existing merge/sort logic, with Upcoming-only and History-only as
+additional filter choices rather than the primary two-way choice the mockup implies. This is a
+confirmed product requirement, not derived from the design file.
+
+### Composable-layer-only derivations — no new UiState fields beyond `resetFilters()`'s constants
+
+Per the truth map's `[PARTIAL]` verdicts, none of these needed a new `FullPassListUiState` field:
+
+- **Date-group headers** ("TODAY · 29 AUG", "YESTERDAY · 28 AUG", "TOMORROW · 30 AUG", or a plain
+  "24 AUG" beyond that ±1-day window) — `FullPassListScreen.kt`'s private `buildGroupedItems`
+  walks the already-ordered `passes` list once, grouping by calendar day
+  (`Pass.aos.atZoneSameInstant(ZoneId.systemDefault()).toLocalDate()`) and inserting a header
+  whenever the date changes. Never re-sorts or re-fetches — pure display grouping over data the
+  ViewModel already ordered. The merged ALL list's upcoming/history boundary
+  (`FullPassListUiState.nearestPassId`) is deliberately **not** surfaced as a second, separate
+  divider here — the date headers already make the future-to-past transition visually obvious on
+  their own, so an extra boundary marker would be redundant. `nearestPassId` stays real,
+  ViewModel-computed state; this screen just doesn't have an additional use for it beyond what the
+  date headers already convey.
+- **Filter badge count** (the number on the Filter button, via `BadgedBox`/`Badge`) — derived by
+  comparing `state.timeWindow`/`state.minMaxElevation` against `FullPassListViewModel
+  .DEFAULT_TIME_WINDOW`/`.DEFAULT_MIN_MAX_ELEVATION` at render time (`buildActiveFilterChips`
+  doubles as this derivation — its result list's size is the badge count).
+- **"Show N passes" / list counts** — `state.passes.size` directly, nowhere else.
+- **Active-filter chips** — one `InputChip` per non-default filter, each independently removable:
+  tapping a chip calls the relevant setter with the **default** value (`onSetTimeWindow
+  (DEFAULT_TIME_WINDOW)` / `onSetMinMaxElevation(DEFAULT_MIN_MAX_ELEVATION)`), never
+  `resetFilters()`, which would clear both at once. Time-window chip labels read "Last 24h"/"Last
+  48h" rather than the design's literal "Next 48h" — `TimeWindow` resolves to a **look-back**
+  window (`now.minusHours(...)`, see `PassHistoryFilterMappers.resolve`), so "Next" would name the
+  wrong direction; a deliberate wording correction, not a literal copy of the mockup.
+
+### No staged/draft filter state — every control applies immediately
+
+Per this task's confirmed decisions, no draft/staged filter state was added anywhere. Every Filter
+Modal control calls its `FullPassListViewModel` setter and reloads on the spot, exactly like the
+existing setters already work:
+
+- The design's "Show N passes" commit button with a live preview count does **not** get a real
+  preview. It's a plain dismiss button showing the **current** (already loading/loaded)
+  `passes.size` — not a hypothetical count for a not-yet-applied filter.
+- **The elevation slider is the one control that doesn't call its setter on every micro-change** —
+  a local `mutableFloatStateOf` mirrors the thumb for smooth dragging, and
+  `onSetMinMaxElevation` fires only in `onValueChangeFinished` (drag release). This isn't staged
+  ViewModel state (nothing overrides what's actually applied in the meantime); it's the standard
+  Material3 `Slider` pattern for not reloading on every intermediate drag pixel, which "applies
+  immediately" was never meant to require.
+- **Tapping the "Custom range" time-window chip doesn't call `onSetTimeWindow` by itself** either
+  — it only reveals the from/to date fields locally (`customRangeExpanded`, a plain UI-visibility
+  boolean, not a filter draft). The setter only fires once an actual date is picked in one of the
+  two `DatePickerDialog`s.
+- **Cancel** (truth map: "pure UI dismissal, no repository call") is fulfilled by the sheet's
+  header × button (and the scrim/back gesture) alone — no separate "Cancel" button was added next
+  to "Show N passes", since with no staged state to discard, a dedicated Cancel action would do
+  exactly what dismissing already does.
+
+### "All time" is an explicit chip, not a hidden empty-`Custom` state
+
+`TimeWindow.Custom(null, null)` is the one way this filter model expresses "no time constraint"
+(see `TimeWindow`'s own doc comment). The Filter Modal surfaces it as its own labeled **"All
+time"** chip, tapped directly (no date picker involved) — distinct from **"Custom range"**, which
+reveals two independent `DateBoundField`s ("From"/"To", each nullable on its own, each with its
+own "Clear"). Picking a date converts through `LocalDate` in the *device's* local zone, not UTC —
+`DatePickerDialog`'s `selectedDateMillis` is UTC-midnight internally, but the calendar day it
+visually shows is read as the date the user means in their own timezone, then converted to an
+`OffsetDateTime` via `date.atStartOfDay(ZoneId.systemDefault())`. **"To" is treated as through the
+end of that day** (the next day's start, exclusive) rather than that day's own midnight — a
+judgment call flagged here rather than silently decided, since "up to and including this day"
+reads as the more useful meaning for a history filter.
+
+### Decorative omissions — omitted entirely, not rendered disabled
+
+Per the truth map and this task's explicit instructions: the search icon and overflow menu (no
+backing action for either); the satellite multi-select chips (see single-satellite scope above);
+and the Filter Modal's duration/pass-direction/sunlit-only/horizon-mask controls — none of these
+have any backend param whatsoever, so none are rendered even as disabled chrome, unlike a
+decorative element that might warrant a disabled state purely for layout reasons.
+
+### Pagination
+
+Infinite-scroll, not a "load more" tap target: a `LaunchedEffect` watches
+`listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index` via `snapshotFlow`, and calls
+`viewModel.loadMore()` once the last visible row is within a few items of the end of the currently
+loaded (grouped) list. `loadMore()` itself already no-ops for `UPCOMING` and while a load is in
+flight, so this fires freely without duplicating that guard in the Composable.
+
+### Navigation
+
+`SatTrakkNavHost`'s `FullPassListScreen` composable call no longer passes `satelliteId`/
+`satelliteName` explicitly — `hiltViewModel()` gives `FullPassListViewModel` its own
+`SavedStateHandle` from the same backstack entry, so the ViewModel already carries both
+(`FullPassListUiState.satelliteId`/`.satelliteName`) without threading them through a second time.
+The back arrow calls `navController.popBackStack()`; row taps navigate to
+`SatTrakkDestination.PassDetails.buildRoute(passId)`, the same dialog destination Dashboard's row
+taps already use.
+
+### Icons and formatting — small, local, not shared with Dashboard
+
+`navigation/NavIcons.kt` gained `BackArrowIcon`, `FilterIcon` (funnel), and `CloseIcon` (×) —
+small additions to the same shared Canvas-drawn icon set from the nav-graph task, since none of
+the existing five fit. `FullPassListScreen.kt`'s time/duration/relative-time formatting helpers
+are a small **local duplicate** of `DashboardScreen.kt`'s equivalents, not factored into a shared
+file — this task's scope explicitly excludes touching Dashboard, and extracting a shared
+formatting util would mean editing it.
 
 ---
 
