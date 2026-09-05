@@ -114,3 +114,46 @@ fun ChevronIcon(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
         drawPath(path, color, style = stroke)
     }
 }
+
+// Top app bar back navigation, used by any screen with a back arrow (e.g. Full Pass List).
+@Composable
+fun BackArrowIcon(color: Color, modifier: Modifier = Modifier.size(24.dp)) {
+    Canvas(modifier = modifier) {
+        val stroke = Stroke(1.9.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val path = Path().apply {
+            moveTo(size.width * 0.62f, size.height * 0.22f)
+            lineTo(size.width * 0.34f, size.height * 0.5f)
+            lineTo(size.width * 0.62f, size.height * 0.78f)
+        }
+        drawPath(path, color, style = stroke)
+        drawLine(color, Offset(size.width * 0.36f, size.height * 0.5f), Offset(size.width * 0.84f, size.height * 0.5f), strokeWidth = stroke.width, cap = StrokeCap.Round)
+    }
+}
+
+// Filter button glyph (funnel), used by Full Pass List's Filter Modal entry point.
+@Composable
+fun FilterIcon(color: Color, modifier: Modifier = Modifier.size(22.dp)) {
+    Canvas(modifier = modifier) {
+        val stroke = Stroke(1.9.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val path = Path().apply {
+            moveTo(size.width * 0.15f, size.height * 0.2f)
+            lineTo(size.width * 0.85f, size.height * 0.2f)
+            lineTo(size.width * 0.58f, size.height * 0.55f)
+            lineTo(size.width * 0.58f, size.height * 0.82f)
+            lineTo(size.width * 0.42f, size.height * 0.7f)
+            lineTo(size.width * 0.42f, size.height * 0.55f)
+            close()
+        }
+        drawPath(path, color, style = stroke)
+    }
+}
+
+// Filter Modal's header dismiss control.
+@Composable
+fun CloseIcon(color: Color, modifier: Modifier = Modifier.size(22.dp)) {
+    Canvas(modifier = modifier) {
+        val stroke = Stroke(1.9.dp.toPx(), cap = StrokeCap.Round)
+        drawLine(color, Offset(size.width * 0.24f, size.height * 0.24f), Offset(size.width * 0.76f, size.height * 0.76f), strokeWidth = stroke.width, cap = StrokeCap.Round)
+        drawLine(color, Offset(size.width * 0.76f, size.height * 0.24f), Offset(size.width * 0.24f, size.height * 0.76f), strokeWidth = stroke.width, cap = StrokeCap.Round)
+    }
+}
