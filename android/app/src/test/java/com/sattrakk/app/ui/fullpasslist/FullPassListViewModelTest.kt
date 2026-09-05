@@ -233,6 +233,43 @@ class FullPassListViewModelTest {
     }
 
     @Test
+    fun `resetFilters restores default timeWindow and minMaxElevation and reloads`() {
+        coEvery { passRepository.getPasses(satelliteId, any()) } returns ApiResult.Success(emptyList())
+        coEvery { passRepository.getPassHistory(satelliteId, any(), any()) } returns ApiResult.Success(paged(emptyList()))
+        val viewModel = createViewModel()
+        viewModel.setTimeWindow(TimeWindow.Last24h)
+        runCurrent()
+        viewModel.setMinMaxElevation(25.0)
+        runCurrent()
+        clearMocks(passRepository, answers = false)
+        coEvery { passRepository.getPassHistory(satelliteId, 1, PassHistoryFilter(TimeWindow.Last7Days, null)) } returns
+            ApiResult.Success(paged(emptyList()))
+        coEvery { passRepository.getPasses(satelliteId, any()) } returns ApiResult.Success(emptyList())
+
+        viewModel.resetFilters()
+        runCurrent()
+
+        val state = viewModel.uiState.value
+        assertEquals(TimeWindow.Last7Days, state.timeWindow)
+        assertNull(state.minMaxElevation)
+        coVerify(exactly = 1) { passRepository.getPassHistory(satelliteId, 1, PassHistoryFilter(TimeWindow.Last7Days, null)) }
+    }
+
+    @Test
+    fun `resetFilters is a no-op when already at defaults`() {
+        coEvery { passRepository.getPasses(satelliteId, any()) } returns ApiResult.Success(emptyList())
+        coEvery { passRepository.getPassHistory(satelliteId, any(), any()) } returns ApiResult.Success(paged(emptyList()))
+        val viewModel = createViewModel()
+        clearMocks(passRepository, answers = false)
+
+        viewModel.resetFilters()
+        runCurrent()
+
+        coVerify(exactly = 0) { passRepository.getPassHistory(any(), any(), any()) }
+        coVerify(exactly = 0) { passRepository.getPasses(any(), any()) }
+    }
+
+    @Test
     fun `loadMore is a no-op for the UPCOMING filter`() {
         val upcomingPass = pass("u1", aosOffsetMinutes = 10)
         coEvery { passRepository.getPasses(satelliteId, any()) } returns ApiResult.Success(listOf(upcomingPass))
