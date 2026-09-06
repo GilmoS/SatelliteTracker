@@ -15,8 +15,17 @@ infrastructure), Step 2.2 (Satellite/Pass/Notes repositories with Room caching),
 `SettingsUiState` — logic only, no UI yet, see below), and the Pass Details Modal's logic layer
 (`PassDetailsUiState`, `PassDetailsEvent`, `PassDetailsViewModel` — logic only, no UI yet, see
 below). **Step 2 (the entire Android data layer) and Step 3 (the entire ViewModel/UiState layer
-for Dashboard, Full Pass List, Settings, and Pass Details) are both complete.** What's next is
-Composable/UI wiring for all four screens — this file will grow again once those land.
+for Dashboard, Full Pass List, Settings, and Pass Details) are both complete.**
+
+Also built: the navigation graph (`MainNavHost`, all 6 routes), the app-root session-state
+wrapper (`SatTrakkApp`/`ReauthScreen`), the M3 theme (`ui/theme/`, extracted from the design MCP),
+the Dashboard screen's real Composable content (see "Navigation, session wrapper, M3 theme, and
+the Dashboard screen" below), and the Full Pass List screen + Filter Modal's real Composable
+content (`FullPassListScreen.kt`, `FilterModalSheet.kt` — see "Full Pass List screen + Filter
+Modal — Composable/UI" below), including one small ViewModel addition,
+`FullPassListViewModel.resetFilters()`. **Dashboard and Full Pass List are the only screens with
+real content; Settings, Pass Details, Map, and Sky View all still have placeholder-only
+Composables** — this file will grow again once those land.
 
 ---
 
@@ -106,19 +115,35 @@ com.sattrakk.app/
 │   ├── DataStoreModule.kt          Preferences DataStore singleton + HiddenSatellitesStore binding (Settings screen)
 │   └── PermissionModule.kt         NotificationPermissionManager binding (Settings screen)
 ├── ui/
+│   ├── theme/                       Color.kt, Shape.kt, Type.kt, Theme.kt — M3 tokens from the
+│   │                                design MCP (see below)
+│   ├── reauth/
+│   │   └── ReauthScreen.kt          Dead-end screen shown when SessionManager requires reauth
 │   ├── dashboard/
-│   │   ├── DashboardUiState.kt     SatelliteTabState + DashboardUiState (step 3.1)
-│   │   └── DashboardViewModel.kt   Dashboard screen logic — no Composable yet (step 3.1)
+│   │   ├── DashboardUiState.kt      SatelliteTabState (+ nextPass, added this task) + DashboardUiState
+│   │   ├── DashboardViewModel.kt    Dashboard screen logic
+│   │   └── DashboardScreen.kt       Real Composable content — see below
 │   ├── fullpasslist/
-│   │   ├── FullPassListUiState.kt  PassListFilter + FullPassListUiState (Full Pass List screen)
-│   │   └── FullPassListViewModel.kt Full Pass List screen logic — no Composable yet
+│   │   ├── FullPassListUiState.kt   PassListFilter + FullPassListUiState (Full Pass List screen)
+│   │   ├── FullPassListViewModel.kt Full Pass List screen logic (+ resetFilters(), added this task)
+│   │   ├── FullPassListScreen.kt    Real Composable content — see below
+│   │   └── FilterModalSheet.kt      Filter Modal bottom sheet — see below
 │   ├── settings/
 │   │   ├── SettingsUiState.kt      SatelliteVisibility + SettingsUiState (Settings screen)
-│   │   └── SettingsViewModel.kt    Settings screen logic — no Composable yet
-│   └── passdetails/
-│       ├── PassDetailsUiState.kt   EditingNoteState + PassDetailsUiState (Pass Details Modal)
-│       ├── PassDetailsEvent.kt     One-shot NavigateToMap event (Pass Details Modal)
-│       └── PassDetailsViewModel.kt Pass Details Modal logic — no Composable yet
+│   │   ├── SettingsViewModel.kt    Settings screen logic
+│   │   └── SettingsScreen.kt       Placeholder only
+│   ├── passdetails/
+│   │   ├── PassDetailsUiState.kt   EditingNoteState + PassDetailsUiState (Pass Details Modal)
+│   │   ├── PassDetailsEvent.kt     One-shot NavigateToMap event (Pass Details Modal)
+│   │   ├── PassDetailsViewModel.kt Pass Details Modal logic
+│   │   └── PassDetailsScreen.kt    Placeholder only (registered as a dialog destination)
+│   ├── map/MapScreen.kt             Placeholder only (Milestone F)
+│   └── skyview/SkyViewScreen.kt     Placeholder only (Milestone F)
+├── navigation/
+│   ├── SatTrakkApp.kt               App root: SatTrakkTheme + SessionManager switch (see below)
+│   ├── SatTrakkNavHost.kt           SatTrakkDestination routes + MainNavHost (Scaffold + bottom nav)
+│   └── NavIcons.kt                  Small original Canvas-drawn icons: nav/FAB/chevron, plus
+│                                      back arrow/filter/close (added for Full Pass List)
 ```
 
 ---
@@ -312,6 +337,217 @@ get stuck on. Any future ViewModel test with a long-lived polling/ticker corouti
 the same pattern (no `runTest`, drive the Main `TestDispatcher`'s scheduler directly) rather than
 wrapping the test body in `runTest { }`.
 
+## Navigation graph, session wrapper, M3 theme, and the Dashboard screen (Milestone E)
+
+Builds the app's navigation graph, the app-root session-state wrapper, the M3 theme, and — the
+only screen with real content in this task — the Dashboard screen's Composables, wired to the
+already-complete `DashboardViewModel`/`DashboardUiState` (Step 3.1, above). Driven by a field-by-
+field audit of the design (Claude Design project "Map detail and AR improvements",
+`claude.ai/design/p/fb57c4cc-1710-43cf-8246-39cc22b4dc34`, file `SatelliteTracker M3.dc.html`,
+option **2a — Material 3 baseline**, not 2b/Expressive) against the actual ViewModel/Repository
+code, read via the design MCP (`DesignSync`'s `get_project`/`list_files`/`get_file` against that
+project's UUID — the same tool the `/design-sync` component-library workflow uses, pointed at a
+regular project instead). The design is explicitly **not** a 1:1 mock of each screen's real
+functionality — every element below was individually checked against real code before being wired
+up, omitted, or approximated; nothing was assumed from the mockup alone.
+
+### Routes — `SatTrakkDestination` (`navigation/SatTrakkNavHost.kt`)
+
+| Route | Type | Args | Status |
+|---|---|---|---|
+| `dashboard` | `composable` | none | **Real content** (this task) |
+| `map` | `composable` | none | Placeholder (Milestone F) |
+| `sky_view` | `composable` | none | Placeholder (Milestone F) |
+| `settings` | `composable` | none | Placeholder (pending a future UI task) |
+| `full_pass_list/{satelliteId}/{satelliteName}` | `composable` | both required | Placeholder (pending a future UI task) |
+| `pass_details/{passId}` | **`dialog`**, not `composable` | required | Placeholder (pending a future UI task) |
+
+- **`PassDetails` is a `dialog(...)` destination, not `composable(...)`** — it must render as a
+  modal overlay over whatever's behind it, not replace the full screen, per the Pass Details
+  Modal's existing design decision (see that section above: "Set up as a `passdetails/{passId}`
+  screen destination by the nav scaffolding, but functions as a modal dialog"). `dialog()` needs
+  no extra setup here — `rememberNavController()` (the Compose-specific one, from
+  `androidx.navigation.compose`) already registers a `DialogNavigator` alongside the
+  `ComposeNavigator` internally.
+- **`FullPassList` takes two required nav args, not one** — `FullPassListViewModel` reads both
+  `satelliteId` and `satelliteName` via `SavedStateHandle` (see that section above), so the route
+  is `full_pass_list/{satelliteId}/{satelliteName}`, not just `{satelliteId}`. `satelliteName` is
+  free text (e.g. "EROS C3") and gets `Uri.encode`d when building the route
+  (`SatTrakkDestination.FullPassList.buildRoute`); Navigation Compose decodes it back
+  automatically when populating the destination's arguments — no manual decode needed at the read
+  site.
+- **Full Pass List, Settings, Pass Details, Map, and Sky View are placeholder-only in this
+  task**, regardless of how much design detail exists for them (Map/Sky View especially — both
+  have heavily-detailed 2a mockups, but are Milestone F/Step 7 work per the code truth map, not
+  this task). `FullPassListScreen.kt` didn't exist before this task (unlike the other four, which
+  already had one-line text placeholders from the Milestone E skeleton) — created here as part of
+  wiring the nav graph, still placeholder-only content.
+
+### `SatTrakkApp` / `ReauthScreen` — session-state root wrapper (`navigation/SatTrakkApp.kt`, `ui/reauth/ReauthScreen.kt`)
+
+`SatTrakkApp` is the new composable root (`MainActivity.setContent { SatTrakkApp(sessionManager =
+sessionManager) }`, with `sessionManager` field-injected into the `@AndroidEntryPoint` Activity).
+It wraps `SatTrakkTheme`, collects `SessionManager.sessionState` via
+`collectAsStateWithLifecycle()` (new dependency: `androidx.lifecycle:lifecycle-runtime-compose`,
+added alongside the existing `lifecycle-runtime-ktx`/`lifecycle-viewmodel-ktx`), and swaps between
+`MainNavHost()` (the entire nav graph) and `ReauthScreen()` — a minimal, new, not-in-the-design
+dead end explaining that re-registration is required and to contact the dev team. There is no
+self-service re-registration flow yet (`SessionManager.markValid()` still has no caller — see
+that section above), so `ReauthScreen` deliberately offers no retry action. `SatTrakkApp`'s
+`sessionManager` parameter defaults to a fresh `SessionManager()` (always `Valid` — its
+constructor takes no arguments) for previews/tooling; production wiring always passes the real
+Hilt singleton explicitly.
+
+### M3 theme — `ui/theme/` (Color.kt, Shape.kt, Type.kt, Theme.kt)
+
+Extracted from the design's **"M3 Home"** screen (2a) inline styles via the design MCP — replaces
+the prior placeholder "Mission Control" palette that predated any design-file access. Dark scheme
+only, matching the design (no light variant exists in it).
+
+- **Color**: `primary`/`onPrimary`/`primaryContainer`/`onPrimaryContainer`,
+  `secondaryContainer`/`onSecondaryContainer`, `background`/`onBackground`, `surface`/`onSurface`/
+  `onSurfaceVariant`, `outline`/`outlineVariant`, and all three `surfaceContainer*` tonal-elevation
+  tiers actually used on the Home screen (`surfaceContainerLow` — bottom nav bar,
+  `surfaceContainer` — the "next pass" card, `surfaceContainerHigh` — metric cards) are real,
+  sampled values. `tertiary` (the amber accent) is captured for future screens even though nothing
+  in this task's scope renders it. **Not present anywhere on the Home screen and left as Compose's
+  own M3 baseline defaults or a carried-over placeholder**: bare `secondary`/`onSecondary` (only
+  ever seen as a "container" tone here), `tertiaryContainer`/`onTertiaryContainer`, and `error`
+  (kept as the pre-design placeholder red — no in-scope screen exercises an error state). Revisit
+  once a screen that actually uses one of these (Settings, Pass Filter) gets built against the
+  design. One extra non-role constant, `OnSecondaryContainerVariant`, captures a dimmer tone the
+  design uses for a highlighted row's secondary text/chevron that doesn't map to any named M3
+  ColorScheme role.
+- **Shape**: `SatTrakkShapes` — 8dp/12dp/16dp for small/medium/large, matching the design's chips,
+  metric cards, and next-pass-card/list-row/FAB corner radii exactly (these happen to already be
+  the stock M3 baseline values, so no real customization was needed beyond making the scale
+  explicit and passing it into `MaterialTheme`, which the theme never did before this task).
+- **Type**: `SatTrakkTypography` now sets `titleLarge` (22sp, corrected to **Normal/400** weight —
+  the pre-design placeholder had it at SemiBold/600, which doesn't match the design's actual top
+  app bar title), `titleSmall`/`labelLarge` (14sp/500), `labelMedium` (12sp/500), `labelSmall`
+  (10sp/500 — deviates from the M3 stock 11sp to match the design's actual metric-card label size
+  rather than forcing the nearest stock value), and `bodySmall` (12sp/400). Font family corrected
+  from the placeholder's "Inter" to **Roboto** (`RobotoFontFamily = FontFamily.Default`, which
+  already renders as Roboto on stock Android — no asset-bundling caveat needed for this one,
+  unlike the mono family). `TelemetryTextStyle` (JetBrains Mono fallback, still `FontFamily
+  .Monospace`) stays a single base style — call sites `.copy(fontSize = ...)` it for the different
+  pixel sizes the design uses in different contexts (32sp hero countdown, 14-15sp metric/list
+  values) rather than the type scale growing a same-family entry per size.
+
+### Icons — `navigation/NavIcons.kt`, original glyphs, not the design's SVGs
+
+The design's nav bar/FAB/chevron icons are inline SVG `path`/`ellipse` elements with literal `d`
+attributes. Reproducing them verbatim would need SVG path-string parsing (Compose UI does ship
+`androidx.compose.ui.graphics.vector.PathParser` for exactly this, but wiring it up for five
+one-off icons this small wasn't judged worth the added complexity). `NavIcons.kt` instead has five
+small original `Canvas`-drawn glyphs (`HomeIcon`, `PassesIcon`, `MapIcon`, `OrbitIcon` — reused for
+both Sky View and the Dashboard FAB, `SettingsIcon`) plus `ChevronIcon` (pass-row disclosure
+arrow), at the same 24dp/~1.9dp-stroke convention as the design, chosen to be recognizable and
+mutually distinct — not pixel-accurate reproductions.
+
+### Five-item bottom nav bar — Passes added beyond the raw design
+
+The design's Home screen mockup shows four nav items (Home/Map/Sky View/Settings). Per this task's
+explicit instructions, a fifth — **Passes** — was added deliberately, restoring the
+two-entry-point plan for Full Pass List (a Dashboard-side button and a navbar entry). Driven
+entirely by `NavHostController.currentBackStackEntryAsState()` in `SatTrakkBottomNavBar` — there
+is no separately-tracked "selected tab" state anywhere.
+
+Full Pass List is scoped to one satellite (`satelliteId` + `satelliteName`, both required nav
+args), but the nav bar has no independent notion of "which satellite" outside of whatever the
+Dashboard is currently showing. `MainNavHost` hoists a small piece of local UI state —
+`selectedSatellite: Pair<String, String>?`, not owned by any ViewModel — updated via
+`DashboardScreen`'s `onSelectedSatelliteChanged` callback (fired once on initial load and again on
+every tab switch, sourced from `SatelliteTabState.satelliteName`, already present — no extra
+lookup call). **Chosen fallback for "no satellite known yet"**: the Passes nav item is `enabled =
+false` (dimmed, non-clickable) until the Dashboard reports a selection, rather than inventing a
+"default satellite" concept that doesn't exist anywhere in the ViewModel layer. In practice this
+window is brief — Dashboard is the start destination, so by the time a user can reach the bottom
+nav bar at all, it has almost always already reported its selection.
+
+### Dashboard-side "view full pass list" entry point — placement
+
+No exact design element maps to this (per the code truth map). Placed as a "View all" `TextButton`
+directly beside the "Upcoming passes" section header, inside `DashboardContent` — a common M3
+"see all" pattern next to the section it lists, rather than e.g. next to the tabs.
+
+### Hero-pass derivation — `SatelliteTabState.nextPass`, not a Composable-side recomputation
+
+The design's hero card (satellite chip, countdown, AOS/LOS/MAX EL/DUR metrics) needs the actual
+next `Pass` object, but `DashboardUiState` only exposed `nextPassCountdown: Duration?` before this
+task. `DashboardViewModel.startCountdownTicker` already computed "the earliest pass whose AOS is
+still in the future" internally every second to drive the countdown — reusing that instead of
+recomputing "find nearest future pass" a second time in the Composable layer was the whole point
+of the task's instruction here. `SatelliteTabState` gained a `nextPass: Pass? = null` field set
+alongside `nextPassCountdown` in the same `updateCountdown` call, covered by two new assertions in
+the existing `DashboardViewModelTest` (no new test methods needed — the existing countdown tests
+already exercise exactly the cases that matter: initial computation and the AOS-rollover edge
+case). Like `nextPassCountdown`, `nextPass` is only ever populated for the selected tab.
+
+### Dashboard screen — REAL/PARTIAL/DECORATIVE treatment (`ui/dashboard/DashboardScreen.kt`)
+
+Per-element treatment, following the code truth map exactly:
+
+- **[REAL], wired directly**: per-satellite tabs (`PrimaryTabRow`, `selectTab`), AOS/LOS/MAX
+  EL/DUR metric cards, the upcoming-passes list, the bottom nav bar (shared chrome — see above).
+- **[PARTIAL], derived at render time, not stored anywhere**:
+  - Per-row relative time ("in 47 min") — computed fresh from `Pass.aos` and `OffsetDateTime.now()`
+    inside the Composable body, **not** via its own clock/ticker. `DashboardViewModel`'s countdown
+    ticker already causes a `Content` recomposition every second (it emits a new state object each
+    tick), so every row's relative-time string naturally recomputes on the same cadence for free.
+  - The next-pass hero card and metric grid — see "Hero-pass derivation" above.
+  - Satellite-name initials on each row's avatar circle — no avatar/abbreviation concept exists on
+    `Satellite` anywhere in the schema, so this is a **generic** derivation (first two
+    letters/digits of the satellite name, uppercased), not a hardcoded "EROS C3" → "E3" mapping —
+    hardcoding specific satellite names would violate `DashboardViewModel`'s own "never hardcoded
+    to EROS C3/RUNNER 1" rule for a backend that can return any satellite list. The design's own
+    literal glyphs ("E3"/"R1") aren't reproduced exactly for this reason — flagged as a deliberate
+    deviation. Row highlighting (primary-tinted avatar/background/chip vs. the default
+    secondaryContainer/outline styling) tracks whether a row **is the same pass shown in the hero
+    card** (`pass.id == nextPass?.id`), not satellite identity — re-reading the design's own row
+    styling this way (rather than as a literal per-satellite color) is what makes it map onto the
+    real per-tab-scoped data model at all, since every row in a tab's list already belongs to that
+    same one satellite.
+- **[DECORATIVE], omitted entirely** (no layout gap results from omitting them): the OS status bar
+  (edge-to-edge already handles this), the notification bell + amber badge dot (no
+  unread/notification concept anywhere), and the "Alert 15 min before" assist chip
+  (`alertMinutes` lives on `UserSettings`/`SettingsViewModel`, which `DashboardViewModel` never
+  loads — wiring it here would mean inventing a repository call this ViewModel doesn't have).
+- **[DECORATIVE], kept as static non-interactive chrome** (omitting would leave a visible empty
+  gap): the elapsed-ratio ring around the countdown. `DashboardUiState` only exposes a raw
+  remaining `Duration`, never an elapsed *fraction* — there's no pass-start time exposed anywhere
+  to compute one against — so it renders as a plain static ring outline (no arc, no fabricated
+  "62%"/"elapsed" text) rather than inventing a percentage.
+- **FAB target**: pure navigation (truth map: "fine as pure navigation to Map/Sky View, routes
+  exist"). Wired to **Map** — its icon (an orbiting dot) reads as "track on a map," and Sky View
+  stays reachable from the bottom nav bar regardless.
+- **Empty/error states not specified by the design, resolved here**: no satellites at all → "No
+  satellites configured." No upcoming pass for the selected tab → hero card and metric grid are
+  skipped entirely in favor of a plain "No upcoming passes." message (rather than rendering a hero
+  card with nothing to show). A tab's `loadError` (a real, existing field — see
+  `SatelliteTabState.loadError` above) is surfaced as a small error-colored banner below the tabs,
+  since it's a real per-tab signal the ViewModel already produces and nothing else in the UI would
+  otherwise show it.
+
+### Testing
+
+No Compose UI testing convention exists in this project beyond one coarse instrumented smoke test
+(`MainActivityTest`, asserting a literal string exists after the real Activity launches) — no
+per-screen `*ScreenTest.kt` pattern to follow, and none was invented here per the task's own
+instructions to flag this rather than skip silently or invent one unprompted. `MainActivityTest`
+itself needed updating regardless of that: it asserted `onNodeWithText("Dashboard")`, which no
+longer exists anywhere on screen now that Dashboard shows real ViewModel-driven content instead of
+a one-line placeholder — updated to assert on the top app bar's static "SatelliteTracker" title,
+present regardless of load state.
+
+Verified in this environment: `./gradlew :app:compileDebugKotlin`, `:app:testDebugUnitTest` (all
+119 existing unit tests green — two of them, in `DashboardViewModelTest`, gained extra assertions
+for the new `nextPass` field rather than new test methods), and `:app:assembleDebug`, all
+`BUILD SUCCESSFUL`. **Not verified**: `:app:connectedDebugAndroidTest` (`MainActivityTest`,
+`ApiKeyStoreTest`) — no `adb`/connected device or emulator was available in this environment.
+Nothing about this task's changes is known to affect `ApiKeyStoreTest` specifically; running the
+full instrumented suite before merging is recommended regardless.
+
 ## Full Pass List screen — history pagination + merged upcoming/history list (Milestone E)
 
 A separate destination from the Dashboard (reachable via a button from Dashboard and the bottom
@@ -413,6 +649,151 @@ mockup for this screen are **not** implemented — those fields don't exist as b
 (repo-root CLAUDE.md's paginated pass history section only defines `orbitNumberFrom/To`,
 `maxElevationFrom/To`, `aosFrom/To`, `losFrom/To`, and even of those, only the two mapped here are
 exposed by `PassHistoryFilter`). Flag this explicitly to whoever wires the Composable UI up next.
+
+---
+
+## Full Pass List screen + Filter Modal — Composable/UI (Milestone E)
+
+Replaces the placeholder from the nav-graph task with real content: `FullPassListScreen.kt`
+(`ui/fullpasslist/`) and `FilterModalSheet.kt`, wired to the already-complete
+`FullPassListViewModel`/`FullPassListUiState` above, plus one small ViewModel addition
+(`resetFilters()`). Driven by the code truth map's Screens 2/8 (Upcoming), 3/8 (History), and 4/8
+(Filter Modal) verdicts. Does **not** touch Dashboard, Settings, Pass Details, Map, or Sky View.
+
+### `resetFilters()` and the `DEFAULT_TIME_WINDOW`/`DEFAULT_MIN_MAX_ELEVATION` constants
+
+`FullPassListViewModel` gained `fun resetFilters()`, resetting `timeWindow` and `minMaxElevation`
+(not `filter` — the Upcoming/History/All choice isn't a Filter Modal control, and "reset filters"
+shouldn't silently switch the user off whichever of the three they're looking at) to two new
+public companion constants, `DEFAULT_TIME_WINDOW` (`TimeWindow.Last7Days`) and
+`DEFAULT_MIN_MAX_ELEVATION` (`null`) — the same values the initial `FullPassListUiState` already
+used inline. Making them public, named constants (rather than leaving the defaults as inline
+literals) means the Composable layer's filter-badge-count and active-filter-chip derivation (see
+below) compares against the exact same "default" `FullPassListViewModel` itself uses, instead of
+a second hardcoded copy that could drift. Like the existing setters, `resetFilters()` no-ops (no
+reload) if already at the defaults. Covered by two new `FullPassListViewModelTest` cases.
+
+### Single-satellite scope is final — not a gap
+
+`FullPassListViewModel` stays permanently scoped to one `satelliteId` via `SavedStateHandle`. The
+design mockup's "All / EROS C3 / RUNNER-1 / VENμS" satellite-tabs row (Screen 2/8) and the Filter
+Modal's satellite multi-select chips (Screen 4/8) are both omitted entirely — there is no
+multi-satellite aggregation anywhere in this ViewModel, and none was added. **If multi-satellite
+browsing becomes a real requirement later, it needs a deliberate `FullPassListViewModel` redesign,
+not a quick UI addition** — the current architecture (one `satelliteId` nav arg, one Room
+history-load-state row per satellite, one merged list) assumes a single satellite per screen
+instance throughout.
+
+### Three-state segmented control, ALL as the real default — a deliberate deviation from the design
+
+The design mockup shows a two-way Upcoming/History toggle. The actual control is a three-way
+`SingleChoiceSegmentedButtonRow` (`PassListFilter.UPCOMING`/`.HISTORY`/`.ALL`), with **ALL as the
+default on screen entry** (already `FullPassListUiState`'s initial value — no ViewModel change was
+needed for this part) — a single continuous chronological list, upcoming-first then history, per
+`FullPassListViewModel`'s existing merge/sort logic, with Upcoming-only and History-only as
+additional filter choices rather than the primary two-way choice the mockup implies. This is a
+confirmed product requirement, not derived from the design file.
+
+### Composable-layer-only derivations — no new UiState fields beyond `resetFilters()`'s constants
+
+Per the truth map's `[PARTIAL]` verdicts, none of these needed a new `FullPassListUiState` field:
+
+- **Date-group headers** ("TODAY · 29 AUG", "YESTERDAY · 28 AUG", "TOMORROW · 30 AUG", or a plain
+  "24 AUG" beyond that ±1-day window) — `FullPassListScreen.kt`'s private `buildGroupedItems`
+  walks the already-ordered `passes` list once, grouping by calendar day
+  (`Pass.aos.atZoneSameInstant(ZoneId.systemDefault()).toLocalDate()`) and inserting a header
+  whenever the date changes. Never re-sorts or re-fetches — pure display grouping over data the
+  ViewModel already ordered. The merged ALL list's upcoming/history boundary
+  (`FullPassListUiState.nearestPassId`) is deliberately **not** surfaced as a second, separate
+  divider here — the date headers already make the future-to-past transition visually obvious on
+  their own, so an extra boundary marker would be redundant. `nearestPassId` stays real,
+  ViewModel-computed state; this screen just doesn't have an additional use for it beyond what the
+  date headers already convey.
+- **Filter badge count** (the number on the Filter button, via `BadgedBox`/`Badge`) — derived by
+  comparing `state.timeWindow`/`state.minMaxElevation` against `FullPassListViewModel
+  .DEFAULT_TIME_WINDOW`/`.DEFAULT_MIN_MAX_ELEVATION` at render time (`buildActiveFilterChips`
+  doubles as this derivation — its result list's size is the badge count).
+- **"Show N passes" / list counts** — `state.passes.size` directly, nowhere else.
+- **Active-filter chips** — one `InputChip` per non-default filter, each independently removable:
+  tapping a chip calls the relevant setter with the **default** value (`onSetTimeWindow
+  (DEFAULT_TIME_WINDOW)` / `onSetMinMaxElevation(DEFAULT_MIN_MAX_ELEVATION)`), never
+  `resetFilters()`, which would clear both at once. Time-window chip labels read "Last 24h"/"Last
+  48h" rather than the design's literal "Next 48h" — `TimeWindow` resolves to a **look-back**
+  window (`now.minusHours(...)`, see `PassHistoryFilterMappers.resolve`), so "Next" would name the
+  wrong direction; a deliberate wording correction, not a literal copy of the mockup.
+
+### No staged/draft filter state — every control applies immediately
+
+Per this task's confirmed decisions, no draft/staged filter state was added anywhere. Every Filter
+Modal control calls its `FullPassListViewModel` setter and reloads on the spot, exactly like the
+existing setters already work:
+
+- The design's "Show N passes" commit button with a live preview count does **not** get a real
+  preview. It's a plain dismiss button showing the **current** (already loading/loaded)
+  `passes.size` — not a hypothetical count for a not-yet-applied filter.
+- **The elevation slider is the one control that doesn't call its setter on every micro-change** —
+  a local `mutableFloatStateOf` mirrors the thumb for smooth dragging, and
+  `onSetMinMaxElevation` fires only in `onValueChangeFinished` (drag release). This isn't staged
+  ViewModel state (nothing overrides what's actually applied in the meantime); it's the standard
+  Material3 `Slider` pattern for not reloading on every intermediate drag pixel, which "applies
+  immediately" was never meant to require.
+- **Tapping the "Custom range" time-window chip doesn't call `onSetTimeWindow` by itself** either
+  — it only reveals the from/to date fields locally (`customRangeExpanded`, a plain UI-visibility
+  boolean, not a filter draft). The setter only fires once an actual date is picked in one of the
+  two `DatePickerDialog`s.
+- **Cancel** (truth map: "pure UI dismissal, no repository call") is fulfilled by the sheet's
+  header × button (and the scrim/back gesture) alone — no separate "Cancel" button was added next
+  to "Show N passes", since with no staged state to discard, a dedicated Cancel action would do
+  exactly what dismissing already does.
+
+### "All time" is an explicit chip, not a hidden empty-`Custom` state
+
+`TimeWindow.Custom(null, null)` is the one way this filter model expresses "no time constraint"
+(see `TimeWindow`'s own doc comment). The Filter Modal surfaces it as its own labeled **"All
+time"** chip, tapped directly (no date picker involved) — distinct from **"Custom range"**, which
+reveals two independent `DateBoundField`s ("From"/"To", each nullable on its own, each with its
+own "Clear"). Picking a date converts through `LocalDate` in the *device's* local zone, not UTC —
+`DatePickerDialog`'s `selectedDateMillis` is UTC-midnight internally, but the calendar day it
+visually shows is read as the date the user means in their own timezone, then converted to an
+`OffsetDateTime` via `date.atStartOfDay(ZoneId.systemDefault())`. **"To" is treated as through the
+end of that day** (the next day's start, exclusive) rather than that day's own midnight — a
+judgment call flagged here rather than silently decided, since "up to and including this day"
+reads as the more useful meaning for a history filter.
+
+### Decorative omissions — omitted entirely, not rendered disabled
+
+Per the truth map and this task's explicit instructions: the search icon and overflow menu (no
+backing action for either); the satellite multi-select chips (see single-satellite scope above);
+and the Filter Modal's duration/pass-direction/sunlit-only/horizon-mask controls — none of these
+have any backend param whatsoever, so none are rendered even as disabled chrome, unlike a
+decorative element that might warrant a disabled state purely for layout reasons.
+
+### Pagination
+
+Infinite-scroll, not a "load more" tap target: a `LaunchedEffect` watches
+`listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index` via `snapshotFlow`, and calls
+`viewModel.loadMore()` once the last visible row is within a few items of the end of the currently
+loaded (grouped) list. `loadMore()` itself already no-ops for `UPCOMING` and while a load is in
+flight, so this fires freely without duplicating that guard in the Composable.
+
+### Navigation
+
+`SatTrakkNavHost`'s `FullPassListScreen` composable call no longer passes `satelliteId`/
+`satelliteName` explicitly — `hiltViewModel()` gives `FullPassListViewModel` its own
+`SavedStateHandle` from the same backstack entry, so the ViewModel already carries both
+(`FullPassListUiState.satelliteId`/`.satelliteName`) without threading them through a second time.
+The back arrow calls `navController.popBackStack()`; row taps navigate to
+`SatTrakkDestination.PassDetails.buildRoute(passId)`, the same dialog destination Dashboard's row
+taps already use.
+
+### Icons and formatting — small, local, not shared with Dashboard
+
+`navigation/NavIcons.kt` gained `BackArrowIcon`, `FilterIcon` (funnel), and `CloseIcon` (×) —
+small additions to the same shared Canvas-drawn icon set from the nav-graph task, since none of
+the existing five fit. `FullPassListScreen.kt`'s time/duration/relative-time formatting helpers
+are a small **local duplicate** of `DashboardScreen.kt`'s equivalents, not factored into a shared
+file — this task's scope explicitly excludes touching Dashboard, and extracting a shared
+formatting util would mean editing it.
 
 ---
 

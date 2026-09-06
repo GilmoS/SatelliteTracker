@@ -42,8 +42,8 @@ class FullPassListViewModel @Inject constructor(
             satelliteId = satelliteId,
             satelliteName = satelliteName,
             filter = PassListFilter.ALL,
-            timeWindow = TimeWindow.Last7Days,
-            minMaxElevation = null,
+            timeWindow = DEFAULT_TIME_WINDOW,
+            minMaxElevation = DEFAULT_MIN_MAX_ELEVATION,
             passes = emptyList(),
             nearestPassId = null,
             isLoadingMore = true,
@@ -80,6 +80,18 @@ class FullPassListViewModel @Inject constructor(
     fun setMinMaxElevation(minMaxElevation: Double?) {
         if (_uiState.value.minMaxElevation == minMaxElevation) return
         _uiState.value = _uiState.value.copy(minMaxElevation = minMaxElevation)
+        reload()
+    }
+
+    // Resets only timeWindow/minMaxElevation, not `filter` — the UPCOMING/HISTORY/ALL choice isn't
+    // one of the Filter Modal's controls (it's the screen's own segmented control) and "reset
+    // filters" shouldn't silently switch the user away from whichever of the three they're
+    // looking at. Wired to the Filter Modal's "Reset" button rather than composing two setter
+    // calls from the Composable layer, so the definition of "default" lives in exactly one place.
+    fun resetFilters() {
+        val current = _uiState.value
+        if (current.timeWindow == DEFAULT_TIME_WINDOW && current.minMaxElevation == DEFAULT_MIN_MAX_ELEVATION) return
+        _uiState.value = current.copy(timeWindow = DEFAULT_TIME_WINDOW, minMaxElevation = DEFAULT_MIN_MAX_ELEVATION)
         reload()
     }
 
@@ -208,5 +220,14 @@ class FullPassListViewModel @Inject constructor(
         ApiResult.AuthRequired -> "Authentication required."
         ApiResult.NetworkError -> "No network connection."
         is ApiResult.Success -> error("errorMessageFor called with a Success result")
+    }
+
+    companion object {
+        // Single source of truth for "default" filter values — used both for the initial state
+        // above and resetFilters(). Also public so the Composable layer's filter-badge-count and
+        // active-filter-chip logic (both derived at render time, not stored in UiState) compares
+        // against these exact values instead of a second hardcoded copy of "default".
+        val DEFAULT_TIME_WINDOW: TimeWindow = TimeWindow.Last7Days
+        val DEFAULT_MIN_MAX_ELEVATION: Double? = null
     }
 }

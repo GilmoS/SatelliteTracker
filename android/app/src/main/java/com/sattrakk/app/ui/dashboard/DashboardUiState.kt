@@ -11,6 +11,13 @@ data class SatelliteTabState(
     val satelliteName: String,
     val passes: List<Pass>,
     val nextPassCountdown: Duration?, // null if there's no upcoming pass at all
+    // The same pass nextPassCountdown counts down to — i.e. the earliest pass in `passes` whose
+    // AOS is still in the future, per DashboardViewModel's countdown-ticker derivation. Exposed
+    // here (rather than recomputed in the Composable layer) so the UI's hero-pass card can render
+    // the actual Pass fields (orbit/AOS/LOS/max elevation) without duplicating that "find nearest
+    // future pass" logic a second time. Like nextPassCountdown, only ever populated for the
+    // selected tab — see DashboardViewModel and android/CLAUDE.md.
+    val nextPass: Pass? = null,
     // Per-tab load-failure signal — not in the original spec shape, added so one satellite's
     // passes call failing doesn't blank out tabs that loaded fine. Null means this tab's passes
     // are (still) good data, either freshly loaded or left over from a prior successful load; a
