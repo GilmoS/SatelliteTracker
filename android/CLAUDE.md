@@ -20,12 +20,14 @@ for Dashboard, Full Pass List, Settings, and Pass Details) are both complete.**
 Also built: the navigation graph (`MainNavHost`, all 6 routes), the app-root session-state
 wrapper (`SatTrakkApp`/`ReauthScreen`), the M3 theme (`ui/theme/`, extracted from the design MCP),
 the Dashboard screen's real Composable content (see "Navigation, session wrapper, M3 theme, and
-the Dashboard screen" below), and the Full Pass List screen + Filter Modal's real Composable
+the Dashboard screen" below), the Full Pass List screen + Filter Modal's real Composable
 content (`FullPassListScreen.kt`, `FilterModalSheet.kt` — see "Full Pass List screen + Filter
 Modal — Composable/UI" below), including one small ViewModel addition,
-`FullPassListViewModel.resetFilters()`. **Dashboard and Full Pass List are the only screens with
-real content; Settings, Pass Details, Map, and Sky View all still have placeholder-only
-Composables** — this file will grow again once those land.
+`FullPassListViewModel.resetFilters()`, and the Settings screen's real Composable content
+(`SettingsScreen.kt` — see "Settings screen — Composable/UI" below), including one small
+`SettingsUiState`/`SettingsViewModel` addition, `SatelliteVisibility.noradId`. **Dashboard, Full
+Pass List, and Settings are the only screens with real content; Pass Details, Map, and Sky View
+all still have placeholder-only Composables** — this file will grow again once those land.
 
 ---
 
@@ -799,9 +801,9 @@ formatting util would mean editing it.
 
 ## Settings screen — hidden satellites, permission status, alert-minute preferences (Milestone E)
 
-A separate destination from Dashboard and Full Pass List (no Composable exists for this screen
-yet — the screen is designed separately and will be wired to this logic layer in a later step).
-Covers three independent concerns: which satellites are hidden from the Dashboard (purely local),
+A separate destination from Dashboard and Full Pass List. This section covers the logic layer;
+see "Settings screen — Composable/UI" further below for the real Composable content built against
+it. Covers three independent concerns: which satellites are hidden from the Dashboard (purely local),
 notification permission status (read-only), and the tester's alert-minute/push preferences
 (backend-synced). `HiddenSatellitesStore` (`data/local/`), `NotificationPermissionManager`
 (`data/permission/`), and `SettingsViewModel` + `SettingsUiState` (`ui/settings/`) cover this.
@@ -938,6 +940,142 @@ list in sync with the store. `alertMinutes`/`UserSettings` and `satellites`/`Sat
 in parallel (`async`/`awaitAll`) on `init`, matching `DashboardViewModel`'s and
 `FullPassListViewModel`'s existing per-source-parallel-load shape; a failure on one side doesn't
 blank the other, and `error` describes only the side that failed.
+
+---
+
+## Settings screen — Composable/UI (Milestone E)
+
+Replaces the placeholder from the nav-graph task with real content: `SettingsScreen.kt`
+(`ui/settings/`), wired to the already-complete `SettingsViewModel`/`SettingsUiState` above, plus
+one small addition to both: `SatelliteVisibility.noradId`. Driven by the code truth map's Screen
+8/8 verdicts, read against the design MCP's actual "M3 Settings" screen markup (not just the
+truth map's prose), plus this task's own confirmed decisions. Does **not** touch Dashboard, Full
+Pass List, Pass Details, Map, or Sky View.
+
+### `SatelliteVisibility.noradId` — a deliberate, flagged exception to "no new UiState fields"
+
+The task's own scope said not to add new ViewModel/UiState fields, but also said to display the
+NORAD id on each satellite row (truth map: "NORAD id is genuinely available here"). `SatelliteVisibility`
+(`satelliteId`, `satelliteName`, `isHidden`) had no such field — only the private `loadedSatellites:
+List<Satellite>` inside `SettingsViewModel` carries `noradId`, never surfaced on the UI-facing
+projection. This was flagged explicitly rather than silently resolved either way; the confirmed
+resolution was to add `noradId: Int` to `SatelliteVisibility` and populate it in the existing
+`combine()` block alongside `satelliteId`/`satelliteName` — no new fetch, no new state stream, just
+surfacing data the ViewModel already had in hand. `SettingsViewModelTest`'s existing
+initial-load test gained two extra assertions for this (matching the established pattern of
+extending an existing test over adding a new one for this kind of change), not a new test method.
+
+### Three design elements omitted, per this task's confirmed decisions
+
+- **"Minimum elevation" pass-filter slider** — omitted entirely, not even disabled. It maps to the
+  backend's *global* `Settings.MinElevation` (repo-root CLAUDE.md), which `SettingsRepository`
+  never touches — that repository only wraps the per-tester `/api/settings/me*` endpoints. There is
+  no client-side path to this value at all.
+- **"Outlook integration" card** (Connected account / Manage / schedule range / Team email CC) —
+  omitted entirely. This isn't an unimplemented feature; it reflects the pre-ICS Graph-based
+  "connected account" design that was explicitly replaced by the per-pass ICS-export flow (repo-root
+  CLAUDE.md's Calendar Sync section). None of `CalendarSyncSettings.TeamEmail`,
+  `Settings.OutlookDays`, or a "connected account" concept exists anywhere reachable from this
+  screen's ViewModel, and none should be invented for it.
+- **Satellite-tabs-equivalent**: none exists on this screen (there's no multi-satellite tab row
+  anywhere in the Settings mockup) — nothing was omitted here beyond what the truth map already
+  covered above.
+
+Also **not a design omission but a deliberate substitution**: the design's custom-drawn pill toggle
+(a filled track + circular thumb) is rendered as a standard Material3 `Switch` instead of a
+hand-copied shape — consistent with how `DashboardScreen`/`FullPassListScreen` already prefer stock
+M3 components (`PrimaryTabRow`, `SegmentedButton`, `FilterChip`) over reproducing the design's raw
+pixels. `checked = !satellite.isHidden` (visible is the Switch's "on" position, matching the
+design, since hiding is the sparse opt-out state — see `HiddenSatellitesStore` above).
+
+### `sendPushEnabled`/`setSendPushEnabled`/`needsAlertMinutesSelection` are NOT wired here
+
+`SettingsUiState` already exposes these (a derived "is push on at all" concept, with a
+restore-last-selection flow), but neither this task's confirmed decisions nor the design mockup
+itself calls for a separate push on/off control distinct from the five alert-timing chips — the
+design's "Alert timing" section is just the five chips, with no separate switch above or below
+them. Per this task's explicit scope ("Alert timing chips ... wired to `updateAlertMinutes()`"),
+each chip's selected state is `state.alertMinutes.contains(minute)` and tapping one calls
+`updateAlertMinutes(alertMinutes ± minute)` directly — a plain multi-select, not routed through
+`setSendPushEnabled`. An empty selection already means "no alerts" on the backend (repo-root
+CLAUDE.md), so this reaches the same end state without the extra layer. `lastNonEmptyAlertMinutes`/
+`needsAlertMinutesSelection`/`sendPushEnabled` remain real, tested ViewModel state with no
+Composable consumer yet — leave them as-is; they're prep for a possible future "Send push" toggle
+UI, not dead code to remove.
+
+### Push notification permission section — new UI, no design element at all
+
+Per this task's confirmed decision #4, this section (`PermissionStatusCard`, placed below "Alert
+timing") has **no** corresponding element anywhere in the source design file — built fresh, in the
+app's existing M3 visual language (a `surfaceContainerLow` card matching the "Satellites" card's
+own container color/shape, a leading icon, primary-colored section label matching every other
+section header on this screen).
+
+- **Status row**: `BellIcon` (a new, original glyph added to `navigation/NavIcons.kt` — the design
+  has no bell/notification icon anywhere to copy from) plus "Push notifications enabled"/"not
+  enabled" text, colored `primary`/`onSurfaceVariant` off `state.pushPermissionGranted` — the same
+  binary-state color convention `DashboardScreen`'s `isNextPass` styling already uses, not a new
+  pattern.
+- **Two mutually exclusive action buttons, shown only when not granted** — `shouldShowRationale`
+  decides which, per the task's explicit branching: `true` → a filled `Button` ("Enable
+  notifications") that launches `ActivityResultContracts.RequestPermission()` for
+  `POST_NOTIFICATIONS`; `false` → a filled `Button` ("Open app settings") that starts
+  `ACTION_APPLICATION_DETAILS_SETTINGS` for this app's package. **Flagged, not silently
+  resolved**: Android's `shouldShowRequestPermissionRationale` returns `false` both for "never
+  asked yet" and "permanently denied" — there is no third platform signal to distinguish them, and
+  `NotificationPermissionManager` doesn't track its own "have we asked before" bit (see that
+  section above). This means a tester's very first visit to this screen, having never been asked
+  for the permission at all, sees the "Open app settings" button rather than a direct system
+  prompt. This is the literal, explicit branching this task specified, not a bug — revisit only if
+  a future task decides to persist an "already asked once" bit somewhere to break the tie.
+- **Refresh triggers**: an initial `LaunchedEffect(Unit)` (so a fresh navigation to this screen is
+  correct immediately, since the Activity may already be resumed and never fire its own `ON_RESUME`
+  for this composition), a `DisposableEffect` `LifecycleEventObserver` on `ON_RESUME` (catches the
+  user granting the permission from system settings and returning), and the permission-request
+  launcher's own completion callback. All three call the same
+  `SettingsViewModel.refreshPermissionStatus(activity)` — never a bespoke read of
+  `NotificationPermissionManager` from the Composable layer.
+- The screen sources its `Activity` via `LocalContext.current as Activity`, per
+  `NotificationPermissionManager.shouldShowRationale`'s own doc comment — never stored beyond the
+  composition, matching that method's design intent exactly.
+
+### "Add satellite" — tappable row + snackbar, never disabled
+
+Per this task's confirmed decision #1: the row looks and behaves like any other tappable list
+item (no dimming, no disabled affordance) and calls the existing `addSatellite()` stub on click.
+The stub's `stubMessage` is surfaced via a `SnackbarHostState`/`Scaffold.snackbarHost`, the first
+`Snackbar` usage anywhere in this app — a `LaunchedEffect(state.stubMessage)` shows it once and
+immediately calls `consumeStubMessage()` so it doesn't reappear on a later recomposition or config
+change (matching the existing `PassDetailsViewModel`/`DashboardViewModel` convention of the
+Composable layer draining one-shot ViewModel state right after consuming it).
+
+### Loading/error handling
+
+`SettingsUiState` is a single flat data class (`isLoading`/`error`), not the sealed
+Loading/Content/Error hierarchy `DashboardUiState` uses — so the screen shows a centered
+`CircularProgressIndicator` while `isLoading`, and once loaded, an error-colored banner above the
+sections if `error` is non-null (the ViewModel's existing per-source error message, e.g.
+`"Satellites: ..."` — see `SettingsViewModel.loadInitialData`), without hiding whichever section
+did load successfully. This mirrors `FullPassListScreen`'s non-blocking error banner, not
+`DashboardScreen`'s whole-state `Error` branch (there is no whole-state error concept on
+`SettingsUiState` to branch on).
+
+### Testing
+
+Same posture as the Full Pass List task: no Compose UI testing convention exists in this project
+beyond the one coarse instrumented smoke test (`MainActivityTest`), and none was invented here.
+`MainActivityTest` itself needed no changes — it only asserts on Dashboard's top app bar title,
+which this task never touches. `SettingsViewModelTest` gained two new assertions (NORAD id
+flowing through `combine()`) on the existing initial-load test; no new test file was added for
+`SettingsScreen.kt` itself, consistent with the same gap flagged (not silently worked around) in
+the Dashboard and Full Pass List tasks.
+
+Verified in this environment: `:app:compileDebugKotlin`, `:app:testDebugUnitTest` (all 121
+existing unit tests green — the count is unchanged from before this task, since the only test
+change was two extra assertions on an existing test method, not a new one), and
+`:app:assembleDebug`, all `BUILD SUCCESSFUL`. **Not verified**: `:app:connectedDebugAndroidTest`
+— no `adb`/connected device or emulator was available in this environment, same limitation noted
+in the Dashboard task.
 
 ---
 
