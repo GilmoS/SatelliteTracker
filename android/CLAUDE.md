@@ -8,14 +8,13 @@ directly (see repo-root CLAUDE.md, "Single Source of Truth Rules").
 This file currently covers what's built as of Milestone E, Step 2.1 (networking + auth
 infrastructure), Step 2.2 (Satellite/Pass/Notes repositories with Room caching), Step 2.3
 (`AuthRepository`/`SettingsRepository`), Step 3.1 (`SessionManager` + `DashboardViewModel` +
-`DashboardUiState` — logic only, no UI yet), the Full Pass List screen's data layer
-(`PassRepository.getPassHistory`, `HistoryLoadStateEntity`/Dao, `FullPassListViewModel` +
-`FullPassListUiState` — logic only, no UI yet, see below), the Settings screen's logic layer
-(`HiddenSatellitesStore`, `NotificationPermissionManager`, `SettingsViewModel` +
-`SettingsUiState` — logic only, no UI yet, see below), and the Pass Details Modal's logic layer
-(`PassDetailsUiState`, `PassDetailsEvent`, `PassDetailsViewModel` — logic only, no UI yet, see
-below). **Step 2 (the entire Android data layer) and Step 3 (the entire ViewModel/UiState layer
-for Dashboard, Full Pass List, Settings, and Pass Details) are both complete.**
+`DashboardUiState`), the Full Pass List screen's data layer (`PassRepository.getPassHistory`,
+`HistoryLoadStateEntity`/Dao, `FullPassListViewModel` + `FullPassListUiState`), the Settings
+screen's logic layer (`HiddenSatellitesStore`, `NotificationPermissionManager`,
+`SettingsViewModel` + `SettingsUiState`), and the Pass Details Modal's logic layer
+(`PassDetailsUiState`, `PassDetailsEvent`, `PassDetailsViewModel`, see below). **Step 2 (the
+entire Android data layer) and Step 3 (the entire ViewModel/UiState layer for Dashboard, Full Pass
+List, Settings, and Pass Details) are both complete.**
 
 Also built: the navigation graph (`MainNavHost`, all 6 routes), the app-root session-state
 wrapper (`SatTrakkApp`), the M3 theme (`ui/theme/`, extracted from the design MCP), the Dashboard
@@ -25,13 +24,16 @@ screen" below), the Full Pass List screen + Filter Modal's real Composable conte
 Composable/UI" below), including one small ViewModel addition,
 `FullPassListViewModel.resetFilters()`, the Settings screen's real Composable content
 (`SettingsScreen.kt` — see "Settings screen — Composable/UI" below), including one small
-`SettingsUiState`/`SettingsViewModel` addition, `SatelliteVisibility.noradId`, and the beta
+`SettingsUiState`/`SettingsViewModel` addition, `SatelliteVisibility.noradId`, the beta
 program's Tester Entry screen (`TesterEntryScreen.kt` + `TesterEntryViewModel` — see "Tester Entry
 screen" below), which replaced the earlier placeholder `ReauthScreen` outright (deleted, not kept
-alongside it) as `SatTrakkApp`'s `SessionState.RequiresReauth` content. **Dashboard, Full Pass
-List, Settings, and Tester Entry are the only screens with real content; Pass Details, Map, and
-Sky View all still have placeholder-only Composables** — this file will grow again once those
-land.
+alongside it) as `SatTrakkApp`'s `SessionState.RequiresReauth` content, and the Pass Details
+Modal's real Composable content (`PassDetailsScreen.kt` — see "Pass Details Modal — Composable/UI"
+below), including two small `PassDetailsUiState`/`PassDetailsViewModel` additions
+(`satelliteName`/`satelliteNoradId` resolution and the `exportToCalendar()`/`stubMessage` stub).
+**This completes Step 3's full screen set** — Dashboard, Full Pass List, Settings, and Pass
+Details all now have real Composable content; **Map and Sky View remain placeholder-only**,
+pending Milestone F (steps 6/7).
 
 ---
 
@@ -1182,15 +1184,15 @@ in the Dashboard task.
 ## Pass Details Modal — pass detail + notes editing (Milestone E, Step 3 complete)
 
 Set up as a `passdetails/{passId}` screen destination by the nav scaffolding, but functions as a
-modal dialog over the Dashboard/Full Pass List, not a full-screen navigation target — no
-Composable exists for this yet (designed separately). Builds entirely on the existing
-`PassRepository` (`getPassById`, `setNotify`) and `NotesRepository` (`getNotes`/`createNote`/
-`updateNote`/`deleteNote`) — no new repository methods, no backend changes.
-`PassDetailsUiState`/`PassDetailsEvent`/`PassDetailsViewModel` (`ui/passdetails/`) cover this.
-Covered by `PassDetailsViewModelTest`. **This closes out Step 3's ViewModel/UiState layer in
-full** — Dashboard, Full Pass List, Settings, and Pass Details are now all done at the
-ViewModel/UiState level; the remaining work is Composable/UI wiring for all four, not more
-ViewModel work.
+modal dialog over the Dashboard/Full Pass List, not a full-screen navigation target. Builds
+entirely on the existing `PassRepository` (`getPassById`, `setNotify`), `NotesRepository`
+(`getNotes`/`createNote`/`updateNote`/`deleteNote`), and — added in the Composable/UI task below —
+`SatelliteRepository` (`getSatellites`) — no new repository methods, no backend changes.
+`PassDetailsUiState`/`PassDetailsEvent`/`PassDetailsViewModel` (`ui/passdetails/`) cover the
+logic; `PassDetailsScreen.kt` covers the real Composable content (see "Pass Details Modal —
+Composable/UI" below). Covered by `PassDetailsViewModelTest`. **This closes out Step 3's
+ViewModel/UiState layer in full** — Dashboard, Full Pass List, Settings, and Pass Details are now
+all done at the ViewModel/UiState level.
 
 ### Notes editing is dialog-based, not inline — `EditingNoteState`
 
@@ -1204,26 +1206,41 @@ call a repository. `closeNoteDialog()` in particular discards any in-progress ed
 persistence, by design (matches `SettingsViewModel`'s stubs in spirit: local-only UI state, not
 backed by anything durable).
 
-### Full-state error on `getPassById` failure vs. partial content on `getNotes` failure
+### Full-state error on `getPassById` failure vs. partial content on `getNotes`/satellite failure
 
-Pass and notes are loaded in parallel on `init` (same `async`/`awaitAll` shape as
-`DashboardViewModel`'s per-tab loading and `FullPassListViewModel.loadAll`), but the two failures
-are handled asymmetrically, deliberately:
+Pass, notes, and (as of the Composable/UI task) the satellite catalog are loaded in parallel on
+`init` (same `async`/`awaitAll` shape as `DashboardViewModel`'s per-tab loading and
+`FullPassListViewModel.loadAll`), but a `getPassById` failure is handled asymmetrically from the
+other two, deliberately:
 
 - **`getPassById` fails → the entire `PassDetailsUiState` becomes an error state**: `pass` stays
-  `null`, `error` is set, and `notes` is left empty even if `getNotes` succeeded in parallel — its
-  result is discarded outright. Rationale: without the pass itself (AOS/LOS/elevation/notify —
-  the primary content this whole modal exists to show), there's not enough left to justify
-  rendering anything.
-- **`getPassById` succeeds but `getNotes` fails → partial content**: `pass` is shown normally,
-  `notes` is an empty list, and `error` is set to describe the notes failure. Rationale: notes are
-  secondary/supplementary content — losing them for one load shouldn't hide the primary content
-  the user actually opened this modal to see.
+  `null`, `error` is set, and `notes`/`satelliteName`/`satelliteNoradId` are all left at their
+  empty/null defaults even if the other two calls succeeded in parallel — their results are
+  discarded outright. Rationale: without the pass itself (AOS/LOS/elevation/notify — the primary
+  content this whole modal exists to show), there's not enough left to justify rendering anything.
+- **`getPassById` succeeds but `getNotes` and/or the satellite lookup fails → partial content**:
+  `pass` is shown normally, the failed side's field(s) stay at their empty/null defaults, and
+  `error` describes whichever failed (notes checked first, satellite lookup second, if both fail).
+  Rationale: notes and the satellite name/NORAD id are both secondary/supplementary content —
+  losing either for one load shouldn't hide the primary content the user actually opened this
+  modal to see.
 
 This is the opposite asymmetry from `DashboardViewModel`'s per-tab philosophy (there, *every*
-tab's own failure is isolated and never blanks the *other* tabs) — here there are only two, and
-one is strictly primary over the other, which is why one failure mode blanks everything and the
-other doesn't.
+tab's own failure is isolated and never blanks the *other* tabs) — here `getPassById` is strictly
+primary over the other two, which is why its failure mode blanks everything and theirs don't.
+
+### Satellite name/NORAD id resolution — a confirmed gap, closed the same way Dashboard/Settings do it
+
+Before the Composable/UI task, `PassDetailsUiState` had no satellite lookup at all — `Pass` only
+carries an opaque `satelliteId`, so the screen had no way to show a satellite name or NORAD id.
+This was a real, flagged gap (per the code truth map's Screen 7/8 verdict), not silently resolved:
+`PassDetailsViewModel` now also fetches `SatelliteRepository.getSatellites()` in the same parallel
+`async`/`awaitAll` batch as `getPassById`/`getNotes`, and resolves `satelliteName`/
+`satelliteNoradId` by matching `Satellite.id == Pass.satelliteId` — the exact same "fetch the
+24h-TTL, Room-cached full catalog and find-by-id" pattern Dashboard and Settings already use,
+rather than inventing a new by-id repository method. If the id has no match in the catalog (should
+not happen for a valid pass, but not asserted against), both fields simply stay `null` with no
+error — only an actual fetch failure (`NetworkError`/`Error`/`AuthRequired`) sets `error`.
 
 ### No optimistic updates — every mutation waits for repository confirmation
 
@@ -1258,6 +1275,130 @@ guidance's own carve-out for staying event-based) — but no prior event-channel
 in the codebase to match, since every earlier ViewModel used only `StateFlow`. This establishes
 that pattern for future screens. **The Map screen doesn't exist yet (step 6), so this event
 currently has no listener — that's expected, not a gap;** it's built ready for that future wiring.
+
+---
+
+## Pass Details Modal — Composable/UI (Milestone E)
+
+Replaces the placeholder from the nav-graph task with real content: `PassDetailsScreen.kt`
+(`ui/passdetails/`), wired to the already-complete `PassDetailsViewModel`/`PassDetailsUiState`
+above, per the code truth map's Screen 7/8 verdicts and this task's confirmed decisions. Does
+**not** touch Dashboard, Full Pass List, Settings, Map, or Sky View. **This completes Step 3's
+full screen set** (Dashboard, Full Pass List, Settings, Pass Details) — Map and Sky View remain
+placeholders pending Milestone F (steps 6/7).
+
+### Renders as a self-sized card, not the stock `AlertDialog`-width dialog
+
+`PassDetails` was already registered as a `dialog(...)` nav destination (from the nav-graph task),
+but with no `DialogProperties` of its own it inherited Compose Navigation's default
+`usePlatformDefaultWidth = true`, which caps a dialog's content to the narrow, wrap-content
+`AlertDialog` width — too narrow for AOS/LOS + a 5-cell metric grid + a notes list.
+`SatTrakkNavHost`'s `dialog(...)` call for this route now passes
+`DialogProperties(usePlatformDefaultWidth = false)`, and `PassDetailsScreen` itself centers a
+`Surface` card (`Modifier.fillMaxWidth().heightIn(max = 640.dp)`) with its own internal
+`verticalScroll` — this is the "should float over whatever's behind it, not assume full-screen
+chrome" instruction made concrete: no `TopAppBar`, no `Scaffold` at the top level, just a plain
+header `Row` (back arrow + satellite name/pass-id/NORAD-id + max-elevation chip) inside the card.
+This is the only touch to `SatTrakkNavHost.kt` in this task, scoped to the one `dialog(...)` call.
+
+### Header ground-track sparkline — on hold, not built
+
+Per the confirmed decision, the design's header sparkline is deliberately **not** implemented,
+despite `PassRepository.getPassTrack()` being fully built and available — this is a "nice to
+have, later" call for a future UI polish pass, not a gap. No placeholder graphic is rendered
+either; the element is omitted from the layout entirely, exactly as instructed.
+
+### "Export to calendar (ICS)" — a stub, same pattern as Settings' "Add satellite"
+
+The design's "Add to Outlook" button is relabeled "Export to calendar (ICS)" (matching the app's
+actual ICS-based calendar flow — see repo-root CLAUDE.md's Calendar Sync section — not the old
+Graph-based "connected account" wording the design implies). No `CalendarRepository` exists yet on
+the Android side (a confirmed gap, to be built in a separate future task) — per the confirmed
+decision, this is built the same way `SettingsViewModel.addSatellite()` is stubbed:
+`PassDetailsViewModel.exportToCalendar()` only sets the new `PassDetailsUiState.stubMessage`
+field ("Exporting to calendar isn't available yet"), consumed via `consumeStubMessage()` and
+surfaced as a transient `Snackbar` in `PassDetailsScreen`, immediately cleared so it doesn't
+reappear on a later recomposition. The button itself is a normal, always-enabled, tappable
+`Button` — never disabled/grayed out — and calls no repository.
+
+### "Notify me" switch — a per-pass boolean, not a duplicate of the global alert-minutes setting
+
+The design shows a picker-style "Set alert" row ("15 minutes before AOS" with a chevron), implying
+per-pass minute selection — but the real backing (`PassDetailsViewModel.toggleNotify()`/
+`Pass.notify`) is a plain boolean. Per the confirmed decision, this is built as a standard M3
+`Switch` labeled "Notify me about this pass," with **no** minute picker and **no** attempt to
+expose or duplicate the tester's actual alert-timing preference (5/10/15/30/60 minutes), which is
+a separate, tester-global setting already configured on the Settings screen
+(`SettingsUiState.alertMinutes`). Toggling the switch calls `toggleNotify()` directly; per that
+method's own no-optimistic-update design, the switch's visual state only changes once the
+repository call confirms it.
+
+### Notes — the already-built dialog-based multi-note CRUD, not the design's single inline field
+
+Per the confirmed decision, the notes section uses `PassDetailsUiState.notes` (list, read-only
+display) + `editingNote` (`EditingNoteState`) exactly as already implemented in the ViewModel, not
+the design's single inline field with a char counter:
+
+- Each note renders as a row (content + a `TrashIcon` delete affordance); tapping the row (not the
+  delete icon) opens the edit dialog in `ExistingNote` mode with its content pre-filled. An "Add
+  note" text button opens the same dialog in `NewNote` mode.
+- The dialog itself (`NoteEditDialog`, a standard M3 `AlertDialog`) holds its typed content in
+  local `remember(editingNote) { mutableStateOf(...) }` state, seeded from `editingNote`'s current
+  content — `saveNote(content)` fires on "Save," `closeNoteDialog()` on "Cancel" or dismiss.
+  "Save" is disabled while the field is blank. Because `PassDetailsScreen` is itself already
+  hosted inside an Android `Dialog` window (the `dialog(...)` nav destination), this nests a second
+  Compose `Dialog` on top — standard, supported behavior, not a new pattern.
+- No "visible to your team" labeling or character counter is built — `Note` has no such fields
+  (per the confirmed decision and the truth map's own `[DECORATIVE]` verdict for both).
+- `TrashIcon` (`navigation/NavIcons.kt`) is a new original glyph — the design has no delete
+  concept on its single-field note UI to copy from.
+
+### "Show on map" — wired to the app's first Channel-based event consumer
+
+`PassDetailsScreen` collects `PassDetailsViewModel.events` via `LaunchedEffect(Unit) {
+viewModel.events.collect { ... } }` and, on `PassDetailsEvent.NavigateToMap`, calls the screen's
+`onNavigateToMap` callback. `SatTrakkNavHost` wires this to pop the modal off the backstack and
+navigate to `SatTrakkDestination.Map` — since Map is still an empty placeholder screen (Milestone
+F), this lands on that placeholder today, which is expected and correct, not a gap to fix here.
+
+### Loading/error states — distinct, not collapsed into one generic view
+
+Per `PassDetailsUiState`'s own already-implemented asymmetry (see above): `state.isLoading` shows
+a centered `CircularProgressIndicator` inside the card (header still rendered, so the back arrow
+stays available even while loading); `state.pass == null` with loading finished shows a full-card
+error message (the `getPassById`-failure case); otherwise the real content renders, with a
+non-blocking inline error banner above the AOS/LOS row if `state.error` is set from a
+notes/satellite-lookup failure (the partial-content case) — mirroring `FullPassListScreen`'s and
+`SettingsScreen`'s existing non-blocking-banner convention, not `DashboardScreen`'s whole-state
+`Error` branch.
+
+### Metric grid, AOS/LOS formatting — local duplicates, not shared with Dashboard
+
+`MetricCell`/`MetricGrid` in `PassDetailsScreen.kt` are a local copy of `DashboardScreen.kt`'s
+equivalent private composables (same card style/typography), and the date/time formatting helpers
+are local, small functions — not factored into a shared file, consistent with
+`FullPassListScreen.kt`'s own established precedent for the same reason (this task's scope
+excludes touching Dashboard). AOS/LOS are shown in both local and UTC (`formatTimeLocal`/
+`formatTimeUtc`); the single date line above them uses AOS's own local date, since a pass never
+spans a UTC day boundary long enough to make that ambiguous in practice. TLE epoch is omitted
+entirely, unchanged from the truth map's verdict — `Pass` only carries an opaque `tleId`, with no
+epoch data available client-side.
+
+### Testing
+
+Same posture as every prior UI task: no Compose UI testing convention exists in this project
+beyond the one coarse instrumented smoke test (`MainActivityTest`), and none was invented here.
+`MainActivityTest` itself needed no changes — it only asserts on Dashboard's top app bar title,
+unaffected by this task. `PassDetailsViewModelTest` gained four new test methods for this task's
+one real ViewModel change (satellite name/NORAD id resolution) and its stub methods: a satellite-
+lookup-failure case, a no-matching-satellite case, and `exportToCalendar()`/`consumeStubMessage()`
+— plus the existing "successful load" and "getPassById failure" tests gained extra assertions for
+the new `satelliteName`/`satelliteNoradId` fields, rather than duplicating those as new tests.
+
+Verified in this environment: `:app:compileDebugKotlin`, `:app:testDebugUnitTest` (134 tests
+green — 130 before this task, +4 in `PassDetailsViewModelTest`), and `:app:assembleDebug`, all
+`BUILD SUCCESSFUL`. **Not verified**: `:app:connectedDebugAndroidTest` — no `adb`/connected device
+or emulator was available in this environment, same limitation noted in every prior UI task.
 
 ---
 
