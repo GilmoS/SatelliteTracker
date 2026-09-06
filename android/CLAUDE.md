@@ -18,16 +18,20 @@ below). **Step 2 (the entire Android data layer) and Step 3 (the entire ViewMode
 for Dashboard, Full Pass List, Settings, and Pass Details) are both complete.**
 
 Also built: the navigation graph (`MainNavHost`, all 6 routes), the app-root session-state
-wrapper (`SatTrakkApp`/`ReauthScreen`), the M3 theme (`ui/theme/`, extracted from the design MCP),
-the Dashboard screen's real Composable content (see "Navigation, session wrapper, M3 theme, and
-the Dashboard screen" below), the Full Pass List screen + Filter Modal's real Composable
-content (`FullPassListScreen.kt`, `FilterModalSheet.kt` — see "Full Pass List screen + Filter
-Modal — Composable/UI" below), including one small ViewModel addition,
-`FullPassListViewModel.resetFilters()`, and the Settings screen's real Composable content
+wrapper (`SatTrakkApp`), the M3 theme (`ui/theme/`, extracted from the design MCP), the Dashboard
+screen's real Composable content (see "Navigation, session wrapper, M3 theme, and the Dashboard
+screen" below), the Full Pass List screen + Filter Modal's real Composable content
+(`FullPassListScreen.kt`, `FilterModalSheet.kt` — see "Full Pass List screen + Filter Modal —
+Composable/UI" below), including one small ViewModel addition,
+`FullPassListViewModel.resetFilters()`, the Settings screen's real Composable content
 (`SettingsScreen.kt` — see "Settings screen — Composable/UI" below), including one small
-`SettingsUiState`/`SettingsViewModel` addition, `SatelliteVisibility.noradId`. **Dashboard, Full
-Pass List, and Settings are the only screens with real content; Pass Details, Map, and Sky View
-all still have placeholder-only Composables** — this file will grow again once those land.
+`SettingsUiState`/`SettingsViewModel` addition, `SatelliteVisibility.noradId`, and the beta
+program's Tester Entry screen (`TesterEntryScreen.kt` + `TesterEntryViewModel` — see "Tester Entry
+screen" below), which replaced the earlier placeholder `ReauthScreen` outright (deleted, not kept
+alongside it) as `SatTrakkApp`'s `SessionState.RequiresReauth` content. **Dashboard, Full Pass
+List, Settings, and Tester Entry are the only screens with real content; Pass Details, Map, and
+Sky View all still have placeholder-only Composables** — this file will grow again once those
+land.
 
 ---
 
@@ -119,8 +123,10 @@ com.sattrakk.app/
 ├── ui/
 │   ├── theme/                       Color.kt, Shape.kt, Type.kt, Theme.kt — M3 tokens from the
 │   │                                design MCP (see below)
-│   ├── reauth/
-│   │   └── ReauthScreen.kt          Dead-end screen shown when SessionManager requires reauth
+│   ├── testerentry/
+│   │   ├── TesterEntryUiState.kt    Idle/Loading/NotAllowlisted/AlreadyRegistered/Error/Success
+│   │   ├── TesterEntryViewModel.kt  Beta tester entry screen logic — see below
+│   │   └── TesterEntryScreen.kt     Real Composable content — see below
 │   ├── dashboard/
 │   │   ├── DashboardUiState.kt      SatelliteTabState (+ nextPass, added this task) + DashboardUiState
 │   │   ├── DashboardViewModel.kt    Dashboard screen logic
@@ -240,7 +246,7 @@ constructor property literally named `safeApiCall`) meant every existing `safeAp
 parameter and import changed. This was a deliberate choice over threading a `SessionManager`
 parameter through every individual call site by hand.
 
-## SessionManager — global re-authentication state (Step 3.1)
+## SessionManager — global re-authentication state (Step 3.1, extended by the Tester Entry screen)
 
 `data/session/SessionManager.kt`:
 
@@ -251,8 +257,8 @@ sealed interface SessionState {
 }
 
 @Singleton
-class SessionManager @Inject constructor() {
-    val sessionState: StateFlow<SessionState> // backed by a MutableStateFlow, default Valid
+class SessionManager @Inject constructor(private val apiKeyStore: ApiKeyStore) {
+    val sessionState: StateFlow<SessionState> // backed by a MutableStateFlow, initial value below
     fun markReauthRequired()
     fun markValid()
 }
@@ -262,10 +268,100 @@ Session invalidation is modeled as **state, not a one-shot event stream** — pe
 Android guidance (state-driven UI over event-driven), so a future root composable can observe
 `sessionState` and react correctly regardless of how many times it's (re)collected across
 recomposition/process death, rather than consuming a single navigation event that could be missed
-across a config change. **`SafeApiCaller` is the single writer of `RequiresReauth`**, at the exact
-point a 401 is mapped to `ApiResult.AuthRequired` (see above) — no repository or ViewModel calls
-`SessionManager` directly for this. `markValid()` is called after a successful re-registration,
-once that flow exists in a future step (it exists on `SessionManager` now but has no caller yet).
+across a config change.
+
+- **Initial state is read from `ApiKeyStore` at construction**, not hardcoded to `Valid`: a fresh
+  install or a device with no stored key starts in `RequiresReauth` immediately, so `SatTrakkApp`
+  shows the Tester Entry screen (below) on first launch without needing a first failed request to
+  discover that the key is missing.
+- **`SafeApiCaller` is the only writer of `RequiresReauth`**, at the exact point a 401 is mapped to
+  `ApiResult.AuthRequired` (see above) — no repository or ViewModel calls `SessionManager`
+  directly for that transition.
+- **`markValid()` is called by `TesterEntryViewModel`** after a successful registration — the one
+  caller this method was originally added for in step 3.1, now wired up. See "Tester Entry
+  screen" below.
+
+## Tester Entry screen — the beta program's entry point (Milestone E)
+
+`ui/testerentry/` (`TesterEntryUiState.kt`, `TesterEntryViewModel.kt`, `TesterEntryScreen.kt`).
+No design source exists for this screen (it was never part of the Claude Design mockups) — built
+fresh in the app's existing M3 visual language (typography roles, `OutlinedTextField`/`Button`,
+`MaterialTheme.colorScheme.error` for failures), matching Dashboard/Full Pass List/Settings.
+
+**This is the beta program's tester entry point, not a general-purpose sign-up flow.** It exists
+because a tester's device has no API key yet (fresh install) or the stored one stopped working
+(`SessionManager.RequiresReauth`) — there is no concept of "create an account" here; the tester
+either already has an email on the backend's `AllowlistedEmails` table (repo-root CLAUDE.md's beta
+allowlist section) or they don't, and this screen's whole job is to resolve that against
+`AuthRepository.register()` (step 2.3 — already handles saving the raw returned key internally;
+this screen/ViewModel never touches `ApiKeyStore`).
+
+- **Fields**: email (basic client-side check only — non-empty, contains `"@"` — the real
+  gatekeeping is the backend's allowlist, so no deeper validation was added) and display name
+  (non-empty). The submit button is disabled while either is empty or a request is in flight.
+
+- **Three distinct outcomes, driven by `AuthRepository.register()`'s `ApiResult`**, matched on
+  `ApiResult.Error.code` (never on `.message` text):
+  - **`code == 403` → `TesterEntryUiState.NotAllowlisted`**: the email isn't on
+    `AllowlistedEmails` at all. Message points the tester at the dev team.
+  - **`code == 409` → `TesterEntryUiState.AlreadyRegistered`**: the email is allowlisted, but an
+    *active* `ApiKey` already exists for it. Message points at an **admin**, not the dev team, and
+    is deliberately different wording from the 403 case — these are different situations (not
+    allowlisted at all, vs. allowlisted but needs a manual admin reset) and collapsing them into
+    one generic "registration failed" message would leave the tester unable to tell which one
+    applies to them.
+  - **Any other `ApiResult.Error` code, or `ApiResult.NetworkError`, or (defensively)
+    `ApiResult.AuthRequired`** (register() runs unauthenticated, so a 401 here would be a backend
+    anomaly, not an expected outcome) → `TesterEntryUiState.Error(message)`, a generic retry-able
+    failure. The typed fields (email/display name) are never cleared on any failure path, so the
+    tester never has to retype after a failed attempt.
+  - **Success (200)** → `TesterEntryUiState.Success`, and — critically — `TesterEntryViewModel`
+    calls `SessionManager.markValid()` **before** setting that state. `SatTrakkApp` observes
+    `SessionManager.sessionState` (not `TesterEntryUiState`) to decide whether to show this screen
+    at all, so flipping `SessionManager` to `Valid` is what actually navigates the tester into
+    `MainNavHost` — there is no explicit "navigate away" call inside this screen/ViewModel, and
+    `TesterEntryUiState.Success` itself is typically never even rendered, since the composable
+    backing this screen is torn down by `SatTrakkApp`'s recomposition at (or before) the moment
+    that state would be set.
+
+- **No self-service key-reset flow exists, by design.** The `AlreadyRegistered` (409) message
+  explicitly does not offer a "reset my key" action — per the project's current beta process
+  (repo-root CLAUDE.md's beta allowlist section, `POST /api/admin/reissue` is still a `501` stub),
+  the only real path is an admin manually setting the stale `ApiKey.IsActive = false` in the DB and
+  the tester re-running registration. Do not build a client-side workaround for this later without
+  a deliberate backend-side decision first (see repo-root CLAUDE.md's warning against
+  "productionizing" this beta auth mechanism).
+
+### Wiring into `SatTrakkApp` — replaces `ReauthScreen` outright
+
+The old placeholder `ReauthScreen` (a static "contact the dev team, no self-service flow" dead
+end) is **deleted**, not kept as a fallback alongside this screen — its own doc comment described
+itself as a placeholder for exactly this screen. `SatTrakkApp`'s
+`SessionState.RequiresReauth -> ...` branch now renders `TesterEntryScreen()` directly instead.
+Because `SessionManager`'s initial value is now read from `ApiKeyStore` at construction (see
+above), this also means a fresh install lands directly on the Tester Entry screen instead of
+briefly showing (or requiring a first failed call to reach) the old dead end.
+
+### Testing
+
+Same posture as every prior UI task: no Compose UI testing convention exists in this project
+beyond the one coarse instrumented smoke test (`MainActivityTest`), and none was invented here —
+flagged per the established precedent from the Dashboard/Full Pass List/Settings tasks, not
+silently skipped. `MainActivityTest` itself needed no changes (it only asserts on Dashboard's top
+app bar title, reached only once already-authenticated — irrelevant to this screen).
+`TesterEntryViewModelTest` covers the 403/409/other-Error/NetworkError/Success mappings, that
+`SessionManager.markValid()` is called exactly once on success and never on any failure path, and
+that the ViewModel never touches `ApiKeyStore` (there is no `ApiKeyStore` reference reachable from
+`TesterEntryViewModel` at all — the strongest assertion available is that it calls
+`AuthRepository.register()` exactly once and does nothing beyond updating its own state /
+`SessionManager`). `SessionManagerTest` gained two new initial-state cases (key present → `Valid`,
+absent → `RequiresReauth`) for the constructor change above.
+
+Verified in this environment: `:app:compileDebugKotlin`, `:app:testDebugUnitTest` (130 tests
+green — 121 before this task, +8 in `TesterEntryViewModelTest` +1 in `SessionManagerTest`'s new
+initial-state case), and `:app:assembleDebug`, all `BUILD SUCCESSFUL`. **Not verified**:
+`:app:connectedDebugAndroidTest` — no `adb`/connected device or emulator was available in this
+environment, same limitation noted in every prior UI task.
 
 ## DashboardViewModel — dashboard screen logic (Step 3.1)
 
@@ -385,20 +481,24 @@ up, omitted, or approximated; nothing was assumed from the mockup alone.
   already had one-line text placeholders from the Milestone E skeleton) — created here as part of
   wiring the nav graph, still placeholder-only content.
 
-### `SatTrakkApp` / `ReauthScreen` — session-state root wrapper (`navigation/SatTrakkApp.kt`, `ui/reauth/ReauthScreen.kt`)
+### `SatTrakkApp` — session-state root wrapper (`navigation/SatTrakkApp.kt`)
 
-`SatTrakkApp` is the new composable root (`MainActivity.setContent { SatTrakkApp(sessionManager =
-sessionManager) }`, with `sessionManager` field-injected into the `@AndroidEntryPoint` Activity).
-It wraps `SatTrakkTheme`, collects `SessionManager.sessionState` via
-`collectAsStateWithLifecycle()` (new dependency: `androidx.lifecycle:lifecycle-runtime-compose`,
-added alongside the existing `lifecycle-runtime-ktx`/`lifecycle-viewmodel-ktx`), and swaps between
-`MainNavHost()` (the entire nav graph) and `ReauthScreen()` — a minimal, new, not-in-the-design
-dead end explaining that re-registration is required and to contact the dev team. There is no
-self-service re-registration flow yet (`SessionManager.markValid()` still has no caller — see
-that section above), so `ReauthScreen` deliberately offers no retry action. `SatTrakkApp`'s
-`sessionManager` parameter defaults to a fresh `SessionManager()` (always `Valid` — its
-constructor takes no arguments) for previews/tooling; production wiring always passes the real
-Hilt singleton explicitly.
+`SatTrakkApp` is the composable root (`MainActivity.setContent { SatTrakkApp() }`). It wraps
+`SatTrakkTheme`, collects `SessionManager.sessionState` via `collectAsStateWithLifecycle()` (new
+dependency at the time: `androidx.lifecycle:lifecycle-runtime-compose`, alongside the existing
+`lifecycle-runtime-ktx`/`lifecycle-viewmodel-ktx`), and swaps between `MainNavHost()` (the entire
+nav graph) and — as of the Tester Entry screen task — `TesterEntryScreen()`. The real
+`SessionManager` singleton is supplied via a small internal `AppViewModel` (`@HiltViewModel`,
+`hiltViewModel()`-resolved) rather than a `sessionManager` parameter field-injected into
+`MainActivity` — this was reworked when `SessionManager`'s constructor gained an `ApiKeyStore`
+dependency (see "SessionManager" above), so `MainActivity` no longer needs its own
+`@Inject lateinit var SessionManager` field at all.
+
+**Originally this branch rendered a static `ReauthScreen` dead end here** (no self-service flow,
+since `SessionManager.markValid()` had no caller yet) — that screen and its doc entry are now
+deleted outright, replaced by `TesterEntryScreen()`, which both offers the tester a real
+registration path and calls `markValid()` on success. See "Tester Entry screen" above for the
+full design.
 
 ### M3 theme — `ui/theme/` (Color.kt, Shape.kt, Type.kt, Theme.kt)
 
