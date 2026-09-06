@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sattrakk.app.data.repository.NotesRepository
 import com.sattrakk.app.data.repository.PassRepository
+import com.sattrakk.app.data.repository.SatelliteRepository
 import com.sattrakk.app.domain.model.ApiResult
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -29,6 +30,7 @@ import kotlinx.coroutines.launch
 class PassDetailsViewModel @Inject constructor(
     private val passRepository: PassRepository,
     private val notesRepository: NotesRepository,
+    private val satelliteRepository: SatelliteRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -44,21 +46,32 @@ class PassDetailsViewModel @Inject constructor(
         viewModelScope.launch { loadInitialData() }
     }
 
-    // Pass and notes are fetched in parallel (same async/awaitAll shape as DashboardViewModel's
-    // per-tab loading and FullPassListViewModel's loadAll). Per your confirmation: without the
-    // pass itself there's not much value in showing partial content, so a getPassById failure
-    // blanks the whole screen into an error state — notes are discarded even if they loaded fine.
-    // A getNotes failure alone is treated as partial content instead, since the pass details are
-    // the primary content and notes are secondary.
+    // Pass, notes, and the satellite catalog are fetched in parallel (same async/awaitAll shape as
+    // DashboardViewModel's per-tab loading and FullPassListViewModel's loadAll). Per your
+    // confirmation: without the pass itself there's not much value in showing partial content, so
+    // a getPassById failure blanks the whole screen into an error state — notes and satellite
+    // lookup are discarded even if they loaded fine. A getNotes or satellite-lookup failure alone
+    // is treated as partial content instead, since the pass details are the primary content and
+    // both notes and the satellite name/NORAD id are secondary.
+    //
+    // Satellite name/NORAD id resolution: PassDetailsUiState previously had no satellite lookup at
+    // all (Pass only carries an opaque satelliteId) — this is a real, confirmed gap, not something
+    // silently added. It's resolved the same way Dashboard/Settings already do it: fetch the full
+    // catalog via SatelliteRepository.getSatellites() (24h-TTL, Room-cached — see
+    // android/CLAUDE.md) and match by id, rather than inventing a new by-id repository method.
     private suspend fun loadInitialData() = coroutineScope {
         val passDeferred = async { passRepository.getPassById(passId) }
         val notesDeferred = async { notesRepository.getNotes(passId) }
+        val satellitesDeferred = async { satelliteRepository.getSatellites() }
         val passResult = passDeferred.await()
         val notesResult = notesDeferred.await()
+        val satellitesResult = satellitesDeferred.await()
 
         if (passResult !is ApiResult.Success) {
             _uiState.value = _uiState.value.copy(
                 pass = null,
+                satelliteName = null,
+                satelliteNoradId = null,
                 notes = emptyList(),
                 isLoading = false,
                 error = errorMessageFor(passResult)
@@ -67,11 +80,20 @@ class PassDetailsViewModel @Inject constructor(
         }
 
         val notes = (notesResult as? ApiResult.Success)?.data ?: emptyList()
+        val satellite = (satellitesResult as? ApiResult.Success)?.data
+            ?.firstOrNull { it.id == passResult.data.satelliteId }
+
         _uiState.value = _uiState.value.copy(
             pass = passResult.data,
+            satelliteName = satellite?.name,
+            satelliteNoradId = satellite?.noradId,
             notes = notes,
             isLoading = false,
-            error = if (notesResult is ApiResult.Success) null else errorMessageFor(notesResult)
+            error = when {
+                notesResult !is ApiResult.Success -> errorMessageFor(notesResult)
+                satellitesResult !is ApiResult.Success -> errorMessageFor(satellitesResult)
+                else -> null
+            }
         )
     }
 
@@ -155,6 +177,18 @@ class PassDetailsViewModel @Inject constructor(
     // this yet — expected, not a gap.
     fun showOnMap() {
         viewModelScope.launch { _events.send(PassDetailsEvent.NavigateToMap(passId)) }
+    }
+
+    // "Export to calendar (ICS)" stub — per the confirmed decision, built the same way
+    // SettingsViewModel.addSatellite() is stubbed: no CalendarRepository/backing action exists yet
+    // on the Android side (a confirmed gap, to be built in a separate future task), so this only
+    // sets stubMessage and never calls a repository.
+    fun exportToCalendar() {
+        _uiState.value = _uiState.value.copy(stubMessage = "Exporting to calendar isn't available yet")
+    }
+
+    fun consumeStubMessage() {
+        _uiState.value = _uiState.value.copy(stubMessage = null)
     }
 
     fun clearError() {

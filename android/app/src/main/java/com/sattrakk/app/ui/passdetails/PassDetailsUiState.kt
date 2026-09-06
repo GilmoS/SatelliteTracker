@@ -9,11 +9,19 @@ import com.sattrakk.app.domain.model.Pass
 // PassDetailsViewModelTest. See android/CLAUDE.md's "Pass Details Modal" section.
 data class PassDetailsUiState(
     val pass: Pass?, // null while loading, and stays null if getPassById fails
+    // Resolved from SatelliteRepository.getSatellites() by matching Pass.satelliteId — see
+    // PassDetailsViewModel.loadInitialData. Treated as supplementary content, same tier as notes:
+    // a satellite-fetch failure never blanks the whole screen, it just leaves these null.
+    val satelliteName: String? = null,
+    val satelliteNoradId: Int? = null,
     val notes: List<Note> = emptyList(),
     // Drives whether the note-editing dialog is shown and its mode — see EditingNoteState. The
     // notes list itself stays read-only/display-only regardless of this field's value; editing
     // always happens through the dialog, never inline in the list (confirmed design decision).
     val editingNote: EditingNoteState? = null,
+    // "Export to calendar (ICS)" stub message — see PassDetailsViewModel.exportToCalendar(), same
+    // pattern as SettingsUiState.stubMessage for "Add satellite".
+    val stubMessage: String? = null,
     val isLoading: Boolean = true,
     val error: String? = null
 )
