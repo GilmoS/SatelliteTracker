@@ -3,6 +3,11 @@ package com.sattrakk.app.ui.settings
 data class SatelliteVisibility(
     val satelliteId: String,
     val satelliteName: String,
+    // Carried straight through from the full Satellite the ViewModel already fetches
+    // (SatelliteRepository.getSatellites()) — not a new backend field, just surfaced on this
+    // existing projection so the Settings screen's satellite rows can show it (see
+    // android/CLAUDE.md's Settings screen section).
+    val noradId: Int,
     val isHidden: Boolean
 )
 

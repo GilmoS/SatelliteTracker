@@ -157,3 +157,53 @@ fun CloseIcon(color: Color, modifier: Modifier = Modifier.size(22.dp)) {
         drawLine(color, Offset(size.width * 0.76f, size.height * 0.24f), Offset(size.width * 0.24f, size.height * 0.76f), strokeWidth = stroke.width, cap = StrokeCap.Round)
     }
 }
+
+// Settings screen's "Add satellite" row leading glyph — a plain cross, matching the design's own
+// inline SVG for that row (`M12 5v14M5 12h14`).
+@Composable
+fun PlusIcon(color: Color, modifier: Modifier = Modifier.size(22.dp)) {
+    Canvas(modifier = modifier) {
+        val stroke = Stroke(1.9.dp.toPx(), cap = StrokeCap.Round)
+        drawLine(color, Offset(size.width * 0.5f, size.height * 0.14f), Offset(size.width * 0.5f, size.height * 0.86f), strokeWidth = stroke.width, cap = StrokeCap.Round)
+        drawLine(color, Offset(size.width * 0.14f, size.height * 0.5f), Offset(size.width * 0.86f, size.height * 0.5f), strokeWidth = stroke.width, cap = StrokeCap.Round)
+    }
+}
+
+// Settings screen's new push-notification-status row leading glyph — this section has no source
+// design element at all (see android/CLAUDE.md), so this is an original glyph at the same
+// 24dp/~1.9dp-stroke convention as the rest of this file, not a reproduction of anything in the
+// design's inline SVGs.
+@Composable
+fun BellIcon(color: Color, modifier: Modifier = Modifier.size(22.dp)) {
+    Canvas(modifier = modifier) {
+        val stroke = Stroke(1.9.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val dome = Path().apply {
+            moveTo(size.width * 0.22f, size.height * 0.62f)
+            lineTo(size.width * 0.22f, size.height * 0.46f)
+            cubicTo(
+                size.width * 0.22f, size.height * 0.26f,
+                size.width * 0.34f, size.height * 0.14f,
+                size.width * 0.5f, size.height * 0.14f,
+            )
+            cubicTo(
+                size.width * 0.66f, size.height * 0.14f,
+                size.width * 0.78f, size.height * 0.26f,
+                size.width * 0.78f, size.height * 0.46f,
+            )
+            lineTo(size.width * 0.78f, size.height * 0.62f)
+            lineTo(size.width * 0.88f, size.height * 0.74f)
+            lineTo(size.width * 0.12f, size.height * 0.74f)
+            close()
+        }
+        drawPath(dome, color, style = stroke)
+        drawArc(
+            color = color,
+            startAngle = 0f,
+            sweepAngle = 180f,
+            useCenter = false,
+            topLeft = Offset(size.width * 0.38f, size.height * 0.76f),
+            size = Size(size.width * 0.24f, size.width * 0.22f),
+            style = stroke,
+        )
+    }
+}

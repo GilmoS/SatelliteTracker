@@ -49,6 +49,7 @@ class SettingsViewModel @Inject constructor(
                     SatelliteVisibility(
                         satelliteId = satellite.id,
                         satelliteName = satellite.name,
+                        noradId = satellite.noradId,
                         isHidden = hiddenIds.contains(satellite.id)
                     )
                 }
