@@ -22,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.window.DialogProperties
 import com.sattrakk.app.ui.dashboard.DashboardScreen
 import com.sattrakk.app.ui.fullpasslist.FullPassListScreen
 import com.sattrakk.app.ui.map.MapScreen
@@ -109,8 +110,24 @@ fun MainNavHost(navController: NavHostController = rememberNavController()) {
             dialog(
                 route = SatTrakkDestination.PassDetails.route,
                 arguments = listOf(navArgument("passId") { type = NavType.StringType }),
+                // usePlatformDefaultWidth = false: the stock AlertDialog-style width cap is too
+                // narrow for this screen's AOS/LOS + metric-grid + notes content, so
+                // PassDetailsScreen sizes and centers its own card instead (see that file).
+                dialogProperties = DialogProperties(usePlatformDefaultWidth = false),
             ) {
-                PassDetailsScreen()
+                // No satelliteId/satelliteName passed explicitly -- PassDetailsViewModel reads
+                // passId from this same backstack entry's SavedStateHandle via hiltViewModel(),
+                // same pattern as FullPassListScreen above.
+                PassDetailsScreen(
+                    onBackClick = { navController.popBackStack() },
+                    // "Show on map" dismisses this modal and navigates to the Map placeholder
+                    // (step 6) -- the passId itself has no consumer there yet, matching
+                    // PassDetailsEvent.NavigateToMap's own doc comment (expected, not a gap).
+                    onNavigateToMap = {
+                        navController.popBackStack()
+                        navController.navigate(SatTrakkDestination.Map.route)
+                    },
+                )
             }
         }
     }
