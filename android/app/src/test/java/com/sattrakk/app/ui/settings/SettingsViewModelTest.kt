@@ -44,10 +44,10 @@ class SettingsViewModelTest {
 
     private fun runCurrent() = mainDispatcherRule.testDispatcher.scheduler.runCurrent()
 
-    private fun satellite(id: String, name: String = "Satellite-$id") = Satellite(
+    private fun satellite(id: String, name: String = "Satellite-$id", noradId: Int = 1) = Satellite(
         id = id,
         name = name,
-        noradId = 1,
+        noradId = noradId,
         description = null,
         isActive = true,
         isDefault = false,
@@ -77,8 +77,8 @@ class SettingsViewModelTest {
 
     @Test
     fun `initial load combines satellites, settings, and hidden-state correctly`() {
-        val sat1 = satellite("sat-1")
-        val sat2 = satellite("sat-2")
+        val sat1 = satellite("sat-1", noradId = 56998)
+        val sat2 = satellite("sat-2", noradId = 57001)
         val viewModel = buildViewModel(
             satellitesResult = ApiResult.Success(listOf(sat1, sat2)),
             settingsResult = ApiResult.Success(UserSettings(listOf(5, 10), "fcm-token")),
@@ -92,6 +92,8 @@ class SettingsViewModelTest {
         assertEquals(2, state.satellites.size)
         assertFalse(state.satellites.first { it.satelliteId == "sat-1" }.isHidden)
         assertTrue(state.satellites.first { it.satelliteId == "sat-2" }.isHidden)
+        assertEquals(56998, state.satellites.first { it.satelliteId == "sat-1" }.noradId)
+        assertEquals(57001, state.satellites.first { it.satelliteId == "sat-2" }.noradId)
         assertEquals(setOf(5, 10), state.alertMinutes)
         assertEquals(setOf(5, 10), state.lastNonEmptyAlertMinutes)
         assertTrue(state.pushPermissionGranted)
