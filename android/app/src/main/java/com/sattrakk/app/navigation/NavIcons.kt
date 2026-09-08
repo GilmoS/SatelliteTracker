@@ -207,3 +207,27 @@ fun BellIcon(color: Color, modifier: Modifier = Modifier.size(22.dp)) {
         )
     }
 }
+
+// Pass Details Modal's delete-note affordance — no source design element to copy (the design's
+// note field has no delete concept at all, see android/CLAUDE.md), so this is an original glyph
+// at the same 24dp/~1.9dp-stroke convention as the rest of this file.
+@Composable
+fun TrashIcon(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
+    Canvas(modifier = modifier) {
+        val stroke = Stroke(1.7.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val lid = Path().apply {
+            moveTo(size.width * 0.22f, size.height * 0.28f)
+            lineTo(size.width * 0.78f, size.height * 0.28f)
+        }
+        drawPath(lid, color, style = stroke)
+        drawLine(color, Offset(size.width * 0.4f, size.height * 0.28f), Offset(size.width * 0.4f, size.height * 0.18f), strokeWidth = stroke.width, cap = StrokeCap.Round)
+        drawLine(color, Offset(size.width * 0.6f, size.height * 0.28f), Offset(size.width * 0.6f, size.height * 0.18f), strokeWidth = stroke.width, cap = StrokeCap.Round)
+        val body = Path().apply {
+            moveTo(size.width * 0.28f, size.height * 0.32f)
+            lineTo(size.width * 0.32f, size.height * 0.85f)
+            lineTo(size.width * 0.68f, size.height * 0.85f)
+            lineTo(size.width * 0.72f, size.height * 0.32f)
+        }
+        drawPath(body, color, style = stroke)
+    }
+}

@@ -4,10 +4,12 @@ import androidx.lifecycle.SavedStateHandle
 import com.sattrakk.app.MainDispatcherRule
 import com.sattrakk.app.data.repository.NotesRepository
 import com.sattrakk.app.data.repository.PassRepository
+import com.sattrakk.app.data.repository.SatelliteRepository
 import com.sattrakk.app.domain.model.ApiResult
 import com.sattrakk.app.domain.model.Note
 import com.sattrakk.app.domain.model.NotifyStatus
 import com.sattrakk.app.domain.model.Pass
+import com.sattrakk.app.domain.model.Satellite
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -35,6 +37,7 @@ class PassDetailsViewModelTest {
 
     private val passRepository = mockk<PassRepository>()
     private val notesRepository = mockk<NotesRepository>()
+    private val satelliteRepository = mockk<SatelliteRepository>()
 
     private val passId = "pass-1"
     private val now: OffsetDateTime = OffsetDateTime.parse("2026-09-03T00:00:00Z")
@@ -42,6 +45,22 @@ class PassDetailsViewModelTest {
     private fun runCurrent() = mainDispatcherRule.testDispatcher.scheduler.runCurrent()
 
     private fun savedStateHandle() = SavedStateHandle(mapOf("passId" to passId))
+
+    // Default stub used by every test that doesn't specifically exercise satellite-lookup
+    // behavior — a single satellite matching pass()'s satelliteId ("sat-1").
+    private fun stubDefaultSatellites() {
+        coEvery { satelliteRepository.getSatellites() } returns ApiResult.Success(listOf(satellite()))
+    }
+
+    private fun satellite(id: String = "sat-1", name: String = "EROS C3", noradId: Int = 43689) = Satellite(
+        id = id,
+        name = name,
+        noradId = noradId,
+        description = null,
+        isActive = true,
+        isDefault = true,
+        createdAt = now
+    )
 
     private fun pass(notify: Boolean = true) = Pass(
         id = passId,
@@ -68,37 +87,43 @@ class PassDetailsViewModelTest {
     )
 
     private fun createViewModel(): PassDetailsViewModel {
-        val viewModel = PassDetailsViewModel(passRepository, notesRepository, savedStateHandle())
+        val viewModel = PassDetailsViewModel(passRepository, notesRepository, satelliteRepository, savedStateHandle())
         runCurrent()
         return viewModel
     }
 
     @Test
-    fun `successful load populates pass and notes and clears loading`() {
+    fun `successful load populates pass, notes, satellite name and NORAD id, and clears loading`() {
         val p = pass()
         val n1 = note("n1", "first note")
         coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(p)
         coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(listOf(n1))
+        stubDefaultSatellites()
 
         val viewModel = createViewModel()
 
         val state = viewModel.uiState.value
         assertEquals(p, state.pass)
         assertEquals(listOf(n1), state.notes)
+        assertEquals("EROS C3", state.satelliteName)
+        assertEquals(43689, state.satelliteNoradId)
         assertFalse(state.isLoading)
         assertNull(state.error)
     }
 
     @Test
-    fun `getPassById failure produces full error state with notes discarded`() {
+    fun `getPassById failure produces full error state with notes and satellite discarded`() {
         coEvery { passRepository.getPassById(passId) } returns ApiResult.NetworkError
         coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(listOf(note("n1", "would have loaded")))
+        stubDefaultSatellites()
 
         val viewModel = createViewModel()
 
         val state = viewModel.uiState.value
         assertNull(state.pass)
         assertTrue(state.notes.isEmpty())
+        assertNull(state.satelliteName)
+        assertNull(state.satelliteNoradId)
         assertFalse(state.isLoading)
         assertEquals("No network connection.", state.error)
     }
@@ -108,6 +133,7 @@ class PassDetailsViewModelTest {
         val p = pass()
         coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(p)
         coEvery { notesRepository.getNotes(passId) } returns ApiResult.NetworkError
+        stubDefaultSatellites()
 
         val viewModel = createViewModel()
 
@@ -118,11 +144,44 @@ class PassDetailsViewModelTest {
     }
 
     @Test
+    fun `getPassById succeeds and satellite lookup fails shows pass with null satellite fields and error set`() {
+        val p = pass()
+        coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(p)
+        coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(emptyList())
+        coEvery { satelliteRepository.getSatellites() } returns ApiResult.NetworkError
+
+        val viewModel = createViewModel()
+
+        val state = viewModel.uiState.value
+        assertEquals(p, state.pass)
+        assertNull(state.satelliteName)
+        assertNull(state.satelliteNoradId)
+        assertEquals("No network connection.", state.error)
+    }
+
+    @Test
+    fun `no matching satellite in the catalog leaves satellite fields null without an error`() {
+        val p = pass()
+        coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(p)
+        coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(emptyList())
+        coEvery { satelliteRepository.getSatellites() } returns ApiResult.Success(listOf(satellite(id = "some-other-satellite")))
+
+        val viewModel = createViewModel()
+
+        val state = viewModel.uiState.value
+        assertEquals(p, state.pass)
+        assertNull(state.satelliteName)
+        assertNull(state.satelliteNoradId)
+        assertNull(state.error)
+    }
+
+    @Test
     fun `toggleNotify success flips pass notify to the repository response value`() {
         val p = pass(notify = true)
         coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(p)
         coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(emptyList())
         coEvery { passRepository.setNotify(passId, false) } returns ApiResult.Success(NotifyStatus(passId, false))
+        stubDefaultSatellites()
         val viewModel = createViewModel()
 
         viewModel.toggleNotify()
@@ -138,6 +197,7 @@ class PassDetailsViewModelTest {
         coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(p)
         coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(emptyList())
         coEvery { passRepository.setNotify(passId, false) } returns ApiResult.NetworkError
+        stubDefaultSatellites()
         val viewModel = createViewModel()
 
         viewModel.toggleNotify()
@@ -153,6 +213,7 @@ class PassDetailsViewModelTest {
         val n1 = note("n1", "existing content")
         coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(p)
         coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(listOf(n1))
+        stubDefaultSatellites()
         val viewModel = createViewModel()
 
         viewModel.openNewNoteDialog()
@@ -177,6 +238,7 @@ class PassDetailsViewModelTest {
         coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(emptyList())
         val created = note("new-1", "hello")
         coEvery { notesRepository.createNote(passId, "hello") } returns ApiResult.Success(created)
+        stubDefaultSatellites()
         val viewModel = createViewModel()
         viewModel.openNewNoteDialog()
 
@@ -197,6 +259,7 @@ class PassDetailsViewModelTest {
         coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(listOf(original))
         val updated = note("n1", "new content")
         coEvery { notesRepository.updateNote("n1", "new content") } returns ApiResult.Success(updated)
+        stubDefaultSatellites()
         val viewModel = createViewModel()
         viewModel.openEditNoteDialog("n1")
 
@@ -215,6 +278,7 @@ class PassDetailsViewModelTest {
         coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(p)
         coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(emptyList())
         coEvery { notesRepository.createNote(passId, "hello") } returns ApiResult.NetworkError
+        stubDefaultSatellites()
         val viewModel = createViewModel()
         viewModel.openNewNoteDialog()
 
@@ -233,6 +297,7 @@ class PassDetailsViewModelTest {
         coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(p)
         coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(listOf(n1))
         coEvery { notesRepository.deleteNote("n1") } returns ApiResult.Success(Unit)
+        stubDefaultSatellites()
         val viewModel = createViewModel()
 
         viewModel.deleteNote("n1")
@@ -249,6 +314,7 @@ class PassDetailsViewModelTest {
         coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(p)
         coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(listOf(n1))
         coEvery { notesRepository.deleteNote("n1") } returns ApiResult.NetworkError
+        stubDefaultSatellites()
         val viewModel = createViewModel()
 
         viewModel.deleteNote("n1")
@@ -263,6 +329,7 @@ class PassDetailsViewModelTest {
         val p = pass()
         coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(p)
         coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(emptyList())
+        stubDefaultSatellites()
         val viewModel = createViewModel()
         val stateBefore = viewModel.uiState.value
 
@@ -285,6 +352,7 @@ class PassDetailsViewModelTest {
     fun `clearError resets error without touching other fields`() {
         coEvery { passRepository.getPassById(passId) } returns ApiResult.NetworkError
         coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(emptyList())
+        stubDefaultSatellites()
         val viewModel = createViewModel()
         assertEquals("No network connection.", viewModel.uiState.value.error)
 
@@ -295,5 +363,32 @@ class PassDetailsViewModelTest {
         assertNull(state.pass)
         assertTrue(state.notes.isEmpty())
         assertFalse(state.isLoading)
+    }
+
+    @Test
+    fun `exportToCalendar sets a stub message without calling any repository`() {
+        val p = pass()
+        coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(p)
+        coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(emptyList())
+        stubDefaultSatellites()
+        val viewModel = createViewModel()
+
+        viewModel.exportToCalendar()
+
+        assertEquals("Exporting to calendar isn't available yet", viewModel.uiState.value.stubMessage)
+    }
+
+    @Test
+    fun `consumeStubMessage clears the stub message`() {
+        val p = pass()
+        coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(p)
+        coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(emptyList())
+        stubDefaultSatellites()
+        val viewModel = createViewModel()
+        viewModel.exportToCalendar()
+
+        viewModel.consumeStubMessage()
+
+        assertNull(viewModel.uiState.value.stubMessage)
     }
 }
