@@ -30,6 +30,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,12 +45,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sattrakk.app.domain.model.Pass
 import com.sattrakk.app.navigation.ChevronIcon
 import com.sattrakk.app.navigation.OrbitIcon
+import com.sattrakk.app.ui.common.formatTimeLocal
 import com.sattrakk.app.ui.theme.OnSecondaryContainerVariant
 import com.sattrakk.app.ui.theme.TelemetryTextStyle
 import java.time.Duration
 import java.time.OffsetDateTime
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
 // Real Dashboard content, wired to the already-complete DashboardViewModel/DashboardUiState (see
@@ -94,16 +94,28 @@ fun DashboardScreen(
             }
         },
     ) { innerPadding ->
-        when (val s = state) {
-            DashboardUiState.Loading -> LoadingContent(innerPadding)
-            is DashboardUiState.Error -> ErrorContent(s.message, innerPadding)
-            is DashboardUiState.Content -> DashboardContent(
-                state = s,
-                contentPadding = innerPadding,
-                onTabSelected = viewModel::selectTab,
-                onViewFullPassList = onViewFullPassList,
-                onPassClick = onPassClick,
-            )
+        // Pull-to-refresh was previously entirely unwired -- DashboardViewModel.refresh() existed
+        // and worked, but no gesture handler in this Composable ever called it (see
+        // android/CLAUDE.md's DashboardViewModel section and this task's design-review findings).
+        // isRefreshing binds to DashboardUiState.Content.isRefreshing, added for this purpose;
+        // Loading/Error states simply aren't refreshable (onRefresh no-ops via the ViewModel's own
+        // early-return when not Content).
+        PullToRefreshBox(
+            isRefreshing = (state as? DashboardUiState.Content)?.isRefreshing ?: false,
+            onRefresh = viewModel::refresh,
+            modifier = Modifier.padding(innerPadding),
+        ) {
+            when (val s = state) {
+                DashboardUiState.Loading -> LoadingContent(PaddingValues())
+                is DashboardUiState.Error -> ErrorContent(s.message, PaddingValues())
+                is DashboardUiState.Content -> DashboardContent(
+                    state = s,
+                    contentPadding = PaddingValues(),
+                    onTabSelected = viewModel::selectTab,
+                    onViewFullPassList = onViewFullPassList,
+                    onPassClick = onPassClick,
+                )
+            }
         }
     }
 }
@@ -218,7 +230,10 @@ private fun DashboardContent(
             }
         }
 
-        if (selectedTab.passes.isEmpty()) {
+        // Renders visiblePasses (already excludes passes whose AOS has slipped into the past
+        // while the TTL-gated cache was still "fresh"), never the raw passes list — see
+        // SatelliteTabState.visiblePasses and android/CLAUDE.md.
+        if (selectedTab.visiblePasses.isEmpty()) {
             item {
                 Text(
                     text = "No upcoming passes for ${selectedTab.satelliteName}.",
@@ -228,7 +243,7 @@ private fun DashboardContent(
                 )
             }
         } else {
-            items(selectedTab.passes, key = { it.id }) { pass ->
+            items(selectedTab.visiblePasses, key = { it.id }) { pass ->
                 PassRow(
                     pass = pass,
                     satelliteName = selectedTab.satelliteName,
@@ -441,9 +456,6 @@ private fun formatDurationShort(totalSeconds: Int): String {
     val seconds = totalSeconds % 60
     return "${minutes}m ${seconds.toString().padStart(2, '0')}s"
 }
-
-private fun formatTimeLocal(dateTime: OffsetDateTime): String =
-    dateTime.atZoneSameInstant(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("HH:mm"))
 
 // Computed fresh at composition time rather than via a ViewModel field — DashboardViewModel's
 // countdown ticker already causes a Content recomposition every second (see

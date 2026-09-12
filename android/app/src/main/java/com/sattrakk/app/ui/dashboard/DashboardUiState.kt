@@ -9,7 +9,17 @@ import java.time.Duration
 data class SatelliteTabState(
     val satelliteId: String,
     val satelliteName: String,
+    // The full, raw list as fetched/cached by PassRepository — untouched by the "still upcoming"
+    // display filter below. Kept around because nextPass/nextPassCountdown's own "AOS still in
+    // the future" computation and any future internal use should work from the complete fetched
+    // set, not an already-narrowed view.
     val passes: List<Pass>,
+    // The list actually rendered in the "Upcoming passes" row list — passes.excludePastAos(now),
+    // recomputed at state-computation time (load, poll, refresh, and every countdown tick for the
+    // selected tab) rather than baked into what gets cached. Fixes the design-review finding
+    // where a pass loaded an hour ago as upcoming kept showing after its AOS had already passed,
+    // because the TTL-gated cache was still "fresh." See DashboardViewModel and android/CLAUDE.md.
+    val visiblePasses: List<Pass> = passes,
     val nextPassCountdown: Duration?, // null if there's no upcoming pass at all
     // The same pass nextPassCountdown counts down to — i.e. the earliest pass in `passes` whose
     // AOS is still in the future, per DashboardViewModel's countdown-ticker derivation. Exposed
@@ -32,7 +42,11 @@ sealed interface DashboardUiState {
     object Loading : DashboardUiState
     data class Content(
         val tabs: List<SatelliteTabState>,
-        val selectedSatelliteId: String
+        val selectedSatelliteId: String,
+        // Drives the pull-to-refresh spinner (DashboardScreen's PullToRefreshBox) — DashboardUiState
+        // previously had no field to bind it to at all, which was the actual root cause of pull-
+        // to-refresh appearing to do nothing (see DashboardViewModel.refresh and android/CLAUDE.md).
+        val isRefreshing: Boolean = false
     ) : DashboardUiState
     data class Error(val message: String) : DashboardUiState
 }
