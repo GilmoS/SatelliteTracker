@@ -18,8 +18,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -84,7 +84,26 @@ fun FullPassListScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var showFilterSheet by rememberSaveable { mutableStateOf(false) }
-    val listState = rememberLazyListState()
+    // Round-2 fix: rememberLazyListState() (== rememberSaveable(saver = LazyListState.Saver) with
+    // NO keys) kept the exact same LazyListState instance for as long as this screen stayed in
+    // composition, so switching segments (Upcoming/History/All/Filtered) or picking a new filter
+    // value -- both of which reload() the list from scratch, per FullPassListViewModel -- left
+    // whatever scroll offset was already there untouched, sometimes pointing partway down (or past
+    // the end of) the freshly-reloaded list. Keying on filter/timeWindow/minMaxElevation -- the
+    // exact three fields whose change triggers a from-scratch reload -- forces a brand-new
+    // LazyListState (starting at index 0) whenever a real reload happens, while a single load-more
+    // page append (which changes state.passes but not these three fields) still reuses the same
+    // instance and its scroll position, as it should.
+    //
+    // A fresh navigation entry already starts at the top for free (a new NavBackStackEntry gets a
+    // new SaveableStateHolder scope, so there's nothing to restore). Returning to an already-open
+    // instance via the bottom nav bar's "Passes" item is the one path that intentionally keeps
+    // rememberSaveable's default behavior of restoring the prior scroll offset for the current
+    // filter/segment combination -- matching the normal bottom-nav-tab convention of remembering
+    // where each tab was left, per this task's own "use your judgment" call.
+    val listState = rememberSaveable(state.filter, state.timeWindow, state.minMaxElevation, saver = LazyListState.Saver) {
+        LazyListState()
+    }
 
     val groupedItems = remember(state.passes) { buildGroupedItems(state.passes) }
     val activeFilterChips = buildActiveFilterChips(
