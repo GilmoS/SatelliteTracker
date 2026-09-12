@@ -13,7 +13,9 @@ import com.sattrakk.app.domain.model.Satellite
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import java.time.Clock
 import java.time.OffsetDateTime
+import java.time.ZoneOffset
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -41,6 +43,7 @@ class PassDetailsViewModelTest {
 
     private val passId = "pass-1"
     private val now: OffsetDateTime = OffsetDateTime.parse("2026-09-03T00:00:00Z")
+    private val clock: Clock = Clock.fixed(now.toInstant(), ZoneOffset.UTC)
 
     private fun runCurrent() = mainDispatcherRule.testDispatcher.scheduler.runCurrent()
 
@@ -62,13 +65,13 @@ class PassDetailsViewModelTest {
         createdAt = now
     )
 
-    private fun pass(notify: Boolean = true) = Pass(
+    private fun pass(notify: Boolean = true, aos: OffsetDateTime = now.plusMinutes(10), los: OffsetDateTime = now.plusMinutes(15)) = Pass(
         id = passId,
         satelliteId = "sat-1",
         tleId = "tle-1",
         orbitNumber = 1,
-        aos = now.plusMinutes(10),
-        los = now.plusMinutes(15),
+        aos = aos,
+        los = los,
         maxElevation = 45.0,
         aosAzimuth = 10.0,
         losAzimuth = 20.0,
@@ -87,7 +90,7 @@ class PassDetailsViewModelTest {
     )
 
     private fun createViewModel(): PassDetailsViewModel {
-        val viewModel = PassDetailsViewModel(passRepository, notesRepository, satelliteRepository, savedStateHandle())
+        val viewModel = PassDetailsViewModel(passRepository, notesRepository, satelliteRepository, clock, savedStateHandle())
         runCurrent()
         return viewModel
     }
@@ -108,7 +111,49 @@ class PassDetailsViewModelTest {
         assertEquals("EROS C3", state.satelliteName)
         assertEquals(43689, state.satelliteNoradId)
         assertFalse(state.isLoading)
+        assertFalse(state.isHistorical)
         assertNull(state.error)
+    }
+
+    // Round-2 fix: the "Notify me" switch must render disabled for a pass whose LOS has already
+    // passed while still showing its actual stored notify value — see PassDetailsUiState.isHistorical.
+    @Test
+    fun `a pass whose LOS has already passed loads as historical`() {
+        val p = pass(aos = now.minusMinutes(30), los = now.minusMinutes(25))
+        coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(p)
+        coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(emptyList())
+        stubDefaultSatellites()
+
+        val viewModel = createViewModel()
+
+        assertTrue(viewModel.uiState.value.isHistorical)
+    }
+
+    @Test
+    fun `a pass whose LOS is still in the future loads as not historical`() {
+        val p = pass(aos = now.plusMinutes(10), los = now.plusMinutes(15))
+        coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(p)
+        coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(emptyList())
+        stubDefaultSatellites()
+
+        val viewModel = createViewModel()
+
+        assertFalse(viewModel.uiState.value.isHistorical)
+    }
+
+    @Test
+    fun `toggleNotify no-ops for a historical pass without calling the repository`() {
+        val p = pass(notify = true, aos = now.minusMinutes(30), los = now.minusMinutes(25))
+        coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(p)
+        coEvery { notesRepository.getNotes(passId) } returns ApiResult.Success(emptyList())
+        stubDefaultSatellites()
+        val viewModel = createViewModel()
+
+        viewModel.toggleNotify()
+        runCurrent()
+
+        assertEquals(true, viewModel.uiState.value.pass?.notify)
+        coVerify(exactly = 0) { passRepository.setNotify(any(), any()) }
     }
 
     @Test

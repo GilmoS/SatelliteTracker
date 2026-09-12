@@ -26,6 +26,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -122,6 +123,7 @@ fun PassDetailsScreen(
                         else -> PassDetailsBody(
                             state = state,
                             pass = state.pass!!,
+                            isHistorical = state.isHistorical,
                             onToggleNotify = viewModel::toggleNotify,
                             onExportToCalendar = viewModel::exportToCalendar,
                             onAddNote = viewModel::openNewNoteDialog,
@@ -212,6 +214,7 @@ private fun FullErrorBody(message: String) {
 private fun PassDetailsBody(
     state: PassDetailsUiState,
     pass: Pass,
+    isHistorical: Boolean,
     onToggleNotify: () -> Unit,
     onExportToCalendar: () -> Unit,
     onAddNote: () -> Unit,
@@ -248,7 +251,7 @@ private fun PassDetailsBody(
         Spacer(modifier = Modifier.height(18.dp))
         MetricGrid(pass)
         Spacer(modifier = Modifier.height(20.dp))
-        NotifyRow(notify = pass.notify, onToggle = onToggleNotify)
+        NotifyRow(notify = pass.notify, enabled = !isHistorical, onToggle = onToggleNotify)
         Spacer(modifier = Modifier.height(12.dp))
         Button(onClick = onExportToCalendar, modifier = Modifier.fillMaxWidth()) {
             Text("Export to calendar (ICS)")
@@ -289,6 +292,15 @@ private fun AosLosColumn(label: String, dateTime: OffsetDateTime, alignEnd: Bool
 
 // Local copy of Dashboard's metric-card layout (see FullPassListScreen's own doc comment on why
 // this isn't factored into a shared file — this task's scope excludes touching Dashboard).
+//
+// Round-2 fix: the truth map calls for a 5-cell grid (Duration/AOS az/LOS az/Orbit/Max elev),
+// which doesn't divide evenly into a 3-column row. The second row previously held only 2 cells,
+// each Modifier.weight(1f) *within that row alone* — which stretched them to half the row's full
+// width apiece, wider than the 3 equal columns above and making the whole grid look off-center /
+// uneven rather than like one coherent 3-column grid with a short last row. Fixed by giving the
+// second row the SAME 3-column proportions as the first (two real cells + one blank half-weight
+// spacer split on each side), so its cells line up under the columns above and the pair reads as
+// centered rather than stretched edge-to-edge.
 @Composable
 private fun MetricGrid(pass: Pass) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -298,6 +310,7 @@ private fun MetricGrid(pass: Pass) {
             MetricCell("LOS AZ", "${pass.losAzimuth.roundToInt()}°", Modifier.weight(1f))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Spacer(modifier = Modifier.weight(0.5f))
             MetricCell("ORBIT", "#${pass.orbitNumber}", Modifier.weight(1f))
             MetricCell(
                 "MAX ELEV",
@@ -305,6 +318,7 @@ private fun MetricGrid(pass: Pass) {
                 Modifier.weight(1f),
                 valueColor = MaterialTheme.colorScheme.primary,
             )
+            Spacer(modifier = Modifier.weight(0.5f))
         }
     }
 }
@@ -338,15 +352,20 @@ private fun MetricCell(
 
 // Per confirmed decision #4: a plain boolean toggle on Pass.notify, not a per-pass minute picker
 // — the tester's actual alert-timing minutes are a separate, global Settings-screen preference.
+// `enabled = false` for a historical pass (LOS already passed, per PassDetailsUiState.isHistorical)
+// greys out the switch and makes it non-interactive while still displaying the pass's actual
+// stored notify value — notifying about a pass that already happened has no effect, but the
+// switch must never be hidden (round-2 UI fix — see android/CLAUDE.md).
 @Composable
-private fun NotifyRow(notify: Boolean, onToggle: () -> Unit) {
+private fun NotifyRow(notify: Boolean, enabled: Boolean, onToggle: () -> Unit) {
+    val contentColor = if (enabled) LocalContentColor.current else MaterialTheme.colorScheme.onSurfaceVariant
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("Notify me about this pass", style = MaterialTheme.typography.bodyLarge)
-        Switch(checked = notify, onCheckedChange = { onToggle() })
+        Text("Notify me about this pass", style = MaterialTheme.typography.bodyLarge, color = contentColor)
+        Switch(checked = notify, onCheckedChange = { onToggle() }, enabled = enabled)
     }
 }
 

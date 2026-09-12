@@ -9,7 +9,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.Lifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -178,18 +177,36 @@ private fun SatTrakkBottomNavBar(navController: NavHostController, selectedSatel
     }
 }
 
-// Guards against the design-review finding that rapid repeated taps on a pass row opened multiple
-// PassDetails modal instances -- no row-tap call site had any debounce, and Compose Navigation
-// doesn't inherently prevent duplicate rapid navigation to the same destination. The standard fix
-// for this exact problem: only navigate while the current back stack entry's lifecycle is RESUMED
-// -- a second tap arriving before the first navigation finishes finds the entry already moved past
-// RESUMED (e.g. STARTED, as the new destination is being composed) and is silently ignored. Used
-// by every row-tap-to-PassDetails call site (Dashboard and Full Pass List) rather than duplicating
-// the check at each one -- see android/CLAUDE.md.
+// Round-1's RESUMED-lifecycle guard (see the old comment preserved in git history) did NOT fix
+// rapid repeated taps -- diagnosed in round 2 by reading androidx.navigation's own source
+// (NavControllerImpl.updateBackStackLifecycle / DialogNavigator, navigation-runtime 2.9.7):
+//
+// The guard's premise was "a second tap arriving before the first navigation finishes finds the
+// current entry not yet RESUMED." That premise only holds for `composable()` destinations, where
+// Compose Navigation gates the incoming entry's promotion to RESUMED on its enter transition
+// (AnimatedContent) actually completing -- so there's a real window, however short, during which
+// a repeat tap's currentBackStackEntry check fails and is dropped. PassDetails is registered as a
+// `dialog()` destination (see SatTrakkDestination.PassDetails), and DialogNavigator has no such
+// transition to gate on: `DialogNavigator.navigate()` pushes the entry directly, and
+// updateBackStackLifecycle() promotes a plain (non-SupportingPane) top-of-stack entry to RESUMED
+// immediately, synchronously, within the same navigate() call -- there is no "still transitioning
+// in" window at all for a dialog destination. So by the time a second tap's click handler runs
+// (a separate frame/event, not the same call stack as the first), the guard's check always finds
+// the current entry (now the just-pushed dialog) already RESUMED and lets the second navigate()
+// through too, pushing a duplicate PassDetails instance -- exactly the bug that was reported as
+// still happening after round 1.
+//
+// Fixed by relying on NavController's own built-in dedup instead of a lifecycle-timing heuristic:
+// `launchSingleTop = true` compares the target route's destination against currentBackStackEntry
+// synchronously inside navigate() itself (NavControllerImpl.launchSingleTopInternal) -- if
+// PassDetails is already the current top entry, the existing entry's args are updated in place
+// instead of a new one being pushed, regardless of any animation/lifecycle timing. This works
+// identically for dialog and composable destinations. Used by every row-tap-to-PassDetails call
+// site (Dashboard and Full Pass List are the only two in the codebase -- grep-verified against
+// SatTrakkDestination.PassDetails.buildRoute call sites, see android/CLAUDE.md) rather than
+// duplicating the option at each one.
 private fun NavHostController.navigateDebounced(route: String) {
-    if (currentBackStackEntry?.lifecycle?.currentState == Lifecycle.State.RESUMED) {
-        navigate(route)
-    }
+    navigate(route) { launchSingleTop = true }
 }
 
 // Standard single-top bottom-nav pattern: avoid piling up backstack copies of the same

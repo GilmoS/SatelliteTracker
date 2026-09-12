@@ -37,10 +37,24 @@ interface PassDao {
     // hasMore trick (see repo-root CLAUDE.md's paginated pass history section), so the Room path
     // and the network path behave identically from the caller's point of view. Each `:x IS NULL OR
     // ...` clause makes that bound a no-op when the caller's filter didn't set it.
+    //
+    // `losEpochMillis < :nowMillis` (round-2 fix, RUNNER-1 mixed Upcoming/History bug): the
+    // backend's own GetHistoryAsync unconditionally filters `p.Los < DateTime.UtcNow` regardless of
+    // any caller-supplied aos/elevation filter (see backend PassRepository.cs) -- "history" means
+    // "already completed" there, always. This local query was missing that exact clause, so it
+    // mirrored the OPTIONAL filters correctly but not the backend's ALWAYS-ON one. That only became
+    // visible once a satellite's HistoryLoadState.isFullyLoaded flipped true (switching this method
+    // from the always-correctly-bounded network path to this local path) -- which happens sooner
+    // for a satellite with a small total historical-pass count (few pages to exhaust), such as
+    // RUNNER-1. Once on this path, every still-upcoming pass already cached here via getPasses()
+    // (same `passes` table) also matched this query's WHERE clause and leaked into "History"
+    // results, making Upcoming and History look identical for that satellite -- see
+    // android/CLAUDE.md's Milestone E round-2 section for the full diagnosis.
     @Query(
         """
         SELECT * FROM passes
         WHERE satelliteId = :satelliteId
+        AND losEpochMillis < :nowMillis
         AND (:aosFromMillis IS NULL OR aosEpochMillis >= :aosFromMillis)
         AND (:aosToMillis IS NULL OR aosEpochMillis <= :aosToMillis)
         AND (:maxElevationFrom IS NULL OR maxElevation >= :maxElevationFrom)
@@ -50,6 +64,7 @@ interface PassDao {
     )
     suspend fun getFilteredForSatellite(
         satelliteId: String,
+        nowMillis: Long,
         aosFromMillis: Long?,
         aosToMillis: Long?,
         maxElevationFrom: Double?,
