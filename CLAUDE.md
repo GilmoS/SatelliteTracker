@@ -181,7 +181,7 @@ Ten tables. All PKs are UUID (Guid in C#). All relationships via Fluent API in O
 | settings               | Single global row: MinElevation, OutlookDays, TeamEmail.          |
 | api_keys               | One row per registered beta tester. See below.                    |
 | user_settings          | Per-tester notification prefs, 1:1 with api_keys. See below.      |
-| pass_subscriptions     | Per-tester notify opt-out per pass. Sparse. See below.            |
+| pass_subscriptions     | Per-tester notify opt-in per pass. Sparse. See below.             |
 | pass_notification_logs | Per-tester, per-threshold sent-notification ledger. See below.    |
 | allowlisted_emails     | Admin-managed beta signup allowlist. See below.                   |
 
@@ -218,14 +218,21 @@ single global recipient, which doesn't work once there are multiple independent 
 three fields were removed from `Pass` entirely** (dropped in the `SplitPassNotificationState`
 migration) — not deprecated, not kept-but-unused. That state is now split into two tables:
 
-- **`PassSubscription`** — per-tester notify opt-out for a specific pass. **Sparse/opt-out
-  model**: a row exists ONLY once a tester has actively toggled notifications off for that pass —
+- **`PassSubscription`** — per-tester notify opt-in for a specific pass. **Sparse/opt-in
+  model**: a row exists ONLY once a tester has actively toggled notifications on for that pass —
   there is no row created by default when a pass is calculated or when a tester registers.
-  Absence of a row means `Notify = true`. Every read of this table (including in
-  `PassNotificationJob`) must treat a missing row as `Notify = true` — `IPassSubscriptionRepository
+  Absence of a row means `Notify = false`. Every read of this table (including in
+  `PassNotificationJob`) must treat a missing row as `Notify = false` — `IPassSubscriptionRepository
   .GetEffectiveNotifyStatusAsync(passId, apiKeyId)` encodes this LEFT JOIN + COALESCE explicitly
   rather than exposing a generic `GetAsync` that could be misread as "null means unsubscribed."
   Unique index on `(PassId, ApiKeyId)`.
+  **This was originally an opt-out model** (absence of a row meant `Notify = true`) and was
+  flipped to opt-in once Dashboard/Full Pass List started surfacing large numbers of passes —
+  opt-out meant every tester got notified about passes they never actively looked at, which
+  generated unwanted notification noise. The flip was **behavior-only**: no schema change, no
+  data migration, and no change to any *existing* row's stored `Notify` value — it changed only
+  how a *missing* row is interpreted. A row explicitly storing `Notify = true` or `Notify = false`
+  means exactly what it always meant.
 - **`PassNotificationLog`** — append-only ledger of notifications actually sent, one row per
   `(PassId, ApiKeyId, AlertMinutes)` threshold that fired, never a flag that gets flipped back. A
   single tester can have multiple rows for the same pass — one per `AlertMinutes` threshold (e.g.
@@ -234,7 +241,7 @@ migration) — not deprecated, not kept-but-unused. That state is now split into
   .TryInsertAsync` catches the unique-constraint violation from a concurrent job tick and returns
   `false` ("already logged") instead of throwing — do not let that exception propagate.
 - `PassNotificationJob` fetches all future passes, then for each (pass, active tester) pair checks
-  `PassSubscription` (sparse opt-out) before checking `PassNotificationLog` per `AlertMinutes`
+  `PassSubscription` (sparse opt-in) before checking `PassNotificationLog` per `AlertMinutes`
   threshold. This fixes the previous bug where a single global `NotificationSent` flag meant that
   once any tester's earliest threshold fired, the pass was marked done and no other tester —
   including one who registered afterward — could ever be notified about it.
@@ -255,10 +262,11 @@ migration) — not deprecated, not kept-but-unused. That state is now split into
 `PATCH /api/passes/{id}/notify` is fully implemented (Milestone E, Step 1.3) —
 `PassesController.PatchNotify` resolves the caller's `ApiKeyId` from the authenticated principal
 (see Tester Authentication below) and upserts the tester's `PassSubscription` row via
-`IPassSubscriptionRepository`. `Notify = true` is the sparse default, so setting it back to true
-*deletes* any existing override row (via the new `DeleteOverrideAsync`) rather than writing a
-redundant "true" row — `Notify = false` still goes through `SetNotifyAsync`. The endpoint requires
-`[Authorize]` under the `ApiKey` scheme and returns the pass's effective notify status.
+`IPassSubscriptionRepository`. `Notify = false` is the sparse default, so setting it back to false
+*deletes* any existing override row (via `DeleteOverrideAsync`) rather than writing a redundant
+"false" row — `Notify = true` goes through `SetNotifyAsync` to persist the explicit opt-in. The
+endpoint requires `[Authorize]` under the `ApiKey` scheme and returns the pass's effective notify
+status.
 
 ### Beta allowlist and self-registration — AllowlistedEmail, admin tooling, /api/auth/register
 
