@@ -2,7 +2,6 @@ package com.sattrakk.app.ui.dashboard
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -266,16 +265,14 @@ private fun HeroPassCard(satelliteName: String, pass: Pass, countdown: Duration)
             modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // The elapsed-ratio ring has no backing field (truth map: DashboardUiState only
-            // exposes a raw remaining Duration, not an elapsed fraction) — rendered as a static,
-            // non-animated ring rather than a fabricated percentage. Kept (instead of omitted) so
-            // the hero card isn't left with an empty circular gap in its layout.
-            Box(
-                modifier = Modifier
-                    .size(88.dp)
-                    .border(5.dp, MaterialTheme.colorScheme.primaryContainer, CircleShape),
-            )
-            Column(modifier = Modifier.padding(start = 18.dp).weight(1f)) {
+            // TODO(design): the elapsed-ratio ring is fully removed per product decision, not just
+            // deferred as a static placeholder — DashboardUiState only ever exposed a raw remaining
+            // Duration (no elapsed-fraction field), and a computed "since previous LOS" percentage
+            // was explicitly rejected as too complex for the value it adds right now. A genuinely
+            // new, static (non-percentage) visual replacement is planned via Claude Design in a
+            // future polish pass once other functional work is complete — see android/CLAUDE.md's
+            // Milestone E round-2 section. Until then this card is simplest without a ring element.
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "Next pass",
                     style = MaterialTheme.typography.labelMedium,
