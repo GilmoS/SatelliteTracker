@@ -81,6 +81,15 @@ public class PassNotificationJobTests : IDisposable
         return mock;
     }
 
+    private static PassSubscription MakeOptIn(Guid passId, Guid apiKeyId) => new()
+    {
+        Id = Guid.NewGuid(),
+        PassId = passId,
+        ApiKeyId = apiKeyId,
+        Notify = true,
+        UpdatedAt = DateTimeOffset.UtcNow
+    };
+
     private static Mock<IPassSubscriptionRepository> MockSubscriptionRepo(params PassSubscription[] subscriptions)
     {
         var mock = new Mock<IPassSubscriptionRepository>();
@@ -104,13 +113,14 @@ public class PassNotificationJobTests : IDisposable
     {
         var settings = MakeUserSettings(fcmToken: "device-token", alertMinutes: [5, 10]);
         var (pass, _) = MakePass(minutesFromNow: 10);
+        var optIn = MakeOptIn(pass.Id, settings.ApiKeyId);
 
         var mockSettingsRepo = new Mock<IUserSettingsRepository>();
         mockSettingsRepo.Setup(r => r.GetAllActiveAsync())
             .ReturnsAsync(Result<IEnumerable<UserSettings>>.Success([settings]));
 
         var mockPassRepo = MockPassRepo(pass);
-        var mockSubscriptionRepo = MockSubscriptionRepo();
+        var mockSubscriptionRepo = MockSubscriptionRepo(optIn);
         var mockLogRepo = MockLogRepo();
 
         var mockFirebase = new Mock<IFirebaseService>();
@@ -183,7 +193,8 @@ public class PassNotificationJobTests : IDisposable
             .ReturnsAsync(Result<IEnumerable<UserSettings>>.Success([testerA, testerB]));
 
         var mockPassRepo = MockPassRepo(pass);
-        var mockSubscriptionRepo = MockSubscriptionRepo();
+        var mockSubscriptionRepo = MockSubscriptionRepo(
+            MakeOptIn(pass.Id, testerA.ApiKeyId), MakeOptIn(pass.Id, testerB.ApiKeyId));
         var mockLogRepo = MockLogRepo();
         var mockFirebase = new Mock<IFirebaseService>();
 
@@ -227,7 +238,7 @@ public class PassNotificationJobTests : IDisposable
     }
 
     [Fact]
-    public async Task TesterWithNoSubscriptionRow_DefaultsToNotified()
+    public async Task TesterWithNoSubscriptionRow_DefaultsToNotNotified()
     {
         var (pass, _) = MakePass(minutesFromNow: 10);
         var settings = MakeUserSettings(fcmToken: "device-token", alertMinutes: [10]);
@@ -237,7 +248,7 @@ public class PassNotificationJobTests : IDisposable
             .ReturnsAsync(Result<IEnumerable<UserSettings>>.Success([settings]));
 
         var mockPassRepo = MockPassRepo(pass);
-        // No subscription rows at all for this pass — sparse table, absence means notify = true.
+        // No subscription rows at all for this pass — sparse table, absence means notify = false.
         var mockSubscriptionRepo = MockSubscriptionRepo();
         var mockLogRepo = MockLogRepo();
         var mockFirebase = new Mock<IFirebaseService>();
@@ -246,7 +257,7 @@ public class PassNotificationJobTests : IDisposable
             mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
 
         mockFirebase.Verify(f => f.SendPassNotificationAsync(
-            "device-token", "EROS C3", pass.Aos, 10), Times.Once);
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>()), Times.Never);
     }
 
     [Fact]
@@ -269,7 +280,7 @@ public class PassNotificationJobTests : IDisposable
             .ReturnsAsync(Result<IEnumerable<UserSettings>>.Success([settings]));
 
         var mockPassRepo = MockPassRepo(pass);
-        var mockSubscriptionRepo = MockSubscriptionRepo();
+        var mockSubscriptionRepo = MockSubscriptionRepo(MakeOptIn(pass.Id, settings.ApiKeyId));
         var mockLogRepo = MockLogRepo(existingLog);
         var mockFirebase = new Mock<IFirebaseService>();
 
@@ -307,7 +318,8 @@ public class PassNotificationJobTests : IDisposable
             .ReturnsAsync(Result<IEnumerable<UserSettings>>.Success([existingTester, newTester]));
 
         var mockPassRepo = MockPassRepo(pass);
-        var mockSubscriptionRepo = MockSubscriptionRepo();
+        var mockSubscriptionRepo = MockSubscriptionRepo(
+            MakeOptIn(pass.Id, existingTester.ApiKeyId), MakeOptIn(pass.Id, newTester.ApiKeyId));
         var mockLogRepo = MockLogRepo(existingLog);
         var mockFirebase = new Mock<IFirebaseService>();
 

@@ -17,8 +17,8 @@ public class PassSubscriptionRepository : IPassSubscriptionRepository
             var subscription = await _context.PassSubscriptions
                 .FirstOrDefaultAsync(s => s.PassId == passId && s.ApiKeyId == apiKeyId);
 
-            // No row = the tester was never opted out, so the default is "notify".
-            return Result<bool>.Success(subscription?.Notify ?? true);
+            // No row = the tester never opted in, so the default is "do not notify".
+            return Result<bool>.Success(subscription?.Notify ?? false);
         }
         catch (Exception ex)
         {

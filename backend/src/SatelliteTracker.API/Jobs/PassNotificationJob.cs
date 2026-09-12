@@ -103,8 +103,8 @@ public class PassNotificationJob : BackgroundService
             return;
         }
 
-        // Sparse opt-out table: only pairs present here have ever been toggled. Any (pass, tester)
-        // pair missing from this dictionary defaults to notify = true.
+        // Sparse opt-in table: only pairs present here have ever been toggled. Any (pass, tester)
+        // pair missing from this dictionary defaults to notify = false.
         var notifyOverrides = subscriptionsResult.Value!
             .ToDictionary(s => (s.PassId, s.ApiKeyId), s => s.Notify);
 
@@ -129,7 +129,7 @@ public class PassNotificationJob : BackgroundService
             {
                 var notify = notifyOverrides.TryGetValue((pass.Id, settings.ApiKeyId), out var explicitNotify)
                     ? explicitNotify
-                    : true;
+                    : false;
                 if (!notify)
                     continue;
 
