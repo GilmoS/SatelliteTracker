@@ -9,6 +9,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.Lifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -83,7 +84,7 @@ fun MainNavHost(navController: NavHostController = rememberNavController()) {
                         navController.navigate(SatTrakkDestination.FullPassList.buildRoute(satelliteId, satelliteName))
                     },
                     onPassClick = { passId ->
-                        navController.navigate(SatTrakkDestination.PassDetails.buildRoute(passId))
+                        navController.navigateDebounced(SatTrakkDestination.PassDetails.buildRoute(passId))
                     },
                     onOpenMap = { navController.navigate(SatTrakkDestination.Map.route) },
                 )
@@ -103,7 +104,7 @@ fun MainNavHost(navController: NavHostController = rememberNavController()) {
                 FullPassListScreen(
                     onBackClick = { navController.popBackStack() },
                     onPassClick = { passId ->
-                        navController.navigate(SatTrakkDestination.PassDetails.buildRoute(passId))
+                        navController.navigateDebounced(SatTrakkDestination.PassDetails.buildRoute(passId))
                     },
                 )
             }
@@ -174,6 +175,20 @@ private fun SatTrakkBottomNavBar(navController: NavHostController, selectedSatel
             icon = { SettingsIcon(if (currentRoute == SatTrakkDestination.Settings.route) onSurface else onSurfaceVariant) },
             label = { Text("Settings") },
         )
+    }
+}
+
+// Guards against the design-review finding that rapid repeated taps on a pass row opened multiple
+// PassDetails modal instances -- no row-tap call site had any debounce, and Compose Navigation
+// doesn't inherently prevent duplicate rapid navigation to the same destination. The standard fix
+// for this exact problem: only navigate while the current back stack entry's lifecycle is RESUMED
+// -- a second tap arriving before the first navigation finishes finds the entry already moved past
+// RESUMED (e.g. STARTED, as the new destination is being composed) and is silently ignored. Used
+// by every row-tap-to-PassDetails call site (Dashboard and Full Pass List) rather than duplicating
+// the check at each one -- see android/CLAUDE.md.
+private fun NavHostController.navigateDebounced(route: String) {
+    if (currentBackStackEntry?.lifecycle?.currentState == Lifecycle.State.RESUMED) {
+        navigate(route)
     }
 }
 
