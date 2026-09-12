@@ -54,11 +54,11 @@ import com.sattrakk.app.domain.model.Pass
 import com.sattrakk.app.navigation.BackArrowIcon
 import com.sattrakk.app.navigation.PlusIcon
 import com.sattrakk.app.navigation.TrashIcon
+import com.sattrakk.app.ui.common.formatDateLocal
+import com.sattrakk.app.ui.common.formatTimeLocal
+import com.sattrakk.app.ui.common.formatTimeUtc
 import com.sattrakk.app.ui.theme.TelemetryTextStyle
 import java.time.OffsetDateTime
-import java.time.ZoneId
-import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
 // Real Pass Details Modal content, replacing the one-line placeholder. Wired to the already-
@@ -446,15 +446,6 @@ private fun NoteEditDialog(
         },
     )
 }
-
-private fun formatDateLocal(dateTime: OffsetDateTime): String =
-    dateTime.atZoneSameInstant(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("EEE, MMM d yyyy"))
-
-private fun formatTimeLocal(dateTime: OffsetDateTime): String =
-    dateTime.atZoneSameInstant(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("HH:mm"))
-
-private fun formatTimeUtc(dateTime: OffsetDateTime): String =
-    dateTime.withOffsetSameInstant(ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("HH:mm"))
 
 private fun formatDuration(totalSeconds: Int): String {
     val minutes = totalSeconds / 60
