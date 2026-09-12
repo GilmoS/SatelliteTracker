@@ -173,24 +173,24 @@ public class AuthenticationTests : IDisposable
     }
 
     [Fact]
-    public async Task PatchNotify_SetFalseThenTrue_TogglesEffectiveStatusAndIsolatesOtherTesters()
+    public async Task PatchNotify_SetTrueThenFalse_TogglesEffectiveStatusAndIsolatesOtherTesters()
     {
         var pass = await SeedPassAsync();
         var apiKey1 = await SeedApiKeyAsync(isActive: true, rawKey: "tester1-key");
         var apiKey2 = await SeedApiKeyAsync(isActive: true, rawKey: "tester2-key");
-
-        var falseResponse = await _client.SendAsync(
-            BuildRequest(HttpMethod.Patch, $"/api/passes/{pass.Id}/notify", "tester1-key", new PatchNotifyRequest(false)));
-        Assert.Equal(HttpStatusCode.OK, falseResponse.StatusCode);
-
-        await AssertEffectiveNotify(pass.Id, apiKey1.Id, expected: false);
-        await AssertEffectiveNotify(pass.Id, apiKey2.Id, expected: true); // multi-tester isolation
 
         var trueResponse = await _client.SendAsync(
             BuildRequest(HttpMethod.Patch, $"/api/passes/{pass.Id}/notify", "tester1-key", new PatchNotifyRequest(true)));
         Assert.Equal(HttpStatusCode.OK, trueResponse.StatusCode);
 
         await AssertEffectiveNotify(pass.Id, apiKey1.Id, expected: true);
+        await AssertEffectiveNotify(pass.Id, apiKey2.Id, expected: false); // multi-tester isolation, apiKey2 stays at the opt-in default
+
+        var falseResponse = await _client.SendAsync(
+            BuildRequest(HttpMethod.Patch, $"/api/passes/{pass.Id}/notify", "tester1-key", new PatchNotifyRequest(false)));
+        Assert.Equal(HttpStatusCode.OK, falseResponse.StatusCode);
+
+        await AssertEffectiveNotify(pass.Id, apiKey1.Id, expected: false);
     }
 
     private async Task AssertEffectiveNotify(Guid passId, Guid apiKeyId, bool expected)

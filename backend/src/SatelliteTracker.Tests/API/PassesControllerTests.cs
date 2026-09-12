@@ -134,7 +134,7 @@ public class PassesControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task PatchNotify_NotifyFalse_CreatesOptOutRowAndEffectiveStatusIsFalse()
+    public async Task PatchNotify_NotifyFalse_MatchesSparseDefaultAndCreatesNoRow()
     {
         var (sat, tle, apiKey1, _) = Seed();
         var pass = MakePass(sat.Id, tle.Id);
@@ -146,19 +146,19 @@ public class PassesControllerTests : IDisposable
         var result = await controller.PatchNotify(pass.Id, new PatchNotifyRequest(false));
 
         Assert.IsType<OkObjectResult>(result);
+        // false is now the sparse default — no row needs to be written.
+        Assert.Empty(_context.PassSubscriptions.Where(s => s.PassId == pass.Id && s.ApiKeyId == apiKey1.Id));
         var effective = await _subscriptionRepo.GetEffectiveNotifyStatusAsync(pass.Id, apiKey1.Id);
         Assert.False(effective.Value);
     }
 
     [Fact]
-    public async Task PatchNotify_NotifyTrueAfterFalse_RestoresDefaultAndRemovesRow()
+    public async Task PatchNotify_NotifyTrue_CreatesExplicitOptInRow()
     {
         var (sat, tle, apiKey1, _) = Seed();
         var pass = MakePass(sat.Id, tle.Id);
         _context.Passes.Add(pass);
         await _context.SaveChangesAsync();
-
-        await _subscriptionRepo.SetNotifyAsync(pass.Id, apiKey1.Id, notify: false);
 
         var controller = BuildController(_subscriptionRepo, pass, apiKey1.Id);
         var result = await controller.PatchNotify(pass.Id, new PatchNotifyRequest(true));
@@ -166,6 +166,25 @@ public class PassesControllerTests : IDisposable
         Assert.IsType<OkObjectResult>(result);
         var effective = await _subscriptionRepo.GetEffectiveNotifyStatusAsync(pass.Id, apiKey1.Id);
         Assert.True(effective.Value);
+        Assert.Single(_context.PassSubscriptions.Where(s => s.PassId == pass.Id && s.ApiKeyId == apiKey1.Id));
+    }
+
+    [Fact]
+    public async Task PatchNotify_NotifyFalseAfterTrue_RestoresDefaultAndRemovesRow()
+    {
+        var (sat, tle, apiKey1, _) = Seed();
+        var pass = MakePass(sat.Id, tle.Id);
+        _context.Passes.Add(pass);
+        await _context.SaveChangesAsync();
+
+        await _subscriptionRepo.SetNotifyAsync(pass.Id, apiKey1.Id, notify: true);
+
+        var controller = BuildController(_subscriptionRepo, pass, apiKey1.Id);
+        var result = await controller.PatchNotify(pass.Id, new PatchNotifyRequest(false));
+
+        Assert.IsType<OkObjectResult>(result);
+        var effective = await _subscriptionRepo.GetEffectiveNotifyStatusAsync(pass.Id, apiKey1.Id);
+        Assert.False(effective.Value);
         Assert.Empty(_context.PassSubscriptions.Where(s => s.PassId == pass.Id && s.ApiKeyId == apiKey1.Id));
     }
 
@@ -177,7 +196,7 @@ public class PassesControllerTests : IDisposable
         _context.Passes.Add(pass);
         await _context.SaveChangesAsync();
 
-        await _subscriptionRepo.SetNotifyAsync(pass.Id, apiKey2.Id, notify: false);
+        await _subscriptionRepo.SetNotifyAsync(pass.Id, apiKey2.Id, notify: true);
 
         var controller = BuildController(_subscriptionRepo, pass, apiKey1.Id);
         await controller.PatchNotify(pass.Id, new PatchNotifyRequest(false));
@@ -185,7 +204,7 @@ public class PassesControllerTests : IDisposable
         var tester1Effective = await _subscriptionRepo.GetEffectiveNotifyStatusAsync(pass.Id, apiKey1.Id);
         var tester2Effective = await _subscriptionRepo.GetEffectiveNotifyStatusAsync(pass.Id, apiKey2.Id);
         Assert.False(tester1Effective.Value);
-        Assert.False(tester2Effective.Value);
+        Assert.True(tester2Effective.Value);
     }
 
     // ── GetTrack ──────────────────────────────────────────────────────────────

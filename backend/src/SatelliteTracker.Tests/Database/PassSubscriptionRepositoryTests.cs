@@ -7,9 +7,9 @@ using Xunit;
 
 namespace SatelliteTracker.Tests.Database;
 
-// PassSubscription is a sparse opt-out table: these tests exercise the LEFT JOIN + COALESCE
+// PassSubscription is a sparse opt-in table: these tests exercise the LEFT JOIN + COALESCE
 // semantics of GetEffectiveNotifyStatusAsync, which is the one thing a generic GetAsync couldn't
-// express safely (a missing row is not an error — it's an implicit "notify = true").
+// express safely (a missing row is not an error — it's an implicit "notify = false").
 public class PassSubscriptionRepositoryTests : IDisposable
 {
     private readonly AppDbContext _context;
@@ -78,7 +78,7 @@ public class PassSubscriptionRepositoryTests : IDisposable
     };
 
     [Fact]
-    public async Task GetEffectiveNotifyStatusAsync_NoSubscriptionRow_DefaultsToTrue()
+    public async Task GetEffectiveNotifyStatusAsync_NoSubscriptionRow_DefaultsToFalse()
     {
         var (sat, tle, apiKey) = Seed();
         var pass = MakePass(sat.Id, tle.Id);
@@ -88,11 +88,11 @@ public class PassSubscriptionRepositoryTests : IDisposable
         var result = await _repo.GetEffectiveNotifyStatusAsync(pass.Id, apiKey.Id);
 
         Assert.True(result.IsSuccess);
-        Assert.True(result.Value);
+        Assert.False(result.Value);
     }
 
     [Fact]
-    public async Task GetEffectiveNotifyStatusAsync_ExplicitOptOutRow_ReturnsFalse()
+    public async Task GetEffectiveNotifyStatusAsync_ExplicitFalseRow_ReturnsFalse()
     {
         var (sat, tle, apiKey) = Seed();
         var pass = MakePass(sat.Id, tle.Id);
@@ -124,21 +124,21 @@ public class PassSubscriptionRepositoryTests : IDisposable
     }
 
     [Fact]
-    public async Task DeleteOverrideAsync_ExistingRow_RemovesItAndRestoresDefaultTrue()
+    public async Task DeleteOverrideAsync_ExistingRow_RemovesItAndRestoresDefaultFalse()
     {
         var (sat, tle, apiKey) = Seed();
         var pass = MakePass(sat.Id, tle.Id);
         _context.Passes.Add(pass);
         await _context.SaveChangesAsync();
 
-        await _repo.SetNotifyAsync(pass.Id, apiKey.Id, notify: false);
+        await _repo.SetNotifyAsync(pass.Id, apiKey.Id, notify: true);
 
         var result = await _repo.DeleteOverrideAsync(pass.Id, apiKey.Id);
 
         Assert.True(result.IsSuccess);
         Assert.Empty(_context.PassSubscriptions);
         var effective = await _repo.GetEffectiveNotifyStatusAsync(pass.Id, apiKey.Id);
-        Assert.True(effective.Value);
+        Assert.False(effective.Value);
     }
 
     [Fact]
@@ -172,15 +172,15 @@ public class PassSubscriptionRepositoryTests : IDisposable
         _context.Passes.Add(pass);
         await _context.SaveChangesAsync();
 
-        await _repo.SetNotifyAsync(pass.Id, apiKey1.Id, notify: false);
-        await _repo.SetNotifyAsync(pass.Id, apiKey2.Id, notify: false);
+        await _repo.SetNotifyAsync(pass.Id, apiKey1.Id, notify: true);
+        await _repo.SetNotifyAsync(pass.Id, apiKey2.Id, notify: true);
 
         await _repo.DeleteOverrideAsync(pass.Id, apiKey1.Id);
 
         var tester1Effective = await _repo.GetEffectiveNotifyStatusAsync(pass.Id, apiKey1.Id);
         var tester2Effective = await _repo.GetEffectiveNotifyStatusAsync(pass.Id, apiKey2.Id);
-        Assert.True(tester1Effective.Value);
-        Assert.False(tester2Effective.Value);
+        Assert.False(tester1Effective.Value);
+        Assert.True(tester2Effective.Value);
     }
 
     [Fact]
