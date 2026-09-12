@@ -1,9 +1,9 @@
 namespace SatelliteTracker.Database.Entities;
 
-// Per-tester notification opt-out for a specific pass. Sparse table: a row exists ONLY once a
-// tester has actively toggled notifications off for this pass — there is no row created by
+// Per-tester notification opt-in for a specific pass. Sparse table: a row exists ONLY once a
+// tester has actively toggled notifications on for this pass — there is no row created by
 // default when a pass is calculated or when a tester registers. Absence of a row means
-// Notify = true (opt-out model). Callers must LEFT JOIN + COALESCE to true, never assume a row
+// Notify = false (opt-in model). Callers must LEFT JOIN + COALESCE to false, never assume a row
 // exists — see IPassSubscriptionRepository.GetEffectiveNotifyStatusAsync.
 public class PassSubscription
 {

@@ -137,9 +137,9 @@ public class PassesController : BaseController
 
 
     // PATCH api/passes/{id}/notify
-    // Upserts the calling tester's PassSubscription opt-out row. Notify = true is the sparse
-    // default (see IPassSubscriptionRepository), so setting it back to true deletes any existing
-    // override row instead of writing a redundant "true" row.
+    // Upserts the calling tester's PassSubscription opt-in row. Notify = false is the sparse
+    // default (see IPassSubscriptionRepository), so setting it back to false deletes any existing
+    // override row instead of writing a redundant "false" row.
     [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPatch("{id:guid}/notify")]
     [ProducesResponseType(typeof(NotifyStatusDto), StatusCodes.Status200OK)]
@@ -155,13 +155,13 @@ public class PassesController : BaseController
 
         if (request.Notify)
         {
-            var deleteResult = await _subscriptionRepo.DeleteOverrideAsync(id, apiKeyId);
-            if (!deleteResult.IsSuccess) return ToError(deleteResult.Error!);
+            var setResult = await _subscriptionRepo.SetNotifyAsync(id, apiKeyId, notify: true);
+            if (!setResult.IsSuccess) return ToError(setResult.Error!);
         }
         else
         {
-            var setResult = await _subscriptionRepo.SetNotifyAsync(id, apiKeyId, notify: false);
-            if (!setResult.IsSuccess) return ToError(setResult.Error!);
+            var deleteResult = await _subscriptionRepo.DeleteOverrideAsync(id, apiKeyId);
+            if (!deleteResult.IsSuccess) return ToError(deleteResult.Error!);
         }
 
         var effectiveResult = await _subscriptionRepo.GetEffectiveNotifyStatusAsync(id, apiKeyId);
