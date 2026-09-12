@@ -2,11 +2,13 @@ package com.sattrakk.app.ui.dashboard
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.sattrakk.app.data.local.HiddenSatellitesStore
 import com.sattrakk.app.data.repository.PassRepository
 import com.sattrakk.app.data.repository.SatelliteRepository
 import com.sattrakk.app.domain.model.ApiResult
 import com.sattrakk.app.domain.model.Pass
 import com.sattrakk.app.domain.model.Satellite
+import com.sattrakk.app.domain.util.excludePastAos
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.Clock
 import java.time.Duration
@@ -19,8 +21,11 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -31,11 +36,29 @@ import kotlinx.coroutines.launch
 class DashboardViewModel @Inject constructor(
     private val satelliteRepository: SatelliteRepository,
     private val passRepository: PassRepository,
-    private val clock: Clock
+    private val clock: Clock,
+    private val hiddenSatellitesStore: HiddenSatellitesStore
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow<DashboardUiState>(DashboardUiState.Loading)
-    val uiState: StateFlow<DashboardUiState> = _uiState.asStateFlow()
+    // Internal source of truth — ALL loaded tabs, regardless of hidden status, exactly as the
+    // pre-hidden-satellites design worked. Every existing load/poll/ticker method below reads and
+    // writes this one, unchanged in shape, so hiding a satellite never touches what's actually
+    // fetched/cached (see android/CLAUDE.md — "the cache should still hold the full fetched set").
+    private val _rawState = MutableStateFlow<DashboardUiState>(DashboardUiState.Loading)
+
+    // Publicly exposed state: the same Content, with hidden satellites' tabs filtered out. Built
+    // as a combine() of _rawState and the HiddenSatellitesStore Flow (rather than writing hidden-
+    // filtered tabs directly into _rawState) specifically so a poll/refresh/ticker tick — which
+    // only knows the raw fetched data, not the current hidden set — can never clobber a previous
+    // filtering pass. See android/CLAUDE.md's DashboardViewModel section.
+    val uiState: StateFlow<DashboardUiState> =
+        combine(_rawState, hiddenSatellitesStore.hiddenSatelliteIds) { raw, hiddenIds ->
+            if (raw is DashboardUiState.Content) {
+                raw.copy(tabs = raw.tabs.filterNot { hiddenIds.contains(it.satelliteId) })
+            } else {
+                raw
+            }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, DashboardUiState.Loading)
 
     // Exactly one of each runs at a time. countdownTickerJob is restarted every time the selected
     // tab changes, so only the visible tab's countdown is ever actively ticking. pollingJob runs
@@ -46,21 +69,29 @@ class DashboardViewModel @Inject constructor(
     init {
         loadDashboard()
         startPolling()
+        observeHiddenSatellites()
     }
 
     private fun loadDashboard() {
         viewModelScope.launch {
+            // Snapshot of the current hidden set, just for picking a sensible default selected
+            // tab — the publicly exposed `uiState` combine() above is what actually keeps `tabs`
+            // filtered live; this is only about not defaulting the selection to a hidden satellite
+            // on first load (see android/CLAUDE.md).
+            val hiddenIds = hiddenSatellitesStore.hiddenSatelliteIds.first()
             when (val satellitesResult = satelliteRepository.getSatellites()) {
                 is ApiResult.Success -> {
                     val satellites = satellitesResult.data
                     val tabs = loadAllTabs(satellites)
-                    val selectedId = satellites.firstOrNull { it.isDefault }?.id
+                    val visibleSatellites = satellites.filterNot { hiddenIds.contains(it.id) }
+                    val selectedId = visibleSatellites.firstOrNull { it.isDefault }?.id
+                        ?: visibleSatellites.firstOrNull()?.id
                         ?: satellites.firstOrNull()?.id
                         ?: ""
-                    _uiState.value = DashboardUiState.Content(tabs = tabs, selectedSatelliteId = selectedId)
+                    _rawState.value = DashboardUiState.Content(tabs = tabs, selectedSatelliteId = selectedId)
                     if (selectedId.isNotEmpty()) startCountdownTicker(selectedId)
                 }
-                else -> _uiState.value = DashboardUiState.Error(errorMessageFor(satellitesResult))
+                else -> _rawState.value = DashboardUiState.Error(errorMessageFor(satellitesResult))
             }
         }
     }
@@ -74,12 +105,14 @@ class DashboardViewModel @Inject constructor(
     // A satellite's own passes call failing does NOT fail the whole screen — see
     // SatelliteTabState.loadError and android/CLAUDE.md for why a per-tab failure was chosen over
     // blanking out tabs that loaded fine.
-    private suspend fun loadTab(satellite: Satellite): SatelliteTabState =
-        when (val result = passRepository.getPasses(satellite.id)) {
+    private suspend fun loadTab(satellite: Satellite): SatelliteTabState {
+        val now = OffsetDateTime.now(clock)
+        return when (val result = passRepository.getPasses(satellite.id)) {
             is ApiResult.Success -> SatelliteTabState(
                 satelliteId = satellite.id,
                 satelliteName = satellite.name,
                 passes = result.data,
+                visiblePasses = result.data.excludePastAos(now),
                 nextPassCountdown = null,
                 loadError = null
             )
@@ -87,30 +120,39 @@ class DashboardViewModel @Inject constructor(
                 satelliteId = satellite.id,
                 satelliteName = satellite.name,
                 passes = emptyList(),
+                visiblePasses = emptyList(),
                 nextPassCountdown = null,
                 loadError = errorMessageFor(result)
             )
         }
+    }
 
     // Pure local state update — no repository call. Restarts the countdown ticker so only the
     // newly selected tab's countdown keeps ticking.
     fun selectTab(satelliteId: String) {
-        val current = _uiState.value
+        val current = _rawState.value
         if (current !is DashboardUiState.Content) return
         if (current.selectedSatelliteId == satelliteId) return
-        _uiState.value = current.copy(selectedSatelliteId = satelliteId)
+        _rawState.value = current.copy(selectedSatelliteId = satelliteId)
         startCountdownTicker(satelliteId)
     }
 
     // Force-refreshes only the currently selected tab, not every satellite in the background —
-    // the user is pulling to refresh what they're looking at.
+    // the user is pulling to refresh what they're looking at. isRefreshing drives the
+    // PullToRefreshBox spinner in DashboardScreen — see DashboardUiState.Content.isRefreshing.
     fun refresh() {
-        val current = _uiState.value
+        val current = _rawState.value
         if (current !is DashboardUiState.Content) return
+        if (current.isRefreshing) return
         val selectedId = current.selectedSatelliteId
+        _rawState.value = current.copy(isRefreshing = true)
         viewModelScope.launch {
             val result = passRepository.getPasses(selectedId, forceRefresh = true)
             applyPassesResult(selectedId, result)
+            val afterLoad = _rawState.value
+            if (afterLoad is DashboardUiState.Content) {
+                _rawState.value = afterLoad.copy(isRefreshing = false)
+            }
         }
     }
 
@@ -122,7 +164,7 @@ class DashboardViewModel @Inject constructor(
         pollingJob = viewModelScope.launch {
             while (isActive) {
                 delay(POLL_INTERVAL_MILLIS)
-                val current = _uiState.value
+                val current = _rawState.value
                 if (current is DashboardUiState.Content) {
                     current.tabs.forEach { tab ->
                         launch {
@@ -136,17 +178,47 @@ class DashboardViewModel @Inject constructor(
     }
 
     private fun applyPassesResult(satelliteId: String, result: ApiResult<List<Pass>>) {
-        val current = _uiState.value
+        val current = _rawState.value
         if (current !is DashboardUiState.Content) return
+        val now = OffsetDateTime.now(clock)
         val updatedTabs = current.tabs.map { tab ->
             if (tab.satelliteId != satelliteId) {
                 tab
             } else when (result) {
-                is ApiResult.Success -> tab.copy(passes = result.data, loadError = null)
+                is ApiResult.Success -> tab.copy(
+                    passes = result.data,
+                    visiblePasses = result.data.excludePastAos(now),
+                    loadError = null
+                )
                 else -> tab.copy(loadError = errorMessageFor(result))
             }
         }
-        _uiState.value = current.copy(tabs = updatedTabs)
+        _rawState.value = current.copy(tabs = updatedTabs)
+    }
+
+    // Reacts to the hidden-satellites set changing WHILE Dashboard is active (e.g. the user
+    // backgrounds the app, hides a satellite from Settings, and returns — or hides one without
+    // ever leaving Dashboard, if that's reachable). Only ever moves the *selection* away from a
+    // satellite that just became hidden and restarts its ticker; the actual tab-list filtering for
+    // display is handled reactively by the `uiState` combine() above regardless of this method.
+    private fun observeHiddenSatellites() {
+        viewModelScope.launch {
+            hiddenSatellitesStore.hiddenSatelliteIds.collect { hiddenIds ->
+                val current = _rawState.value
+                if (current is DashboardUiState.Content && hiddenIds.contains(current.selectedSatelliteId)) {
+                    val fallbackId = current.tabs.map { it.satelliteId }.firstOrNull { it !in hiddenIds }
+                    if (fallbackId != null) {
+                        _rawState.value = current.copy(selectedSatelliteId = fallbackId)
+                        startCountdownTicker(fallbackId)
+                    } else {
+                        // Every loaded satellite is now hidden — nothing sensible to select or
+                        // tick for. Leave selectedSatelliteId as-is; the Composable's empty-tabs
+                        // branch already handles "no visible satellites."
+                        countdownTickerJob?.cancel()
+                    }
+                }
+            }
+        }
     }
 
     // Recomputes from the tab's current passes list every second (rather than decrementing a
@@ -165,14 +237,14 @@ class DashboardViewModel @Inject constructor(
         countdownTickerJob?.cancel()
         countdownTickerJob = viewModelScope.launch {
             while (isActive) {
-                val current = _uiState.value
+                val current = _rawState.value
                 if (current is DashboardUiState.Content) {
                     val tab = current.tabs.find { it.satelliteId == satelliteId }
                     if (tab != null) {
                         val now = OffsetDateTime.now(clock)
                         val next = tab.passes.filter { it.aos.isAfter(now) }.minByOrNull { it.aos }
                         val countdown = next?.let { Duration.between(now, it.aos) }
-                        updateCountdown(satelliteId, countdown, next)
+                        updateCountdown(satelliteId, countdown, next, tab.passes.excludePastAos(now))
                     }
                 }
                 delay(1000)
@@ -180,17 +252,17 @@ class DashboardViewModel @Inject constructor(
         }
     }
 
-    private fun updateCountdown(satelliteId: String, countdown: Duration?, nextPass: Pass?) {
-        val current = _uiState.value
+    private fun updateCountdown(satelliteId: String, countdown: Duration?, nextPass: Pass?, visiblePasses: List<Pass>) {
+        val current = _rawState.value
         if (current !is DashboardUiState.Content) return
         val updatedTabs = current.tabs.map { tab ->
             if (tab.satelliteId == satelliteId) {
-                tab.copy(nextPassCountdown = countdown, nextPass = nextPass)
+                tab.copy(nextPassCountdown = countdown, nextPass = nextPass, visiblePasses = visiblePasses)
             } else {
                 tab
             }
         }
-        _uiState.value = current.copy(tabs = updatedTabs)
+        _rawState.value = current.copy(tabs = updatedTabs)
     }
 
     private fun errorMessageFor(result: ApiResult<*>): String = when (result) {

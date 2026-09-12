@@ -3,6 +3,7 @@
 package com.sattrakk.app.ui.fullpasslist
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -55,6 +56,7 @@ import com.sattrakk.app.navigation.BackArrowIcon
 import com.sattrakk.app.navigation.ChevronIcon
 import com.sattrakk.app.navigation.CloseIcon
 import com.sattrakk.app.navigation.FilterIcon
+import com.sattrakk.app.ui.common.formatTimeLocal
 import com.sattrakk.app.ui.theme.TelemetryTextStyle
 import java.time.Duration
 import java.time.LocalDate
@@ -149,15 +151,21 @@ fun FullPassListScreen(
         },
     ) { innerPadding ->
         Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-            // Three states, not the raw design's two-way toggle — Upcoming/History/All, ALL
-            // selected by default (FullPassListUiState's own initial value). Confirmed product
-            // requirement, not derived from the design file — see android/CLAUDE.md.
+            // Upcoming/History/All, ALL selected by default (FullPassListUiState's own initial
+            // value) — confirmed product requirement, not derived from the design file. FILTERED
+            // (design-review bug-fix round) is a fourth, dynamically-appearing segment: it's only
+            // included in the row while a filter is actually active (isFilterActive below, the
+            // same check FullPassListViewModel.applyFilterActivation uses), not a permanently
+            // visible-but-empty fifth option — see android/CLAUDE.md.
+            val isFilterActive = state.timeWindow != FullPassListViewModel.DEFAULT_TIME_WINDOW ||
+                state.minMaxElevation != FullPassListViewModel.DEFAULT_MIN_MAX_ELEVATION
+            val visibleFilters = PassListFilter.entries.filter { it != PassListFilter.FILTERED || isFilterActive }
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth().padding(16.dp, 8.dp)) {
-                PassListFilter.entries.forEachIndexed { index, filter ->
+                visibleFilters.forEachIndexed { index, filter ->
                     SegmentedButton(
                         selected = state.filter == filter,
                         onClick = { viewModel.setFilter(filter) },
-                        shape = SegmentedButtonDefaults.itemShape(index, PassListFilter.entries.size),
+                        shape = SegmentedButtonDefaults.itemShape(index, visibleFilters.size),
                         label = { Text(filter.displayName()) },
                     )
                 }
@@ -220,7 +228,16 @@ fun FullPassListScreen(
                         ) { item ->
                             when (item) {
                                 is PassListRowItem.DateHeader -> DateHeaderRow(item.label)
-                                is PassListRowItem.Row -> PassRow(pass = item.pass, onClick = { onPassClick(item.pass.id) })
+                                is PassListRowItem.Row -> PassRow(
+                                    pass = item.pass,
+                                    // The nearestPassId boundary marker only means anything in ALL
+                                    // (see FullPassListUiState.nearestPassId and
+                                    // android/CLAUDE.md) -- it's always null outside ALL anyway,
+                                    // but the filter check makes that explicit rather than
+                                    // incidental.
+                                    isNearest = state.filter == PassListFilter.ALL && item.pass.id == state.nearestPassId,
+                                    onClick = { onPassClick(item.pass.id) },
+                                )
                             }
                         }
                         if (state.isLoadingMore && state.passes.isNotEmpty()) {
@@ -241,8 +258,12 @@ fun FullPassListScreen(
             timeWindow = state.timeWindow,
             minMaxElevation = state.minMaxElevation,
             currentPassesCount = state.passes.size,
-            onSetTimeWindow = viewModel::setTimeWindow,
-            onSetMinMaxElevation = viewModel::setMinMaxElevation,
+            // Per the FILTERED segment's design: picking a filter value both activates FILTERED
+            // (in the ViewModel, see FullPassListViewModel.applyFilterActivation) AND closes the
+            // sheet immediately to show the result, rather than leaving it open for further
+            // browsing -- see android/CLAUDE.md.
+            onSetTimeWindow = { timeWindow -> viewModel.setTimeWindow(timeWindow); showFilterSheet = false },
+            onSetMinMaxElevation = { elevation -> viewModel.setMinMaxElevation(elevation); showFilterSheet = false },
             onReset = viewModel::resetFilters,
             onDismiss = { showFilterSheet = false },
         )
@@ -253,6 +274,7 @@ private fun PassListFilter.displayName(): String = when (this) {
     PassListFilter.UPCOMING -> "Upcoming"
     PassListFilter.HISTORY -> "History"
     PassListFilter.ALL -> "All"
+    PassListFilter.FILTERED -> "Filtered"
 }
 
 @Composable
@@ -265,12 +287,22 @@ private fun DateHeaderRow(label: String) {
     )
 }
 
+// isNearest highlights the row matching FullPassListUiState.nearestPassId in the ALL view (design-
+// review finding 2b — the marker already existed and was already correctly computed, it just had
+// no visual treatment). Background tint + accent time/subtext color mirrors DashboardScreen's own
+// "next pass" row treatment (see that file's PassRow) rather than inventing a new visual language.
 @Composable
-private fun PassRow(pass: Pass, onClick: () -> Unit) {
+private fun PassRow(pass: Pass, isNearest: Boolean, onClick: () -> Unit) {
+    val rowBackground = if (isNearest) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
+    val timeColor = if (isNearest) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
+    val secondaryTextColor = if (isNearest) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+    val chevronColor = if (isNearest) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.outline
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 64.dp)
+            .background(rowBackground)
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -280,18 +312,19 @@ private fun PassRow(pass: Pass, onClick: () -> Unit) {
             Text(
                 text = "${formatTimeLocal(pass.aos)} → ${formatTimeLocal(pass.los)}",
                 style = TelemetryTextStyle.copy(fontSize = 15.sp),
+                color = timeColor,
             )
             Text(
                 text = "${formatRelativeTime(pass.aos)} · ${formatDurationShort(pass.durationSec)} · #${pass.orbitNumber}",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = secondaryTextColor,
                 modifier = Modifier.padding(top = 3.dp),
             )
         }
         ElevationChip(pass.maxElevation)
         // Pass-direction (N->S / S->N) is omitted outright, per the truth map — no such field
         // exists on Pass, and it's explicitly documented as not implemented anywhere.
-        ChevronIcon(MaterialTheme.colorScheme.outline)
+        ChevronIcon(chevronColor)
     }
 }
 
@@ -402,11 +435,9 @@ private fun timeWindowChipLabel(timeWindow: TimeWindow): String = when (timeWind
     }
 }
 
-// ---- formatting (small, local duplicate of Dashboard's equivalents -- not shared, per this
-// task's "do not touch Dashboard" scope restriction; see android/CLAUDE.md) ----
-
-private fun formatTimeLocal(dateTime: OffsetDateTime): String =
-    dateTime.atZoneSameInstant(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("HH:mm"))
+// ---- formatting (formatTimeLocal is the shared ui/common utility -- see
+// android/CLAUDE.md's "Timezone conversion" section; the rest stays a small local duplicate of
+// Dashboard's equivalents, not shared, per this screen's "do not touch Dashboard" scope) ----
 
 private fun formatDurationShort(totalSeconds: Int): String {
     val minutes = totalSeconds / 60

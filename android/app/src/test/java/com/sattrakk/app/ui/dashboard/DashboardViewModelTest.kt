@@ -1,6 +1,7 @@
 package com.sattrakk.app.ui.dashboard
 
 import com.sattrakk.app.MainDispatcherRule
+import com.sattrakk.app.data.local.HiddenSatellitesStore
 import com.sattrakk.app.data.repository.PassRepository
 import com.sattrakk.app.data.repository.SatelliteRepository
 import com.sattrakk.app.domain.model.ApiResult
@@ -9,6 +10,7 @@ import com.sattrakk.app.domain.model.Satellite
 import io.mockk.clearMocks
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import java.time.Clock
 import java.time.Duration
@@ -18,7 +20,9 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -47,6 +51,8 @@ class DashboardViewModelTest {
 
     private val satelliteRepository = mockk<SatelliteRepository>()
     private val passRepository = mockk<PassRepository>()
+    private val hiddenSatellitesStore = mockk<HiddenSatellitesStore>()
+    private lateinit var hiddenIdsFlow: MutableStateFlow<Set<String>>
     private lateinit var clock: Clock
     private lateinit var viewModel: DashboardViewModel
 
@@ -66,6 +72,14 @@ class DashboardViewModelTest {
             override fun withZone(zone: ZoneId?): Clock = this
             override fun instant(): Instant = baseInstant.plusMillis(mainDispatcherRule.testDispatcher.scheduler.currentTime)
         }
+        hiddenIdsFlow = MutableStateFlow(emptySet())
+        every { hiddenSatellitesStore.hiddenSatelliteIds } returns hiddenIdsFlow
+    }
+
+    private fun createViewModel(): DashboardViewModel {
+        val vm = DashboardViewModel(satelliteRepository, passRepository, clock, hiddenSatellitesStore)
+        runCurrent()
+        return vm
     }
 
     private fun satellite(id: String, isDefault: Boolean = false) = Satellite(
@@ -104,8 +118,7 @@ class DashboardViewModelTest {
         coEvery { passRepository.getPasses("sat-1", false) } returns ApiResult.Success(listOf(pass1))
         coEvery { passRepository.getPasses("sat-2", false) } returns ApiResult.Success(listOf(pass2))
 
-        viewModel = DashboardViewModel(satelliteRepository, passRepository, clock)
-        runCurrent()
+        viewModel = createViewModel()
 
         val state = viewModel.uiState.value
         assertTrue(state is DashboardUiState.Content)
@@ -114,6 +127,7 @@ class DashboardViewModelTest {
         assertEquals(2, state.tabs.size)
         val tab1 = state.tabs.first { it.satelliteId == "sat-1" }
         assertEquals(listOf(pass1), tab1.passes)
+        assertEquals(listOf(pass1), tab1.visiblePasses)
         assertNull(tab1.loadError)
     }
 
@@ -121,8 +135,7 @@ class DashboardViewModelTest {
     fun `satellites call failure produces Error state`() {
         coEvery { satelliteRepository.getSatellites() } returns ApiResult.Error(500, "boom")
 
-        viewModel = DashboardViewModel(satelliteRepository, passRepository, clock)
-        runCurrent()
+        viewModel = createViewModel()
 
         val state = viewModel.uiState.value
         assertTrue(state is DashboardUiState.Error)
@@ -138,8 +151,7 @@ class DashboardViewModelTest {
         coEvery { passRepository.getPasses("sat-1", false) } returns ApiResult.NetworkError
         coEvery { passRepository.getPasses("sat-2", false) } returns ApiResult.Success(listOf(pass2))
 
-        viewModel = DashboardViewModel(satelliteRepository, passRepository, clock)
-        runCurrent()
+        viewModel = createViewModel()
 
         val state = viewModel.uiState.value as DashboardUiState.Content
         val tab1 = state.tabs.first { it.satelliteId == "sat-1" }
@@ -157,8 +169,7 @@ class DashboardViewModelTest {
         coEvery { satelliteRepository.getSatellites() } returns ApiResult.Success(listOf(sat1, sat2))
         coEvery { passRepository.getPasses("sat-1", false) } returns ApiResult.Success(emptyList())
         coEvery { passRepository.getPasses("sat-2", false) } returns ApiResult.Success(emptyList())
-        viewModel = DashboardViewModel(satelliteRepository, passRepository, clock)
-        runCurrent()
+        viewModel = createViewModel()
         clearMocks(passRepository, answers = false)
 
         viewModel.selectTab("sat-2")
@@ -176,8 +187,7 @@ class DashboardViewModelTest {
         coEvery { satelliteRepository.getSatellites() } returns ApiResult.Success(listOf(sat1, sat2))
         coEvery { passRepository.getPasses("sat-1", false) } returns ApiResult.Success(emptyList())
         coEvery { passRepository.getPasses("sat-2", false) } returns ApiResult.Success(emptyList())
-        viewModel = DashboardViewModel(satelliteRepository, passRepository, clock)
-        runCurrent()
+        viewModel = createViewModel()
 
         advanceTimeBy(POLL_INTERVAL_MILLIS)
         runCurrent()
@@ -189,21 +199,22 @@ class DashboardViewModelTest {
     }
 
     @Test
-    fun `refresh force-refreshes only the currently selected tab`() {
+    fun `refresh force-refreshes only the currently selected tab and toggles isRefreshing`() {
         val sat1 = satellite(id = "sat-1", isDefault = true)
         val sat2 = satellite(id = "sat-2")
         coEvery { satelliteRepository.getSatellites() } returns ApiResult.Success(listOf(sat1, sat2))
         coEvery { passRepository.getPasses("sat-1", false) } returns ApiResult.Success(emptyList())
         coEvery { passRepository.getPasses("sat-2", false) } returns ApiResult.Success(emptyList())
         coEvery { passRepository.getPasses("sat-1", true) } returns ApiResult.Success(emptyList())
-        viewModel = DashboardViewModel(satelliteRepository, passRepository, clock)
-        runCurrent()
+        viewModel = createViewModel()
+        assertFalse((viewModel.uiState.value as DashboardUiState.Content).isRefreshing)
 
         viewModel.refresh()
         runCurrent()
 
         coVerify(exactly = 1) { passRepository.getPasses("sat-1", true) }
         coVerify(exactly = 0) { passRepository.getPasses("sat-2", true) }
+        assertFalse((viewModel.uiState.value as DashboardUiState.Content).isRefreshing)
     }
 
     @Test
@@ -212,8 +223,7 @@ class DashboardViewModelTest {
         val pass1 = pass(id = "pass-1", satelliteId = "sat-1", aosOffsetSeconds = 130)
         coEvery { satelliteRepository.getSatellites() } returns ApiResult.Success(listOf(sat1))
         coEvery { passRepository.getPasses("sat-1", false) } returns ApiResult.Success(listOf(pass1))
-        viewModel = DashboardViewModel(satelliteRepository, passRepository, clock)
-        runCurrent()
+        viewModel = createViewModel()
 
         var tab = (viewModel.uiState.value as DashboardUiState.Content).tabs.first()
         assertEquals(Duration.ofSeconds(130), tab.nextPassCountdown)
@@ -234,8 +244,7 @@ class DashboardViewModelTest {
         val passB = pass(id = "pass-b", satelliteId = "sat-1", aosOffsetSeconds = 20)
         coEvery { satelliteRepository.getSatellites() } returns ApiResult.Success(listOf(sat1))
         coEvery { passRepository.getPasses("sat-1", false) } returns ApiResult.Success(listOf(passA, passB))
-        viewModel = DashboardViewModel(satelliteRepository, passRepository, clock)
-        runCurrent()
+        viewModel = createViewModel()
 
         advanceTimeBy(6_000) // past passA's AOS (5s), before passB's (20s)
         runCurrent()
@@ -243,6 +252,10 @@ class DashboardViewModelTest {
         val tab = (viewModel.uiState.value as DashboardUiState.Content).tabs.first()
         assertEquals(Duration.ofSeconds(14), tab.nextPassCountdown) // 20 - 6
         assertEquals(passB, tab.nextPass)
+        // passA's AOS has now passed -- it must drop out of the rendered visiblePasses list even
+        // though the raw `passes` (from PassRepository's still-fresh TTL cache) still carries it.
+        assertEquals(listOf(passA, passB), tab.passes)
+        assertEquals(listOf(passB), tab.visiblePasses)
     }
 
     @Test
@@ -254,8 +267,7 @@ class DashboardViewModelTest {
         coEvery { satelliteRepository.getSatellites() } returns ApiResult.Success(listOf(sat1, sat2))
         coEvery { passRepository.getPasses("sat-1", false) } returns ApiResult.Success(listOf(pass1))
         coEvery { passRepository.getPasses("sat-2", false) } returns ApiResult.Success(listOf(pass2))
-        viewModel = DashboardViewModel(satelliteRepository, passRepository, clock)
-        runCurrent()
+        viewModel = createViewModel()
 
         var state = viewModel.uiState.value as DashboardUiState.Content
         assertEquals(Duration.ofSeconds(100), state.tabs.first { it.satelliteId == "sat-1" }.nextPassCountdown)
@@ -278,5 +290,66 @@ class DashboardViewModelTest {
             tab1AfterSwitch.nextPassCountdown,
             state.tabs.first { it.satelliteId == "sat-1" }.nextPassCountdown
         )
+    }
+
+    @Test
+    fun `hiding a satellite while Dashboard is active removes its tab without a reload or restart`() {
+        val sat1 = satellite(id = "sat-1", isDefault = true)
+        val sat2 = satellite(id = "sat-2")
+        coEvery { satelliteRepository.getSatellites() } returns ApiResult.Success(listOf(sat1, sat2))
+        coEvery { passRepository.getPasses("sat-1", false) } returns ApiResult.Success(emptyList())
+        coEvery { passRepository.getPasses("sat-2", false) } returns ApiResult.Success(emptyList())
+        viewModel = createViewModel()
+        assertEquals(2, (viewModel.uiState.value as DashboardUiState.Content).tabs.size)
+        clearMocks(satelliteRepository, passRepository, answers = false)
+
+        hiddenIdsFlow.value = setOf("sat-2")
+        runCurrent()
+
+        val state = viewModel.uiState.value as DashboardUiState.Content
+        assertEquals(listOf("sat-1"), state.tabs.map { it.satelliteId })
+        // No re-fetch of any kind was needed to reflect the hidden state -- purely reactive to the
+        // HiddenSatellitesStore Flow, per android/CLAUDE.md.
+        coVerify(exactly = 0) { satelliteRepository.getSatellites() }
+        coVerify(exactly = 0) { passRepository.getPasses(any(), any()) }
+    }
+
+    @Test
+    fun `hiding the currently selected satellite falls back to another visible tab and its ticker`() {
+        val sat1 = satellite(id = "sat-1", isDefault = true)
+        val sat2 = satellite(id = "sat-2")
+        val pass2 = pass(id = "pass-2", satelliteId = "sat-2", aosOffsetSeconds = 200)
+        coEvery { satelliteRepository.getSatellites() } returns ApiResult.Success(listOf(sat1, sat2))
+        coEvery { passRepository.getPasses("sat-1", false) } returns ApiResult.Success(emptyList())
+        coEvery { passRepository.getPasses("sat-2", false) } returns ApiResult.Success(listOf(pass2))
+        viewModel = createViewModel()
+        assertEquals("sat-1", (viewModel.uiState.value as DashboardUiState.Content).selectedSatelliteId)
+
+        hiddenIdsFlow.value = setOf("sat-1")
+        runCurrent()
+
+        val state = viewModel.uiState.value as DashboardUiState.Content
+        assertEquals("sat-2", state.selectedSatelliteId)
+        assertEquals(listOf("sat-2"), state.tabs.map { it.satelliteId })
+        // The ticker restarted for the fallback tab -- its countdown is now populated, not left
+        // null/frozen from before the hide.
+        assertEquals(Duration.ofSeconds(200), state.tabs.first().nextPassCountdown)
+    }
+
+    @Test
+    fun `already-hidden satellite is never chosen as the initial default selection`() {
+        val sat1 = satellite(id = "sat-1", isDefault = true) // hidden from a previous session
+        val sat2 = satellite(id = "sat-2")
+        coEvery { satelliteRepository.getSatellites() } returns ApiResult.Success(listOf(sat1, sat2))
+        coEvery { passRepository.getPasses("sat-1", false) } returns ApiResult.Success(emptyList())
+        coEvery { passRepository.getPasses("sat-2", false) } returns ApiResult.Success(emptyList())
+        hiddenIdsFlow = MutableStateFlow(setOf("sat-1"))
+        every { hiddenSatellitesStore.hiddenSatelliteIds } returns hiddenIdsFlow
+
+        viewModel = createViewModel()
+
+        val state = viewModel.uiState.value as DashboardUiState.Content
+        assertEquals("sat-2", state.selectedSatelliteId)
+        assertEquals(listOf("sat-2"), state.tabs.map { it.satelliteId })
     }
 }

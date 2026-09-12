@@ -709,9 +709,14 @@ produce an unfiltered query — only `TimeWindow.Custom(from = null, to = null)`
 original task sketch (`Custom(from, to)`) might suggest — without that, `isFullyLoaded` would be
 permanently unreachable, untestable dead code, since there's no separate "All time" case. This
 isn't scope creep, it's what makes the mechanism actually work; see `TimeWindow`'s and
-`PassHistoryFilterMappers.kt`'s doc comments. In practice, under the current Composable-less state
-of this screen, nothing yet drives a `Custom(null, null)` request — this will matter once a real
-"browse all history" UI affordance exists.
+`PassHistoryFilterMappers.kt`'s doc comments.
+**Superseded by the design-review bug-fix round (see that section near the end of this file):**
+this paragraph originally said nothing yet drove a `Custom(null, null)` request in practice — that
+is no longer true. `FullPassListViewModel`'s UPCOMING/HISTORY/ALL views now always query with
+exactly this shape (`UNFILTERED_QUERY`) as their default, everyday behavior, which is what makes
+`isFullyLoaded` a live, commonly-reached path rather than dead code waiting on a future affordance.
+Do not read the "ALL filter's merge/sort logic" section below as ALL someday needing to become
+filter-aware — it deliberately never will; see the FILTERED segment section instead.
 
 ### The ALL filter's merge/sort logic, and why upcoming is re-sorted rather than re-queried
 
@@ -1588,3 +1593,218 @@ project's Kotlin compiler (2.1.20, see that file's AGP/Kotlin pin comment) can't
 version of Kotlin"). 1.8.1 is what `retrofit2:converter-kotlinx-serialization:3.0.0` itself
 requests, which stays on a 2.1.x-compatible stdlib. Bump this together with the `kotlin` version,
 not independently.
+
+---
+
+## Milestone E — UI bug-fix and enhancement round (post design-review findings)
+
+A full manual walkthrough of the four built screens (Dashboard, Full Pass List, Settings, Pass
+Details) surfaced several bugs and one product gap, fixed in this round. This section is the
+canonical description of each fix; it supersedes any earlier wording elsewhere in this file that
+conflicts with it (the "ALL filter's merge/sort logic" section above has an explicit pointer back
+here). Assumes the backend's notify-default flip (opt-in, not opt-out — see repo-root CLAUDE.md's
+`PassSubscription` section) is already merged.
+
+### Shared "exclude past AOS" filter — `domain/util/PassFilters.kt`
+
+Both Dashboard and Full Pass List independently had the same bug: a pass fetched while still
+upcoming can have its AOS pass while the TTL-gated cache that produced it (`PassRepository
+.getPasses`, 1h TTL) is still considered fresh, so it kept showing as "upcoming" until the next
+network refresh. `List<Pass>.excludePastAos(now)` (inclusive of exactly `now` — a pass whose AOS
+is this instant still counts as upcoming) is the single shared utility both ViewModels call; it is
+**not** applied to what gets fetched or cached, only to what each ViewModel derives for display,
+so it has to be recomputed against the current time at every state-computation point, not baked in
+once.
+
+- **`DashboardViewModel`**: `SatelliteTabState` gained a `visiblePasses: List<Pass>` field,
+  computed alongside the existing raw `passes` field at every point that produces one (`loadTab`,
+  `applyPassesResult`, and — critically — every tick of the existing per-second countdown ticker
+  for the *selected* tab, so the rendered list keeps shrinking live as passes' AOS arrive, not just
+  on the next 5-minute poll). `passes` itself is left untouched as the raw fetched/cached list, so
+  "the cache should still hold the full fetched set" holds — `DashboardScreen` was changed to
+  render `visiblePasses`, not `passes`.
+- **`FullPassListViewModel`**: applied at the one place the "upcoming" portion is actually sourced
+  from `PassRepository.getPasses` — `loadUpcomingOnly()` and `loadAll()`'s upcoming half. History
+  is unaffected (it's explicitly about the past, so nothing there can go "stale-upcoming"). Since
+  this screen has no per-second ticker, the filter is only as fresh as the last
+  reload/filter-change, matching this screen's existing tolerance for relative-time staleness
+  between recompositions (see its own Testing section).
+- Covered directly by `PassFiltersTest` (past/future/exactly-now boundary cases, inclusive), plus
+  `DashboardViewModelTest`'s countdown-rollover test asserting `visiblePasses` drops a pass once
+  its AOS arrives while `passes` still carries it.
+
+### DashboardViewModel now observes `HiddenSatellitesStore`
+
+`DashboardViewModel` didn't exist yet when `HiddenSatellitesStore` was built (Settings screen task)
+— only `SettingsViewModel` was ever wired to it. Hiding a satellite in Settings persisted correctly
+but Dashboard's tabs never reflected it while already running.
+
+- `DashboardViewModel` gained a `HiddenSatellitesStore` constructor dependency (Hilt resolves it
+  automatically — the binding already existed in `DataStoreModule`). The internal engine
+  (`_rawState`) keeps working exactly as before, holding **every** loaded tab regardless of hidden
+  status — every existing load/poll/ticker method is unchanged. The publicly exposed `uiState` is
+  a `combine(_rawState, hiddenSatellitesStore.hiddenSatelliteIds) { ... }.stateIn(...)` that
+  filters hidden satellites' tabs out at the very last step.
+- This two-state split (internal raw engine + a `combine()`-derived public projection) is
+  deliberate, not incidental complexity: writing hidden-filtered tabs directly into a single state
+  object would mean a later poll/refresh/ticker tick — which only knows the raw fetched data, not
+  the current hidden set — silently un-hides a satellite the next time it writes state. `combine()`
+  re-derives the filtered view from both inputs every time, so that race can't happen.
+  `SettingsViewModel`'s own `combine()` doesn't have this problem because `satellites` there is
+  *exclusively* combine-derived, never written from anywhere else — Dashboard's `tabs` is written
+  from many places, hence the split.
+  - If the currently *selected* satellite becomes hidden while Dashboard is active, a dedicated
+    collector (`observeHiddenSatellites`) reacts by picking the first still-visible tab as the new
+    selection and explicitly restarting the countdown ticker for it — without this, the ticker
+    would keep running for the now-hidden tab and the newly-selected (but never-ticked) tab's
+    countdown/hero card would stay frozen at whatever it last was (usually nothing).
+  - `loadDashboard()` also snapshots the current hidden set once up front (`hiddenSatelliteIds
+    .first()`) purely to avoid choosing an already-hidden satellite as the *initial* default
+    selection (e.g. a satellite hidden in a previous session that also happens to be
+    `Satellite.isDefault`) — the reactive collector above only fires on a *change*, so it doesn't
+    by itself fix a bad initial pick made before Dashboard ever had a live subscription running.
+- Covered by two new `DashboardViewModelTest` cases: hiding a non-selected satellite's tab
+  disappears with zero additional repository calls (purely reactive to the Flow), and hiding the
+  *selected* satellite falls back to another tab with its countdown correctly populated.
+
+### The FILTERED segment (supersedes the earlier "ALL will need filter-awareness" framing)
+
+Confirmed product decision, not a bug fix: rather than making UPCOMING/HISTORY/ALL read the Filter
+Modal's `timeWindow`/`minMaxElevation`, those three stay **permanently unfiltered, pure time-based
+views** — a new fourth segment, `PassListFilter.FILTERED`, is the *only* place any filter (current
+or future) ever takes effect. This directly fixes the min-elevation-filter-has-no-effect-on-
+Upcoming bug found in review, by removing the premise that UPCOMING/ALL should ever have read the
+filter fields in the first place.
+
+- **UPCOMING/HISTORY/ALL always query with `UNFILTERED_QUERY`** (`PassHistoryFilter
+  (TimeWindow.Custom(null, null), null)`, a private `FullPassListViewModel` companion constant),
+  never `state.timeWindow`/`state.minMaxElevation` — this is a real behavior change from before
+  this round, when HISTORY/ALL used whatever the Filter Modal's fields happened to hold (defaulting
+  to `Last7Days`). One direct consequence: HISTORY now naturally paginates through a satellite's
+  **entire** retained history rather than being artificially capped to a rolling default window,
+  which is also what makes `PassRepository.getPassHistory`'s `HistoryLoadState.isFullyLoaded`
+  bookkeeping a live, commonly-exercised path instead of the "nothing drives this yet" dead code
+  the section above used to describe.
+- **Auto-activation**: `setTimeWindow`/`setMinMaxElevation` no longer call `reload()` directly —
+  they go through `applyFilterActivation()`, which compares the new field values against
+  `DEFAULT_TIME_WINDOW`/`DEFAULT_MIN_MAX_ELEVATION` and sets `filter` to `FILTERED` if either is
+  now non-default, or back to `ALL` if a change brought both back to default. This fires from
+  *any* starting segment (UPCOMING/HISTORY/ALL/already-FILTERED) — picking a filter value is what
+  activates FILTERED, not a separate user action.
+- **Auto-return to ALL**: `resetFilters()` only reloads (and only switches segments) when the
+  current segment was `FILTERED` — resetting the fields while on UPCOMING/HISTORY/ALL just clears
+  them with no reload, since those views never read them anyway (their currently-shown data can't
+  be stale with respect to fields they never queried with). Directly clearing a field back to its
+  default value via `setTimeWindow`/`setMinMaxElevation` (not through `resetFilters()`) also
+  triggers the same FILTERED→ALL fallback via `applyFilterActivation`'s own default-check — there's
+  only one place "is a filter active" is decided.
+- **Mixed chronology in one query, not two**: FILTERED reuses the exact same call shape
+  `loadHistoryOnly()` already used (`PassRepository.getPassHistory(satelliteId, page,
+  <filter>)`), just with the user's real filter instead of `UNFILTERED_QUERY`. Since that backend
+  endpoint (and its local Room-fresh-and-fully-loaded fallback) has no concept of "only past" — it
+  returns every stored pass matching the aos/elevation bounds, upcoming or historical alike —
+  reusing it here is what actually performs the mixed-chronology filtered query ALL's own name was
+  incorrectly implying it did. No new repository method and no new caching strategy were added:
+  Room-first-then-network is inherited for free from `getPassHistory`'s existing decision tree,
+  already covered end-to-end by `PassRepositoryHistoryTest`. `nearestPassId` stays `null` for
+  FILTERED — unlike ALL, it isn't pasting together two independently-fetched portions with a
+  boundary to mark, it's one already-sorted, already-homogeneous result.
+- **Composable**: the segmented control (`FullPassListScreen`) computes the same "is a filter
+  active" check as the ViewModel (comparing against `FullPassListViewModel
+  .DEFAULT_TIME_WINDOW`/`.DEFAULT_MIN_MAX_ELEVATION`, the same public constants the badge-count/
+  active-filter-chip logic already used) and only includes `FILTERED` in the row while that's
+  true — it isn't a permanently-visible fifth option sitting empty. Picking any filter value in
+  `FilterModalSheet` (a time-window chip, or the elevation slider's release) now also closes the
+  sheet immediately, wired at the `FullPassListScreen` call site (`onSetTimeWindow`/
+  `onSetMinMaxElevation` both call `showFilterSheet = false` after the ViewModel setter) —
+  matching "closing the filter sheet" being part of what selecting a filter value does.
+- Covered by several new `FullPassListViewModelTest` cases: activating FILTERED from ALL and from
+  a non-ALL starting segment, FILTERED returning a mixed future+past result from one query,
+  resetting from FILTERED back to ALL (and reloading it), resetting while not on FILTERED being a
+  no-op reload-wise, directly clearing a field back to default also falling back to ALL, and
+  FILTERED's own pagination resetting to page 1 on a filter-field change while never touching
+  `getPasses`.
+
+### Nearest-pass highlighting in the ALL view (`FullPassListScreen`)
+
+`FullPassListUiState.nearestPassId` was already correct (existing tests already covered its
+computation) but had no visual treatment at all. `PassRow` gained an `isNearest: Boolean` param —
+`state.filter == PassListFilter.ALL && pass.id == state.nearestPassId` — applying the same
+secondaryContainer background/text-color treatment `DashboardScreen.PassRow` already uses for its
+"next pass" row, rather than inventing a new visual language. Deliberately not wired for
+UPCOMING/HISTORY/FILTERED — `nearestPassId` is always `null` outside ALL anyway (see the ALL
+merge-logic section above), and has no meaning there even if it weren't.
+
+### Pull-to-refresh on Dashboard actually does something now
+
+Root cause: `DashboardViewModel.refresh()` was correctly implemented from the original Dashboard
+task, but **no gesture handler in `DashboardScreen` ever called it** — there was no
+`PullToRefreshBox`/`pullRefresh` anywhere in the file, so the pull gesture had nothing to trigger
+it. Not a broken `refresh()`, not a silent exception — the wiring simply never existed.
+
+- Fixed by wrapping `DashboardScreen`'s Scaffold content in `androidx.compose.material3
+  .pulltorefresh.PullToRefreshBox`, `onRefresh = viewModel::refresh`.
+- `DashboardUiState.Content` gained an `isRefreshing: Boolean = false` field for the spinner to
+  bind to — there was previously no state at all to represent "a refresh is in flight" (`refresh()`
+  just fired and let the normal `applyPassesResult` path update `passes`/`loadError`, with no
+  distinct flag). `refresh()` sets it `true` before launching and `false` once the request settles
+  (success or failure either way).
+- Not covered by a Compose UI test — no such test infrastructure exists anywhere in this project
+  (see every prior UI task's own Testing section) and none was invented here; flagged rather than
+  silently skipped. `DashboardViewModelTest`'s existing refresh test was extended to assert
+  `isRefreshing` returns to `false` after the call settles.
+
+### Navigation debounce — Pass Details, both call sites
+
+Root cause: neither Dashboard's nor Full Pass List's row-tap-to-PassDetails call site had any
+guard against rapid repeated taps, and Compose Navigation doesn't inherently prevent duplicate
+rapid navigation to the same destination — each tap fired `navController.navigate(...)`
+independently, opening multiple stacked modal instances.
+
+Fixed once, centrally, in `SatTrakkNavHost.kt`: a private `NavHostController.navigateDebounced
+(route: String)` extension only calls `navigate(route)` when `currentBackStackEntry?.lifecycle
+?.currentState == Lifecycle.State.RESUMED` — the standard Compose Navigation pattern for this
+exact problem (a second tap arriving before the first navigation finishes finds the entry already
+past `RESUMED`, e.g. `STARTED` while the new destination composes, and is silently ignored). Both
+`DashboardScreen`'s and `FullPassListScreen`'s `onPassClick` call sites in `MainNavHost` were
+switched from `navController.navigate(...)` to `navController.navigateDebounced(...)` — the FAB's
+navigation to Map and the bottom nav bar's top-level navigation were left untouched, since rapid-
+tap duplication was never reported for those and `navigateToTopLevel`'s own `launchSingleTop`
+already guards the top-level case differently.
+
+Not covered by an automated test — verifying tap-debounce behavior needs Compose UI testing
+(`ComposeTestRule` + synthetic gesture events) against a real `NavHostController`, and no Compose
+UI test infrastructure exists anywhere in this project (same gap flagged in every prior UI task).
+Flagged explicitly per this round's own instructions, rather than skipped silently or invented
+ad hoc.
+
+### Client-side notify-initialization workaround — confirmed absent, nothing to remove
+
+This round's scope explicitly forbade adding (or required removing, if present) any client-side
+logic that writes a `notify = false` row when Pass Details opens a "new" pass, since that pattern
+was only ever a workaround for the backend's old opt-out notify default — now flipped to opt-in
+(repo-root CLAUDE.md's `PassSubscription` section). Checked `PassDetailsViewModel` directly: no
+such logic exists anywhere in `loadInitialData()` or `toggleNotify()` — the pass's `notify` value
+has only ever been read from `PassRepository.getPassById`'s result and never proactively written
+on load. Nothing was removed because nothing like this was ever built.
+
+### Timezone conversion — consolidated into `ui/common/DateTimeFormatting.kt`
+
+Investigated the reported "AOS/LOS local time not actually converted, shows UTC twice" bug
+directly against `DashboardScreen`, `FullPassListScreen`, and `PassDetailsScreen`'s own
+`formatTimeLocal` implementations: **all three already called `dateTime.atZoneSameInstant
+(ZoneId.systemDefault())` correctly** — none of them were relabeling a UTC value under a "local"
+heading. No actual conversion defect was found in the shipped code.
+
+What *did* exist was three independent, near-identical private copies of the same formatting
+logic, with no way to test the conversion deterministically (each hardcoded `ZoneId.systemDefault
+()`, tying any test to whatever timezone the test runner happens to be in). Consolidated into
+`ui/common/DateTimeFormatting.kt` (`formatTimeLocal`/`formatTimeUtc`/`formatDateLocal`), each
+taking an explicit `zone: ZoneId = ZoneId.systemDefault()` parameter so `DateTimeFormattingTest`
+can assert against a fixed zone (`America/New_York`) instead of depending on the host's actual
+timezone. All three screens now import from this shared file instead of defining their own copy;
+`PassDetailsScreen` is the only one that also uses `formatTimeUtc`/`formatDateLocal`. The date
+formatters are pinned to `Locale.US` (not the device default) — the patterns render English-only
+abbreviations regardless, and pinning avoids a formatter whose exact output (e.g. "Sep" vs "Sept")
+silently depends on the JDK/ICU version running it, which is what made the first version of
+`DateTimeFormattingTest` non-deterministic across JDKs before this pin.
