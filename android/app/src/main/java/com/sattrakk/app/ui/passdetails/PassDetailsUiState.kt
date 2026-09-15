@@ -15,6 +15,11 @@ data class PassDetailsUiState(
     val satelliteName: String? = null,
     val satelliteNoradId: Int? = null,
     val notes: List<Note> = emptyList(),
+    // True once this pass's LOS has already passed (computed from an injected Clock at load time
+    // — see PassDetailsViewModel.loadInitialData). Drives disabling the "Notify me" switch for
+    // historical passes in PassDetailsScreen: the stored value still displays, but the tester
+    // can't toggle it, since notifying about a pass that already happened has no effect.
+    val isHistorical: Boolean = false,
     // Drives whether the note-editing dialog is shown and its mode — see EditingNoteState. The
     // notes list itself stays read-only/display-only regardless of this field's value; editing
     // always happens through the dialog, never inline in the list (confirmed design decision).

@@ -1808,3 +1808,202 @@ formatters are pinned to `Locale.US` (not the device default) — the patterns r
 abbreviations regardless, and pinning avoids a formatter whose exact output (e.g. "Sep" vs "Sept")
 silently depends on the JDK/ICU version running it, which is what made the first version of
 `DateTimeFormattingTest` non-deterministic across JDKs before this pin.
+
+---
+
+## Milestone E — round 2: UI bug-fix + diagnostics round
+
+A second manual walkthrough found that several round-1 fixes did not actually take effect, plus
+one new bug (RUNNER-1's Full Pass List). Each item below required diagnosing *why* the prior round
+didn't fix it, not just re-applying a fix — recorded here in detail so this class of "partial fix"
+problem is traceable later instead of silently recurring a third time.
+
+### 1a. Timezone conversion — reconfirmed correct, no code defect found (again)
+
+Re-investigated from scratch against the current `ui/common/DateTimeFormatting.kt` and all three
+call sites (Dashboard, Full Pass List, Pass Details): every one still calls
+`dateTime.atZoneSameInstant(zone)` correctly, exactly as round 1 already established, and
+`DateTimeFormattingTest`'s fixed-zone (`America/New_York`) assertions continue to prove this
+deterministically, independent of the host's own timezone. No second conversion bug was found, and
+no code changed for this half of the ticket. The most likely explanation for "still shows UTC
+twice" on manual QA is that the **test device/emulator's own system timezone was set to UTC** (a
+common default for a fresh AVD), which makes the local and UTC lines legitimately identical to
+look at — that's a test-environment artifact, not a reproducible defect in the app. If this is
+reported again, the first thing to check is the test device's own `Settings > Date & time` zone,
+not the formatting code.
+
+### 1b. Metric-grid centering — never actually fixed in round 1 (this was the real gap)
+
+Root cause: round 1's only commit touching this area (`4255e5f`, "Consolidate local/UTC time
+formatting") is scoped entirely to timezone conversion — its own commit message explicitly frames
+it as "this file doesn't fix a conversion defect; it consolidates the three duplicates." It never
+touches `PassDetailsScreen.kt`'s `MetricGrid` layout, and no other commit in the project's history
+ever does either. The two complaints (timezone + centering) were evidently tracked as one ticket,
+but only the timezone half was ever diagnosed and fixed — the centering half was silently dropped,
+not fixed-and-regressed.
+
+The actual layout defect: `PassDetailsScreen`'s metric grid has 5 cells (Duration/AOS az/LOS
+az/Orbit/Max elev per the design), which doesn't divide evenly into a 3-column row, so it renders
+as a 3-cell row followed by a 2-cell row. The 2-cell row's cells each used
+`Modifier.weight(1f)` *within that row alone*, which stretched them to half the full row width
+apiece — wider than the 3 equal columns above, making the grid look uneven/off-center rather than
+one coherent 3-column grid with a short last row. Fixed by giving the second row the same 3-column
+proportions as the first: two real cells plus a `Spacer(Modifier.weight(0.5f))` on each side, so
+the pair lines up under two of the three columns above and reads as centered.
+
+### 2. Notify toggle disabled for historical passes
+
+`PassDetailsViewModel` gained a `Clock` constructor dependency (same pattern as
+`DashboardViewModel`'s, see that section above) and `PassDetailsUiState.isHistorical: Boolean`,
+computed once at load time as `pass.los.isBefore(OffsetDateTime.now(clock))`. `toggleNotify()`
+itself now no-ops (no repository call) when `isHistorical` is true, as a server-side-of-the-UI
+guard in addition to the Composable's own `enabled = false` — belt and suspenders, since notifying
+about a pass whose LOS already passed has no effect either way. `PassDetailsScreen`'s `NotifyRow`
+takes a new `enabled` param: `false` dims the label color and disables the `Switch`
+(`enabled = false`), while `checked` still reflects the pass's actual stored `notify` value
+unconditionally — the switch is never hidden, only made non-interactive, per this task's
+requirement. Not recomputed on a ticker (this screen has no per-second ticker, unlike Dashboard) —
+computed once at load, which is correct since a pass already in Pass Details won't cross its own
+LOS boundary while the modal is open in any realistic session length.
+
+### 3. Navigation debounce — root cause found in androidx.navigation's own source, not a drop-in fix
+
+Round 1's guard (`if (currentBackStackEntry?.lifecycle?.currentState == RESUMED) navigate(route)`)
+did not stop duplicate modals, and was applied consistently at both (the only two) row-tap call
+sites already — grep-verified against `SatTrakkDestination.PassDetails.buildRoute` call sites
+across the whole codebase; Dashboard and Full Pass List remain the only two, no third site exists.
+So the guard's own *logic* was the problem, not its coverage.
+
+Root cause, confirmed by reading `navigation-compose`/`navigation-runtime` 2.9.7 sources directly
+(`NavControllerImpl.updateBackStackLifecycle`, `DialogNavigator`, `DialogHost`): the guard's
+premise — "a second tap arriving before the first navigation finishes finds the current entry not
+yet RESUMED" — only holds for plain `composable()` destinations, where Compose Navigation gates a
+newly-pushed entry's promotion to `RESUMED` on its enter transition (`AnimatedContent`) actually
+completing. That gives a real, if short, window during which a repeat tap's
+`currentBackStackEntry` check correctly fails and gets dropped. **`PassDetails` is registered as a
+`dialog()` destination**, and `DialogNavigator.navigate()` pushes its entry directly with no
+transition to gate on — `updateBackStackLifecycle()` promotes a plain top-of-stack entry to
+`RESUMED` synchronously, within the same `navigate()` call, regardless of destination type. So by
+the time a second tap's click handler runs (a separate frame/event, not the same call stack as the
+first), the just-pushed dialog entry is *already* `RESUMED`, the guard's check passes again, and a
+second `PassDetails` instance gets pushed. The guard's protective window is real for `composable()`
+targets but is effectively zero for `dialog()` targets — which is exactly what every
+row-tap-to-PassDetails call site in this app navigates to, so the guard provided no protection at
+all in practice for its own designed use case.
+
+Fixed by dropping the lifecycle-timing heuristic entirely in favor of `NavController`'s own
+built-in dedup: `navigate(route) { launchSingleTop = true }`. `NavControllerImpl
+.launchSingleTopInternal` compares the target destination against `currentBackStackEntry`
+synchronously, inside the same `navigate()` call, with no dependency on animation/lifecycle timing
+at all — if `PassDetails` is already the current top entry, its existing entry's args are updated
+in place instead of a new one being pushed. This works identically for `dialog()` and
+`composable()` destinations, so it isn't fragile to a future destination-type change either.
+
+**Not covered by an automated test** — verifying this needs either a real `NavController`
+(requires Robolectric or an instrumented test; this project has neither `navigation-testing` nor
+Robolectric as a dependency) or Compose UI testing infrastructure (still doesn't exist anywhere in
+this project, per every prior UI task's own Testing section). Flagged explicitly per this task's
+own instructions rather than silently skipped; adding either dependency would be a deliberate,
+separate decision, not a quick addition to this round.
+
+### 4. Full Pass List — scroll position now resets on a real reload, preserved across bottom-nav return
+
+Root cause: `rememberLazyListState()` is `rememberSaveable(saver = LazyListState.Saver) { ... }`
+with no keys, so it kept the exact same instance (and scroll offset) for as long as
+`FullPassListScreen` stayed in composition — including across a segment switch
+(Upcoming/History/All/Filtered) or picking a new filter value, both of which call
+`FullPassListViewModel.reload()` and rebuild `passes` from scratch. The old scroll offset was left
+pointing at whatever position it was in the *previous* list, which could be partway down or past
+the end of the freshly-reloaded one.
+
+Fixed by keying the `rememberSaveable` on exactly the three fields whose change means "this is a
+new query" (`state.filter`, `state.timeWindow`, `state.minMaxElevation` — the same three
+`FullPassListViewModel.reload()` itself reacts to): `rememberSaveable(state.filter,
+state.timeWindow, state.minMaxElevation, saver = LazyListState.Saver) { LazyListState() }`. A
+change to any of them now produces a brand-new `LazyListState` starting at index 0; a page
+appended by `loadMore()` (which changes `state.passes` but none of those three fields) keeps
+reusing the same instance and its scroll position, as it should.
+
+Judgment call on "returning to an already-open instance" (not explicitly specified by this task):
+Full Pass List is reachable via the bottom nav bar's "Passes" item, which uses
+`navigateToTopLevel`'s `launchSingleTop = true` + `restoreState = true`/`saveState = true` —
+Compose Navigation's standard bottom-nav-tab pattern. Chose to **preserve** scroll position for
+that path (this is simply `rememberSaveable`'s normal restore behavior for the current
+filter/segment combination, not something added specially) — matching the everyday convention that
+switching bottom-nav tabs and coming back leaves each tab where you left it. Entering *fresh* (via
+Dashboard's "View all" button, a plain `navigate()` with no `restoreState`) already started at the
+top before this fix and still does, since a new `NavBackStackEntry` gets its own fresh
+`SaveableStateHolder` scope with nothing to restore.
+
+Not covered by an automated test — verifying actual `LazyListState` scroll-offset behavior needs
+Compose UI testing infrastructure, which doesn't exist in this project (same gap flagged in every
+prior UI task's Testing section).
+
+### 5. RUNNER-1's Full Pass List showing completely mixed Upcoming/History — root cause confirmed
+
+Diagnosed in the order this task specified. (b) and (c) were ruled out directly: `excludePastAos`
+(`domain/util/PassFilters.kt`) is a simple, already-tested inclusive-of-`now` filter with no
+satellite-specific edge case to trip, and `computeNearestPassId`'s boundary logic is unrelated to
+the History-only segment (`nearestPassId` is always `null` outside `ALL`, and the bug reproduced on
+the plain History segment too). (d) wasn't needed to explain the symptom once (a) was confirmed
+against the actual source below, though a live-device data spot-check remains unverified (no
+`adb`/connected device available in this environment — same limitation noted throughout this file).
+
+**(a) was the real cause, refined**: it isn't an off-by-one in `hasMore`/pagination (that
+computation — `LIMIT pageSize + 1`, `hasMore = rows.size > pageSize` — is correct and unchanged),
+it's that **`PassDao.getFilteredForSatellite` (the local Room path used once
+`HistoryLoadState.isFullyLoaded` is true) was missing a filter the backend enforces
+unconditionally**. The backend's `PassRepository.GetHistoryAsync` (`backend/src/
+SatelliteTracker.Database/Repositories/PassRepository.cs`) always applies
+`p.Los < DateTime.UtcNow` to every history query, regardless of which optional filters
+(`aosFrom`/`aosTo`/`maxElevationFrom`/etc.) the caller supplied — "history" means "already
+completed," unconditionally, on the backend. `getFilteredForSatellite`'s doc comment claimed it
+"mirrors the backend's own filter semantics," and it did mirror the *optional* ones
+(`aosFrom`/`aosTo`/`maxElevationFrom`), but not this always-on one — there was no
+`losEpochMillis < now` clause in the local SQL at all.
+
+This stayed invisible for satellites still being served over the network (correctly bounded by the
+backend on every request) and only became visible once a satellite's `HistoryLoadState
+.isFullyLoaded` flips `true`, switching `getPassHistory` to the local, unbounded-by-chronology Room
+path. A satellite reaches `isFullyLoaded = true` sooner the fewer total historical passes it has to
+paginate through — RUNNER-1, with a much smaller historical dataset than EROS C3, converges to
+`hasMore = false` within very few pages (plausibly the first), while EROS C3's larger dataset keeps
+it on the (correctly-bounded) network path for longer. Once RUNNER-1's local path activated, every
+one of its still-upcoming passes — already sitting in the same `passes` Room table via the
+ordinary `getPasses()` write path used for the Dashboard/Upcoming view — also satisfied the
+(chronology-blind) local query and leaked into "History" results, making the two segments look
+identical for that satellite specifically.
+
+Fixed by adding the missing bound: `PassDao.getFilteredForSatellite` gained a `nowMillis: Long`
+parameter and an unconditional `AND losEpochMillis < :nowMillis` clause (not one of the `:x IS
+NULL OR ...` optional clauses — this one is never skippable, matching the backend). `PassRepository
+.getPassHistory` passes its own already-computed `now` through as `nowMillis`. Covered by a new
+`PassRepositoryHistoryTest` case asserting the DAO is called with exactly the repository's clock-
+derived `now`, plus a dedicated page-boundary regression test (exactly one page of rows resolves
+`hasMore = false`) for the (a) hypothesis this task asked to check explicitly, even though it
+turned out not to be the actual cause. Verifying the SQL predicate itself end-to-end would need a
+real (in-memory) Room database — this project has no Room-backed DAO test (instrumented or
+otherwise) for `PassDao` at all yet, only repository-level tests that mock the DAO; flagged rather
+than invented ad hoc for this round.
+
+### 6. Elapsed-ratio ring — fully removed, not deferred as a placeholder
+
+Per confirmed product decision: the empty static ring in `DashboardScreen`'s `HeroPassCard` is
+removed outright (not kept as unfinished chrome) — a genuinely new, static (non-percentage) visual
+replacement is planned via Claude Design in a future polish pass once other functional work is
+complete; a computed "since previous LOS" percentage was explicitly considered and rejected as too
+complex for the value it adds right now. A `TODO(design)` comment at the removal site in
+`HeroPassCard` records this. The hero card's content `Row` now holds only the countdown/label/chip
+`Column`, full width — the simplest layout without a ring element, per this task's instruction.
+
+### Testing summary for this round
+
+Verified in this environment: `:app:compileDebugKotlin`, `:app:testDebugUnitTest` (**156 tests
+green** — 151 before this round, +5 here: 3 in `PassDetailsViewModelTest` for `isHistorical`/
+disabled-toggle behavior, 2 in `PassRepositoryHistoryTest` for the `nowMillis` bound and the page-
+boundary case), and `:app:assembleDebug`, all `BUILD SUCCESSFUL`. **Not verified**:
+`:app:connectedDebugAndroidTest` — no `adb`/connected device or emulator was available in this
+environment, same limitation noted in every prior UI task. Two gaps are explicitly flagged rather
+than silently skipped, per this round's own instructions: the navigation-debounce fix (item 3) and
+the scroll-reset fix (item 4) both need testing infrastructure (Robolectric/`navigation-testing`,
+and Compose UI testing respectively) that doesn't exist in this project yet.

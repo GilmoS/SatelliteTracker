@@ -8,6 +8,8 @@ import com.sattrakk.app.data.repository.PassRepository
 import com.sattrakk.app.data.repository.SatelliteRepository
 import com.sattrakk.app.domain.model.ApiResult
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.time.Clock
+import java.time.OffsetDateTime
 import javax.inject.Inject
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
@@ -31,6 +33,7 @@ class PassDetailsViewModel @Inject constructor(
     private val passRepository: PassRepository,
     private val notesRepository: NotesRepository,
     private val satelliteRepository: SatelliteRepository,
+    private val clock: Clock,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -73,6 +76,7 @@ class PassDetailsViewModel @Inject constructor(
                 satelliteName = null,
                 satelliteNoradId = null,
                 notes = emptyList(),
+                isHistorical = false,
                 isLoading = false,
                 error = errorMessageFor(passResult)
             )
@@ -88,6 +92,7 @@ class PassDetailsViewModel @Inject constructor(
             satelliteName = satellite?.name,
             satelliteNoradId = satellite?.noradId,
             notes = notes,
+            isHistorical = passResult.data.los.isBefore(OffsetDateTime.now(clock)),
             isLoading = false,
             error = when {
                 notesResult !is ApiResult.Success -> errorMessageFor(notesResult)
@@ -99,8 +104,12 @@ class PassDetailsViewModel @Inject constructor(
 
     // No optimistic flip — the pass's notify value only changes once the repository confirms the
     // toggle. On failure, the general error field is set and pass is left exactly as it was.
+    // Guarded against historical passes server-side of the UI too (PassDetailsScreen also disables
+    // the switch) — notifying about a pass whose LOS already passed has no effect, and the switch
+    // must display the stored value without being toggleable, per this task's requirement.
     fun toggleNotify() {
         val currentPass = _uiState.value.pass ?: return
+        if (_uiState.value.isHistorical) return
         viewModelScope.launch {
             when (val result = passRepository.setNotify(passId, !currentPass.notify)) {
                 is ApiResult.Success -> _uiState.value = _uiState.value.copy(

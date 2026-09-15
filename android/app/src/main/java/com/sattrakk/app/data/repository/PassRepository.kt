@@ -127,6 +127,12 @@ class PassRepository @Inject constructor(
     //    domain/mapper/PassHistoryFilterMappers.kt and TimeWindow's doc comments: under
     //    Last24h/Last48h/Last7Days this branch never fires (they always resolve a non-null
     //    aosFrom) — only TimeWindow.Custom(null, null) with no minMaxElevation reaches it.
+    // 4. The Room path (step 1) passes `now` through to PassDao.getFilteredForSatellite as
+    //    `nowMillis`, which the query uses for an unconditional `losEpochMillis < nowMillis` bound
+    //    — mirroring the backend's own unconditional `Los < DateTime.UtcNow` filter (see
+    //    android/CLAUDE.md's Milestone E round-2 section for the RUNNER-1 bug this fixed: without
+    //    this bound, once isFullyLoaded flipped true, still-upcoming passes already cached via
+    //    getPasses() leaked into "history" results for satellites with few historical passes).
     suspend fun getPassHistory(
         satelliteId: String,
         page: Int,
@@ -143,6 +149,7 @@ class PassRepository @Inject constructor(
         if (isFreshAndFullyLoaded) {
             val rows = passDao.getFilteredForSatellite(
                 satelliteId = satelliteId,
+                nowMillis = now.toInstant().toEpochMilli(),
                 aosFromMillis = query.aosFrom?.toInstant()?.toEpochMilli(),
                 aosToMillis = query.aosTo?.toInstant()?.toEpochMilli(),
                 maxElevationFrom = query.maxElevationFrom,

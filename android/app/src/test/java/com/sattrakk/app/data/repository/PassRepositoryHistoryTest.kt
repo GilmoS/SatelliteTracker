@@ -101,7 +101,7 @@ class PassRepositoryHistoryTest {
         coEvery { historyLoadStateDao.get(satelliteId.toString()) } returns
             HistoryLoadStateEntity(satelliteId.toString(), isFullyLoaded = true, lastVerifiedAtEpochMillis = fixedInstant.toEpochMilli())
         coEvery {
-            passDao.getFilteredForSatellite(satelliteId.toString(), any(), any(), any(), any(), any())
+            passDao.getFilteredForSatellite(satelliteId.toString(), any(), any(), any(), any(), any(), any())
         } returns listOf(entity(UUID.randomUUID(), fixedInstant.toEpochMilli()))
 
         val result = repository.getPassHistory(satelliteId.toString(), page = 1, filter = filteredFilter)
@@ -111,6 +111,26 @@ class PassRepositoryHistoryTest {
         coVerify(exactly = 0) { api.getPassHistory(any(), any(), any(), any(), any(), any()) }
     }
 
+    // Round-2 regression test for the RUNNER-1 mixed Upcoming/History bug: PassDao.getFilteredForSatellite
+    // must be called with `nowMillis` equal to the repository's own clock-derived "now", so its SQL
+    // can apply the same `losEpochMillis < nowMillis` bound the backend enforces unconditionally
+    // (`Los < DateTime.UtcNow` in PassRepository.cs) — without it, still-upcoming passes already
+    // cached via getPasses() leak into "history" results once isFullyLoaded is true. See
+    // android/CLAUDE.md's Milestone E round-2 section for the full diagnosis.
+    @Test
+    fun `fresh and fully loaded passes the repository's own now as nowMillis to bound out not-yet-completed passes`() = runTest {
+        coEvery { historyLoadStateDao.get(satelliteId.toString()) } returns
+            HistoryLoadStateEntity(satelliteId.toString(), isFullyLoaded = true, lastVerifiedAtEpochMillis = fixedInstant.toEpochMilli())
+        val slot = slot<Long>()
+        coEvery {
+            passDao.getFilteredForSatellite(satelliteId.toString(), capture(slot), any(), any(), any(), any(), any())
+        } returns emptyList()
+
+        repository.getPassHistory(satelliteId.toString(), page = 1, filter = filteredFilter)
+
+        assertEquals(fixedInstant.toEpochMilli(), slot.captured)
+    }
+
     @Test
     fun `fresh and fully loaded applies local pagination correctly via limit and offset`() = runTest {
         coEvery { historyLoadStateDao.get(satelliteId.toString()) } returns
@@ -118,7 +138,7 @@ class PassRepositoryHistoryTest {
         val slot = slot<Int>()
         coEvery {
             passDao.getFilteredForSatellite(
-                satelliteId.toString(), any(), any(), any(), any(), capture(slot)
+                satelliteId.toString(), any(), any(), any(), any(), any(), capture(slot)
             )
         } returns emptyList()
 
@@ -135,7 +155,7 @@ class PassRepositoryHistoryTest {
         // 51 rows returned for a pageSize-50 request -> hasMore should be true, and only 50 items returned.
         val rows = (1..51).map { entity(UUID.randomUUID(), fixedInstant.toEpochMilli() - it * 1000L) }
         coEvery {
-            passDao.getFilteredForSatellite(satelliteId.toString(), any(), any(), any(), any(), any())
+            passDao.getFilteredForSatellite(satelliteId.toString(), any(), any(), any(), any(), any(), any())
         } returns rows
 
         val result = repository.getPassHistory(satelliteId.toString(), page = 1, filter = filteredFilter)
@@ -144,6 +164,28 @@ class PassRepositoryHistoryTest {
         val data = (result as ApiResult.Success).data
         assertEquals(50, data.items.size)
         assertTrue(data.hasMore)
+    }
+
+    // Regression for the exactly-at-the-page-boundary case flagged in this task's hypothesis (a):
+    // a satellite whose total historical-pass count is exactly one page (50 rows, no 51st row)
+    // must compute hasMore = false, not an off-by-one true/false flip. Verified this is NOT what
+    // caused the RUNNER-1 bug (the actual cause was the missing losEpochMillis bound, fixed above),
+    // but kept as its own explicit boundary test per this task's request.
+    @Test
+    fun `fresh and fully loaded with exactly one page of rows computes hasMore false`() = runTest {
+        coEvery { historyLoadStateDao.get(satelliteId.toString()) } returns
+            HistoryLoadStateEntity(satelliteId.toString(), isFullyLoaded = true, lastVerifiedAtEpochMillis = fixedInstant.toEpochMilli())
+        val rows = (1..50).map { entity(UUID.randomUUID(), fixedInstant.toEpochMilli() - it * 1000L) }
+        coEvery {
+            passDao.getFilteredForSatellite(satelliteId.toString(), any(), any(), any(), any(), any(), any())
+        } returns rows
+
+        val result = repository.getPassHistory(satelliteId.toString(), page = 1, filter = filteredFilter)
+
+        assertTrue(result is ApiResult.Success)
+        val data = (result as ApiResult.Success).data
+        assertEquals(50, data.items.size)
+        assertFalse(data.hasMore)
     }
 
     @Test
