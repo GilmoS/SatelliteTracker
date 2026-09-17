@@ -1996,6 +1996,42 @@ complex for the value it adds right now. A `TODO(design)` comment at the removal
 `HeroPassCard` records this. The hero card's content `Row` now holds only the countdown/label/chip
 `Column`, full width — the simplest layout without a ring element, per this task's instruction.
 
+**Resolved (separate later task, "Static decorative animation for Next Pass Card"):** the
+`TODO(design)` above is closed out. `HeroPassCard`'s leading visual slot is filled again, this time
+by `PassArcAnimation` (private composable, same file) — a purely decorative, continuously looping
+animation with **no backing data at all**: it does not read `nextPassCountdown`, does not compute
+an elapsed fraction or any other ratio from `Pass`/`DashboardUiState`, and was not given a new
+ViewModel/UiState field to support it. The "since previous LOS" computed-percentage idea from the
+paragraph above remains explicitly rejected, not merely deferred a second time — this is not that.
+
+Sourced 1:1 from the design MCP (Claude Design project "Map detail and AR improvements",
+`SatelliteTracker M3.dc.html`, the 2a/M3-baseline Home screen's "M3 elevated card: countdown"
+block): a small SVG animation of a dot endlessly tracing a stylized elevation-arc trajectory over
+faint horizon/elevation-dome guide arcs (`stroke-dashoffset` self-drawing line + two
+`animateMotion` dots, 4.8s loop). Reproduced in Compose via `Canvas` + `PathMeasure` — a
+`rememberInfiniteTransition().animateFloat` progress value drives `PathMeasure.getSegment`/
+`.getPosition` each frame to redraw the traced sub-path and the moving dot at the same point along
+a `Path` built from the design's own curve. All four colors used (guide arcs, dim track, bright
+trace, dot) map exactly onto existing tokens — `outlineVariant`/`primaryContainer`/`primary`/
+`onPrimaryContainer` — no new color was introduced. The 104×104 SVG viewBox coordinates are used
+as-is inside a `scale()` draw transform rather than converted to fixed dp values, so the whole
+trajectory scales uniformly with the Canvas's actual size; that Canvas itself is sized 88dp,
+matching the box size the pre-removal ring placeholder used (the design's own 390×844 mock frame
+uses a larger scale than this app's actual card proportions call for).
+
+Isolated into its own composable specifically so the animated `progress` value is only ever read
+inside `Canvas`'s draw-phase lambda (a `DrawScope.() -> Unit` invoked during drawing, not
+recomposition) rather than in `HeroPassCard`'s own body — the animation ticking therefore triggers
+only a re-draw of this one small `Canvas` every frame, never a recomposition of `HeroPassCard`,
+the countdown text, or `MetricGrid`. `rememberInfiniteTransition`'s animation coroutine is scoped
+to `PassArcAnimation`'s own composition and is cancelled automatically once it leaves composition
+(switching to a tab with no next pass, or navigating off Dashboard) — nothing extra was needed to
+make this lifecycle-safe.
+
+No test was added or changed — this has no backing state for a test to assert on, per the task's
+own scope. Verified in this environment: `:app:compileDebugKotlin`, `:app:testDebugUnitTest` (156
+tests green, unchanged from before this task), and `:app:assembleDebug`, all `BUILD SUCCESSFUL`.
+
 ### Testing summary for this round
 
 Verified in this environment: `:app:compileDebugKotlin`, `:app:testDebugUnitTest` (**156 tests
