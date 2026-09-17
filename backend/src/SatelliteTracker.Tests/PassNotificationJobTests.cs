@@ -125,16 +125,48 @@ public class PassNotificationJobTests : IDisposable
 
         var mockFirebase = new Mock<IFirebaseService>();
         mockFirebase.Setup(f => f.SendPassNotificationAsync(
-                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>()))
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>(), It.IsAny<Guid>()))
             .Returns(Task.CompletedTask);
 
         await CreateJob().ProcessPendingNotificationsAsync(
             mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
 
         mockFirebase.Verify(f => f.SendPassNotificationAsync(
-            "device-token", "EROS C3", pass.Aos, 10), Times.Once);
+            "device-token", "EROS C3", pass.Aos, 10, pass.Id), Times.Once);
         mockLogRepo.Verify(r => r.TryInsertAsync(It.Is<PassNotificationLog>(
             l => l.PassId == pass.Id && l.ApiKeyId == settings.ApiKeyId && l.AlertMinutes == 10)), Times.Once);
+    }
+
+    // The Data payload (passId, type) is built inside FirebaseService, which calls the FirebaseAdmin
+    // SDK's static FirebaseMessaging.DefaultInstance directly — there's no injected wrapper, so the
+    // actual Message.Data dictionary can't be inspected from a unit test. This verifies the one thing
+    // that IS testable at this boundary: each pass's own Id is threaded through to
+    // SendPassNotificationAsync, rather than a stale/hardcoded/swapped value, across two distinct passes.
+    [Fact]
+    public async Task SendNotification_PassesCorrectPassIdForDataPayload()
+    {
+        var settings = MakeUserSettings(fcmToken: "device-token", alertMinutes: [10]);
+        var (passA, _) = MakePass(minutesFromNow: 10);
+        var (passB, _) = MakePass(minutesFromNow: 10);
+        var optInA = MakeOptIn(passA.Id, settings.ApiKeyId);
+        var optInB = MakeOptIn(passB.Id, settings.ApiKeyId);
+
+        var mockSettingsRepo = new Mock<IUserSettingsRepository>();
+        mockSettingsRepo.Setup(r => r.GetAllActiveAsync())
+            .ReturnsAsync(Result<IEnumerable<UserSettings>>.Success([settings]));
+
+        var mockPassRepo = MockPassRepo(passA, passB);
+        var mockSubscriptionRepo = MockSubscriptionRepo(optInA, optInB);
+        var mockLogRepo = MockLogRepo();
+        var mockFirebase = new Mock<IFirebaseService>();
+
+        await CreateJob().ProcessPendingNotificationsAsync(
+            mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
+
+        mockFirebase.Verify(f => f.SendPassNotificationAsync(
+            "device-token", "EROS C3", passA.Aos, 10, passA.Id), Times.Once);
+        mockFirebase.Verify(f => f.SendPassNotificationAsync(
+            "device-token", "EROS C3", passB.Aos, 10, passB.Id), Times.Once);
     }
 
     [Fact]
@@ -155,7 +187,7 @@ public class PassNotificationJobTests : IDisposable
             mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
 
         mockFirebase.Verify(f => f.SendPassNotificationAsync(
-            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>(), It.IsAny<Guid>()), Times.Never);
         mockPassRepo.Verify(r => r.GetPendingNotificationsAsync(), Times.Never);
     }
 
@@ -177,7 +209,7 @@ public class PassNotificationJobTests : IDisposable
             mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
 
         mockFirebase.Verify(f => f.SendPassNotificationAsync(
-            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>(), It.IsAny<Guid>()), Times.Never);
         mockSubscriptionRepo.Verify(r => r.GetByPassIdsAsync(It.IsAny<IEnumerable<Guid>>()), Times.Never);
     }
 
@@ -201,8 +233,8 @@ public class PassNotificationJobTests : IDisposable
         await CreateJob().ProcessPendingNotificationsAsync(
             mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
 
-        mockFirebase.Verify(f => f.SendPassNotificationAsync("token-a", "EROS C3", pass.Aos, 10), Times.Once);
-        mockFirebase.Verify(f => f.SendPassNotificationAsync("token-b", "EROS C3", pass.Aos, 10), Times.Once);
+        mockFirebase.Verify(f => f.SendPassNotificationAsync("token-a", "EROS C3", pass.Aos, 10, pass.Id), Times.Once);
+        mockFirebase.Verify(f => f.SendPassNotificationAsync("token-b", "EROS C3", pass.Aos, 10, pass.Id), Times.Once);
     }
 
     [Fact]
@@ -233,7 +265,7 @@ public class PassNotificationJobTests : IDisposable
             mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
 
         mockFirebase.Verify(f => f.SendPassNotificationAsync(
-            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>(), It.IsAny<Guid>()), Times.Never);
         mockLogRepo.Verify(r => r.TryInsertAsync(It.IsAny<PassNotificationLog>()), Times.Never);
     }
 
@@ -257,7 +289,7 @@ public class PassNotificationJobTests : IDisposable
             mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
 
         mockFirebase.Verify(f => f.SendPassNotificationAsync(
-            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>(), It.IsAny<Guid>()), Times.Never);
     }
 
     [Fact]
@@ -288,7 +320,7 @@ public class PassNotificationJobTests : IDisposable
             mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
 
         mockFirebase.Verify(f => f.SendPassNotificationAsync(
-            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>(), It.IsAny<Guid>()), Times.Never);
         mockLogRepo.Verify(r => r.TryInsertAsync(It.IsAny<PassNotificationLog>()), Times.Never);
     }
 
@@ -327,9 +359,9 @@ public class PassNotificationJobTests : IDisposable
             mockSettingsRepo.Object, mockPassRepo.Object, mockSubscriptionRepo.Object, mockLogRepo.Object, mockFirebase.Object);
 
         mockFirebase.Verify(f => f.SendPassNotificationAsync(
-            "existing-token", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>()), Times.Never);
+            "existing-token", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<int>(), It.IsAny<Guid>()), Times.Never);
         mockFirebase.Verify(f => f.SendPassNotificationAsync(
-            "new-token", "EROS C3", pass.Aos, 10), Times.Once);
+            "new-token", "EROS C3", pass.Aos, 10, pass.Id), Times.Once);
     }
 
     [Fact]
