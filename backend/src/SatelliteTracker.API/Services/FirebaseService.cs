@@ -38,7 +38,7 @@ public class FirebaseService : IFirebaseService
         }
     }
 
-    public async Task SendPassNotificationAsync(string fcmToken, string satelliteName, DateTime aos, int minutesBefore)
+    public async Task SendPassNotificationAsync(string fcmToken, string satelliteName, DateTime aos, int minutesBefore, Guid passId)
     {
         if (FirebaseApp.DefaultInstance is null)
         {
@@ -55,6 +55,11 @@ public class FirebaseService : IFirebaseService
                 {
                     Title = $"Upcoming pass for {satelliteName}",
                     Body = $"The pass will start in {minutesBefore} minutes ({aos:HH:mm} UTC)"
+                },
+                Data = new Dictionary<string, string>
+                {
+                    { "passId", passId.ToString() },
+                    { "type", "pass_reminder" }
                 }
             };
 

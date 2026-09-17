@@ -268,6 +268,25 @@ migration) — not deprecated, not kept-but-unused. That state is now split into
 endpoint requires `[Authorize]` under the `ApiKey` scheme and returns the pass's effective notify
 status.
 
+### FCM push notification payload — Notification + Data
+
+`FirebaseService.SendPassNotificationAsync` sends each FCM `Message` as a notification+data
+hybrid, not a bare `Notification`:
+
+- **`Notification`** (`Title`/`Body`) — human-readable text shown in the system tray. Unchanged
+  by the Data payload addition below.
+- **`Data`** — a `Dictionary<string, string>` carrying `passId` (the `Pass.Id` guid, as a string)
+  and `type` (currently always `"pass_reminder"`, a discriminator so the Android handler can
+  branch on notification type as more are added later, rather than assuming every push is a pass
+  reminder). This is what lets the Android app deep-link to the tapped pass's Pass Details screen.
+  `passId` is threaded through from `PassNotificationJob`, which already has the `Pass` entity in
+  scope at the point it calls `SendPassNotificationAsync`.
+- The `Data` dictionary can't be unit-tested by inspecting the actual `Message` object —
+  `FirebaseService` calls the FirebaseAdmin SDK's static `FirebaseMessaging.DefaultInstance`
+  directly, with no injected wrapper/interface around it. Test coverage instead verifies, at the
+  `IFirebaseService` mock boundary in `PassNotificationJobTests`, that each pass's own `Id` is
+  threaded through correctly rather than stale/hardcoded/swapped.
+
 ### Beta allowlist and self-registration — AllowlistedEmail, admin tooling, /api/auth/register
 
 **⚠️ This entire mechanism is temporary beta infrastructure (Milestone E, Step 1.2). It is not a

@@ -146,7 +146,8 @@ public class PassNotificationJob : BackgroundService
                         settings.FcmToken!,
                         pass.Satellite.Name,
                         pass.Aos,
-                        minutesBefore);
+                        minutesBefore,
+                        pass.Id);
 
                     // TryInsertAsync tolerates a concurrent job tick already having logged this
                     // key — either way, this threshold is now accounted for.
