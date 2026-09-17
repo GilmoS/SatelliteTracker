@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -30,6 +31,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
@@ -54,6 +56,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sattrakk.app.navigation.BellIcon
 import com.sattrakk.app.navigation.PlusIcon
+import com.sattrakk.app.ui.theme.ScreenContentBottomPadding
+import com.sattrakk.app.ui.theme.ScreenContentTopPadding
 
 // Real Settings screen content, replacing the one-line placeholder. Wired to the already-complete
 // SettingsViewModel/SettingsUiState (built in a prior task — see android/CLAUDE.md's Settings
@@ -109,12 +113,21 @@ fun SettingsScreen(
 
     Scaffold(
         modifier = modifier,
-        topBar = { TopAppBar(title = { Text("Settings") }) },
+        topBar = {
+            Column {
+                TopAppBar(title = { Text("Settings") })
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            }
+        },
         snackbarHost = {
             SnackbarHost(snackbarHostState) { data ->
                 Snackbar(snackbarData = data)
             }
         },
+        // See MainNavHost's own contentWindowInsets comment — without this, this screen's
+        // Scaffold also reserves the status bar (top) and system gesture inset (bottom) on top of
+        // what's already correctly reserved once at the app-root Scaffold, doubling both gaps.
+        contentWindowInsets = WindowInsets(0),
     ) { innerPadding ->
         if (state.isLoading) {
             Box(modifier = Modifier.fillMaxSize().padding(innerPadding), contentAlignment = Alignment.Center) {
@@ -125,7 +138,12 @@ fun SettingsScreen(
 
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(innerPadding),
-            contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 24.dp),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                top = ScreenContentTopPadding,
+                end = 16.dp,
+                bottom = ScreenContentBottomPadding,
+            ),
         ) {
             state.error?.let { error ->
                 item {

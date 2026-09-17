@@ -9,8 +9,10 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -25,6 +27,7 @@ import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
@@ -57,6 +60,7 @@ import com.sattrakk.app.navigation.ChevronIcon
 import com.sattrakk.app.navigation.CloseIcon
 import com.sattrakk.app.navigation.FilterIcon
 import com.sattrakk.app.ui.common.formatTimeLocal
+import com.sattrakk.app.ui.theme.ScreenContentTopPadding
 import com.sattrakk.app.ui.theme.TelemetryTextStyle
 import java.time.Duration
 import java.time.LocalDate
@@ -129,44 +133,53 @@ fun FullPassListScreen(
 
     Scaffold(
         modifier = modifier,
+        // See MainNavHost's own contentWindowInsets comment — without this, this screen's
+        // Scaffold also reserves the status bar (top) and system gesture inset (bottom) on top of
+        // what's already correctly reserved once at the app-root Scaffold, doubling both gaps.
+        contentWindowInsets = WindowInsets(0),
         topBar = {
-            TopAppBar(
-                // Per the truth map, the title itself is decorative/static ("Passes") — the
-                // satellite name is shown as a subtitle underneath instead, since this screen is
-                // permanently scoped to one satellite and that's real, already-loaded state
-                // (FullPassListUiState.satelliteName), not something the raw design needed to
-                // show given how it presents multi-satellite tabs instead (see android/CLAUDE.md).
-                title = {
-                    Column {
-                        Text("Passes")
-                        Text(
-                            state.satelliteName,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        BackArrowIcon(MaterialTheme.colorScheme.onSurface)
-                    }
-                },
-                actions = {
-                    // Search icon and overflow menu are omitted outright (truth map: no backing
-                    // action for either). The filter button's badge count is derived here by
-                    // diffing current timeWindow/minMaxElevation against FullPassListViewModel's
-                    // own default constants — no activeFilterCount field was added to UiState.
-                    BadgedBox(badge = {
-                        if (activeFilterChips.isNotEmpty()) {
-                            Badge { Text("${activeFilterChips.size}") }
+            Column {
+                TopAppBar(
+                    // Per the truth map, the title itself is decorative/static ("Passes") — the
+                    // satellite name is shown as a subtitle underneath instead, since this screen
+                    // is permanently scoped to one satellite and that's real, already-loaded state
+                    // (FullPassListUiState.satelliteName), not something the raw design needed to
+                    // show given how it presents multi-satellite tabs instead (see
+                    // android/CLAUDE.md).
+                    title = {
+                        Column {
+                            Text("Passes")
+                            Text(
+                                state.satelliteName,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
-                    }) {
-                        IconButton(onClick = { showFilterSheet = true }) {
-                            FilterIcon(MaterialTheme.colorScheme.onSurface)
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBackClick) {
+                            BackArrowIcon(MaterialTheme.colorScheme.onSurface)
                         }
-                    }
-                },
-            )
+                    },
+                    actions = {
+                        // Search icon and overflow menu are omitted outright (truth map: no
+                        // backing action for either). The filter button's badge count is derived
+                        // here by diffing current timeWindow/minMaxElevation against
+                        // FullPassListViewModel's own default constants — no activeFilterCount
+                        // field was added to UiState.
+                        BadgedBox(badge = {
+                            if (activeFilterChips.isNotEmpty()) {
+                                Badge { Text("${activeFilterChips.size}") }
+                            }
+                        }) {
+                            IconButton(onClick = { showFilterSheet = true }) {
+                                FilterIcon(MaterialTheme.colorScheme.onSurface)
+                            }
+                        }
+                    },
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            }
         },
     ) { innerPadding ->
         Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
@@ -179,7 +192,11 @@ fun FullPassListScreen(
             val isFilterActive = state.timeWindow != FullPassListViewModel.DEFAULT_TIME_WINDOW ||
                 state.minMaxElevation != FullPassListViewModel.DEFAULT_MIN_MAX_ELEVATION
             val visibleFilters = PassListFilter.entries.filter { it != PassListFilter.FILTERED || isFilterActive }
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth().padding(16.dp, 8.dp)) {
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier.fillMaxWidth().padding(
+                    PaddingValues(start = 16.dp, top = ScreenContentTopPadding, end = 16.dp, bottom = 8.dp),
+                ),
+            ) {
                 visibleFilters.forEachIndexed { index, filter ->
                     SegmentedButton(
                         selected = state.filter == filter,

@@ -1,6 +1,7 @@
 package com.sattrakk.app.navigation
 
 import android.net.Uri
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -67,7 +68,15 @@ fun MainNavHost(navController: NavHostController = rememberNavController()) {
     var selectedSatellite by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     Scaffold(
-        bottomBar = { SatTrakkBottomNavBar(navController, selectedSatellite) }
+        bottomBar = { SatTrakkBottomNavBar(navController, selectedSatellite) },
+        // No topBar here — each screen owns its own TopAppBar, which already pads for the status
+        // bar internally. Leaving this at the Scaffold default (WindowInsets.safeDrawing) would
+        // make THIS Scaffold also reserve the status-bar inset at the top (nothing here consumes
+        // it), stacking a second status-bar-height gap above every screen's own TopAppBar and
+        // making it look oversized. contentWindowInsets = WindowInsets(0) removes that reservation
+        // entirely; the bottom nav bar's own real measured height (not a system-inset guess) still
+        // correctly reserves innerPadding.bottom for the NavHost content below it.
+        contentWindowInsets = WindowInsets(0),
     ) { innerPadding ->
         NavHost(
             navController = navController,

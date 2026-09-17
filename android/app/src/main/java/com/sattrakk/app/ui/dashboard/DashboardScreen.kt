@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -21,6 +22,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
@@ -46,6 +48,8 @@ import com.sattrakk.app.navigation.ChevronIcon
 import com.sattrakk.app.navigation.OrbitIcon
 import com.sattrakk.app.ui.common.formatTimeLocal
 import com.sattrakk.app.ui.theme.OnSecondaryContainerVariant
+import com.sattrakk.app.ui.theme.ScreenContentBottomPadding
+import com.sattrakk.app.ui.theme.ScreenContentTopPadding
 import com.sattrakk.app.ui.theme.TelemetryTextStyle
 import java.time.Duration
 import java.time.OffsetDateTime
@@ -82,7 +86,16 @@ fun DashboardScreen(
 
     Scaffold(
         modifier = modifier,
-        topBar = { TopAppBar(title = { Text("SatelliteTracker") }) },
+        topBar = {
+            Column {
+                TopAppBar(title = { Text("SatelliteTracker") })
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            }
+        },
+        // See MainNavHost's own contentWindowInsets comment — without this, this screen's
+        // Scaffold also reserves the status bar (top) and system gesture inset (bottom) on top of
+        // what's already correctly reserved once at the app-root Scaffold, doubling both gaps.
+        contentWindowInsets = WindowInsets(0),
         floatingActionButton = {
             // FAB is pure navigation (truth map: "[PARTIAL] FAB ... fine as pure navigation to
             // Map/Sky View, routes exist"). Map was chosen as the target — the FAB's icon reads as
@@ -109,7 +122,7 @@ fun DashboardScreen(
                 is DashboardUiState.Error -> ErrorContent(s.message, PaddingValues())
                 is DashboardUiState.Content -> DashboardContent(
                     state = s,
-                    contentPadding = PaddingValues(),
+                    contentPadding = PaddingValues(top = ScreenContentTopPadding, bottom = ScreenContentBottomPadding),
                     onTabSelected = viewModel::selectTab,
                     onViewFullPassList = onViewFullPassList,
                     onPassClick = onPassClick,
