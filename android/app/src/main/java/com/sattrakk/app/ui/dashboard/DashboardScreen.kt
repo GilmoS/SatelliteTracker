@@ -1,6 +1,12 @@
 package com.sattrakk.app.ui.dashboard
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -35,10 +41,19 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.PathMeasure
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -278,13 +293,11 @@ private fun HeroPassCard(satelliteName: String, pass: Pass, countdown: Duration)
             modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // TODO(design): the elapsed-ratio ring is fully removed per product decision, not just
-            // deferred as a static placeholder — DashboardUiState only ever exposed a raw remaining
-            // Duration (no elapsed-fraction field), and a computed "since previous LOS" percentage
-            // was explicitly rejected as too complex for the value it adds right now. A genuinely
-            // new, static (non-percentage) visual replacement is planned via Claude Design in a
-            // future polish pass once other functional work is complete — see android/CLAUDE.md's
-            // Milestone E round-2 section. Until then this card is simplest without a ring element.
+            // The old elapsed-ratio ring TODO is resolved: this is a purely decorative, looping
+            // animation (a satellite dot tracing an elevation-arc trajectory), not a computed
+            // elapsed percentage — that idea remains explicitly rejected. See PassArcAnimation's
+            // own doc comment and android/CLAUDE.md's HeroPassCard section.
+            PassArcAnimation(modifier = Modifier.padding(end = 18.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "Next pass",
@@ -310,6 +323,108 @@ private fun HeroPassCard(satelliteName: String, pass: Pass, countdown: Duration)
                     )
                 }
             }
+        }
+    }
+}
+
+// Purely decorative, continuous looping animation — replaces the removed elapsed-ratio ring
+// placeholder (see HeroPassCard's call site and android/CLAUDE.md). Reproduces, with Compose's
+// Canvas + PathMeasure, the small "pass trace" SVG animation from the design's 2a Home screen
+// (Claude Design project "Map detail and AR improvements", "SatelliteTracker M3.dc.html"): a dot
+// endlessly tracing a stylized elevation-arc trajectory over a faint horizon/elevation-dome guide.
+//
+// This is NOT bound to any real value — not nextPassCountdown, not an elapsed fraction, not any
+// other Pass/UiState field. It runs on its own infinite clock regardless of the actual pass's
+// timing; only its visual motion happens to suggest "something moving along an arc," which the
+// design itself treats as pure atmosphere, not a progress indicator (the design's own literal
+// percentage-ring idea was already rejected — see the TODO(design) history at HeroPassCard).
+//
+// Isolated into its own composable specifically so the per-frame animation state is read inside
+// Canvas's draw-phase lambda (a DrawScope.() -> Unit run during drawing, not recomposition) rather
+// than in HeroPassCard's own body — this way the animation ticking triggers a re-draw of just this
+// small Canvas every frame and never a recomposition of HeroPassCard, the countdown text, or
+// MetricGrid. rememberInfiniteTransition's animation coroutine is scoped to this composable's own
+// composition, so it's cancelled automatically once HeroPassCard (and this) leaves composition —
+// e.g. switching tabs to a satellite with no next pass, or navigating off Dashboard.
+@Composable
+private fun PassArcAnimation(modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "passArcTrace")
+    val progress by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(animation = tween(durationMillis = 4800, easing = LinearEasing)),
+        label = "passArcProgress",
+    )
+
+    val guideColor = MaterialTheme.colorScheme.outlineVariant
+    val trackColor = MaterialTheme.colorScheme.primaryContainer
+    val traceColor = MaterialTheme.colorScheme.primary
+    val dotColor = MaterialTheme.colorScheme.onPrimaryContainer
+
+    // The trajectory curve itself never changes — built once, not on every frame, even though the
+    // Canvas below redraws every frame.
+    val trajectory = remember {
+        Path().apply {
+            moveTo(12f, 84f)
+            quadraticTo(52f, 6f, 92f, 84f)
+        }
+    }
+    val pathMeasure = remember { PathMeasure() }
+    val traceSegment = remember { Path() }
+    val dashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(2f, 3f)) }
+
+    Canvas(modifier = modifier.size(88.dp)) {
+        // Original design coordinates are laid out on a 104x104 grid — scale uniformly to
+        // whatever size this Canvas actually renders at instead of assuming a fixed dp value.
+        val s = size.minDimension / 104f
+        scale(scale = s, pivot = Offset.Zero) {
+            // Faint elevation-dome guide arcs + horizon line — static chrome framing the trace.
+            drawArc(
+                color = guideColor,
+                startAngle = 180f,
+                sweepAngle = 180f,
+                useCenter = false,
+                topLeft = Offset(8f, 40f),
+                size = Size(88f, 88f),
+                style = Stroke(width = 1f),
+            )
+            drawArc(
+                color = guideColor,
+                startAngle = 180f,
+                sweepAngle = 180f,
+                useCenter = false,
+                topLeft = Offset(23f, 55f),
+                size = Size(58f, 58f),
+                style = Stroke(width = 1f, pathEffect = dashEffect),
+            )
+            drawArc(
+                color = guideColor,
+                startAngle = 180f,
+                sweepAngle = 180f,
+                useCenter = false,
+                topLeft = Offset(38f, 70f),
+                size = Size(28f, 28f),
+                style = Stroke(width = 1f, pathEffect = dashEffect),
+            )
+            drawLine(color = guideColor, start = Offset(4f, 84f), end = Offset(100f, 84f), strokeWidth = 1f)
+
+            // Full (dim) trajectory — always visible in full, the same curve the bright trace
+            // below animates along.
+            drawPath(trajectory, color = trackColor, style = Stroke(width = 2.5f, cap = StrokeCap.Round))
+
+            // Bright trace, drawn from the start up to the current animated progress — the
+            // Compose equivalent of the SVG's animated stroke-dashoffset "self-drawing" line.
+            pathMeasure.setPath(trajectory, false)
+            val length = pathMeasure.length
+            traceSegment.reset()
+            pathMeasure.getSegment(0f, length * progress, traceSegment, true)
+            drawPath(traceSegment, color = traceColor, style = Stroke(width = 2.5f, cap = StrokeCap.Round))
+
+            // Moving dot (soft glow + bright core), positioned along the curve at the same
+            // progress — the Compose equivalent of the SVG's animateMotion dots.
+            val dotPosition = pathMeasure.getPosition(length * progress)
+            drawCircle(color = traceColor, radius = 7f, center = dotPosition, alpha = 0.18f)
+            drawCircle(color = dotColor, radius = 3.4f, center = dotPosition)
         }
     }
 }
