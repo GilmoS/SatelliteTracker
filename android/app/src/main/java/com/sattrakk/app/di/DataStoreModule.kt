@@ -4,8 +4,12 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
+import com.sattrakk.app.data.local.DataStoreFcmTokenStore
 import com.sattrakk.app.data.local.DataStoreHiddenSatellitesStore
+import com.sattrakk.app.data.local.DataStoreNotificationPromptStore
+import com.sattrakk.app.data.local.FcmTokenStore
 import com.sattrakk.app.data.local.HiddenSatellitesStore
+import com.sattrakk.app.data.local.NotificationPromptStore
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -36,4 +40,12 @@ object DataStoreModule {
     @Provides
     @Singleton
     fun provideHiddenSatellitesStore(impl: DataStoreHiddenSatellitesStore): HiddenSatellitesStore = impl
+
+    @Provides
+    @Singleton
+    fun provideFcmTokenStore(impl: DataStoreFcmTokenStore): FcmTokenStore = impl
+
+    @Provides
+    @Singleton
+    fun provideNotificationPromptStore(impl: DataStoreNotificationPromptStore): NotificationPromptStore = impl
 }
