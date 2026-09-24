@@ -32,8 +32,9 @@ Modal's real Composable content (`PassDetailsScreen.kt` — see "Pass Details Mo
 below), including two small `PassDetailsUiState`/`PassDetailsViewModel` additions
 (`satelliteName`/`satelliteNoradId` resolution and the `exportToCalendar()`/`stubMessage` stub).
 **This completes Step 3's full screen set** — Dashboard, Full Pass List, Settings, and Pass
-Details all now have real Composable content; **Map and Sky View remain placeholder-only**,
-pending Milestone F (steps 6/7).
+Details all now have real Composable content. **Map now has real content too** (MapLibre Compose,
+Milestone F — see "Map screen — MapLibre Compose UI + navigation" near the end of this file);
+**Sky View remains placeholder-only**.
 
 ---
 
@@ -159,8 +160,9 @@ com.sattrakk.app/
 │   │   ├── PassDetailsEvent.kt     One-shot NavigateToMap event (Pass Details Modal)
 │   │   ├── PassDetailsViewModel.kt Pass Details Modal logic
 │   │   └── PassDetailsScreen.kt    Placeholder only (registered as a dialog destination)
-│   ├── map/                         MapUiState + MapViewModel (data/logic layer done);
-│   │                                MapScreen.kt still a placeholder (Milestone F)
+│   ├── map/                         MapUiState + MapViewModel (data/logic layer), MapScreen.kt
+│   │                                (MapLibre Compose UI, both flows + drawer), MapGeometry.kt
+│   │                                (antimeridian/polar geometry for rendering)
 │   └── skyview/SkyViewScreen.kt     Placeholder only (Milestone F)
 ├── navigation/
 │   ├── SatTrakkApp.kt               App root: SatTrakkTheme + SessionManager switch (see below)
@@ -469,7 +471,7 @@ up, omitted, or approximated; nothing was assumed from the mockup alone.
 | Route | Type | Args | Status |
 |---|---|---|---|
 | `dashboard` | `composable` | none | **Real content** (this task) |
-| `map` | `composable` | none | Placeholder (Milestone F) |
+| `map?passId={passId}&satelliteId={satelliteId}` | `composable` | both optional (nullable) | **Real content** (Milestone F — see the Map UI section near the end of this file) |
 | `sky_view` | `composable` | none | Placeholder (Milestone F) |
 | `settings` | `composable` | none | Placeholder (pending a future UI task) |
 | `full_pass_list/{satelliteId}/{satelliteName}` | `composable` | both required | Placeholder (pending a future UI task) |
@@ -1378,6 +1380,8 @@ viewModel.events.collect { ... } }` and, on `PassDetailsEvent.NavigateToMap`, ca
 `onNavigateToMap` callback. `SatTrakkNavHost` wires this to pop the modal off the backstack and
 navigate to `SatTrakkDestination.Map` — since Map is still an empty placeholder screen (Milestone
 F), this lands on that placeholder today, which is expected and correct, not a gap to fix here.
+**Superseded:** it now opens Map's Flow 2 for this pass (`navigateToMap(passId = ...)`) — see the
+Map UI section near the end of this file.
 
 ### Loading/error states — distinct, not collapsed into one generic view
 
@@ -2300,12 +2304,10 @@ Both nav args are read from `SavedStateHandle` as **optional** (`passId`, `satel
 
 ### Open items, flagged rather than decided
 
-- **Map's route has no `satelliteId` yet.** The `map` destination currently takes no args at any
-  entry point: the Dashboard FAB, the bottom nav bar, and Pass Details' "Show on map" (which
-  doesn't pass its `passId` either). Until the nav graph passes `satelliteId` (and `passId` for
-  "Show on map"), the live flow shows `MapUiState.Error("No satellite selected for the map.")`.
-  No default satellite is guessed. The nav task needs to decide what the bottom-nav entry passes;
-  one option is the Dashboard's `selectedSatellite`, which the Passes nav item already uses.
+- ~~**Map's route has no `satelliteId` yet.**~~ **Resolved** by the Map UI task: the route is now
+  `map?passId=&satelliteId=`, and every entry point passes one (see "Map screen — MapLibre Compose
+  UI + navigation" below). The FAB and bottom-nav Map item pass the Dashboard's
+  `selectedSatellite`.
 - **The drawer query is only as good as the local `notify` value.** `PassRepository` still
   defaults a first-seen pass to `notify = true` (in `getPasses`, `getPassById` and
   `getPassHistory`) from the old opt-out era, while the backend is now opt-in. So
@@ -2328,3 +2330,151 @@ position or track calls after clearing. Also covered:
 
 Verified in this environment: `:app:testDebugUnitTest` (**215 green**: 192 before + 23 new) and
 `:app:assembleDebug`. Not verified: `:app:connectedDebugAndroidTest` (no device or emulator).
+
+---
+
+## Map screen — MapLibre Compose UI + navigation (Milestone F)
+
+Replaces the `MapScreen.kt` placeholder with real content, built on the Map data layer above
+(`MapViewModel`/`MapUiState`, consumed **exactly as built**, with no ViewModel/repository changes),
+plus the nav-graph changes for the two flows. Branch `feature/map-screen-ui`, cut from `develop`
+after PR #42 (map data layer) merged. Does not touch any other screen beyond the nav wiring below.
+
+### Code truth map re-verification (Screen 5/8 — Map)
+
+`CodeTruthMap.md`'s Map entries were written under the old "no MapViewModel, osmdroid placeholder"
+assumption. Re-verified item by item against the current code, not carried over wholesale:
+
+- **[REAL] Basemap**: inline style over CartoDB Dark Matter raster tiles (below).
+- **[REAL] Ground-track polyline (dashed)**: `LiveTrack.trackPoints` (Flow 1, polled every 5 min)
+  or `StaticPassTrack.trackPoints` (Flow 2, solid line, framed by its bounding box).
+- **[REAL] Live position dot**: `LiveTrack.currentPosition`, polled every 15 s. It's a static
+  halo + dot, not an animated pulse; the pulse animation is still decorative and not built.
+- **[REAL] Footprint polygon**: `LiveTrack.footprintPolygon` (Flow 1 only; none in Flow 2, per the
+  confirmed decision).
+- **[REAL] Satellite-name floating label**: `LiveTrack.satelliteName`, anchored above the marker.
+- **[REAL] Back arrow + top bar**: nav-only. The title is the satellite name (Flow 1) or "Pass track"
+  + orbit/AOS subtitle (Flow 2).
+- **[DECORATIVE, still omitted]** Layer/zoom/compass FABs (no map-control state; pinch-zoom works
+  natively), the bottom-sheet lat/lon/altitude/velocity readout (`SatellitePosition` has no
+  velocity, and a readout panel wasn't in scope), and the "Over Israel" badge (no geofence exists).
+- **No 2D/3D globe toggle.** MapLibre Native has no globe projection on mobile. Camera tilt/pitch
+  is out of scope, since nothing in the truth map calls for it.
+
+### MapLibre Compose + the inline CartoDB style
+
+- **`org.maplibre.compose:maplibre-compose` 0.12.1**, pinned below the newest release (0.17.0)
+  for the same reason as the kotlinx.serialization pin: 0.13.0+ are built against kotlin-stdlib
+  2.3.x/2.4.x and Compose 1.10+/1.12, which the Kotlin 2.1.20 compiler can't read. 0.12.1 is the
+  newest on kotlin-stdlib 2.2.x (one version ahead, which 2.1.20 can still read) and Compose 1.9.x.
+  Checked per release via each version's Gradle `.module` metadata on Maven Central. Bump it
+  together with `kotlin`. The library calls `MapLibre.getInstance(context)` itself (no app-side
+  init). The APK is now ~90 MB because MapLibre ships native libs for every ABI; consider ABI splits
+  or an App Bundle before a real release.
+- **Inline style, not a hosted one** (confirmed decision): `CARTO_DARK_STYLE` in `MapScreen.kt` is a
+  `BaseStyle.Json` with one raster source and one raster layer. It uses the same CartoDB Dark Matter
+  tiles the web frontend uses (`frontend/src/components/SatelliteMap.tsx`), with no API key.
+  Leaflet's `{s}`/`{r}` placeholders don't exist in MapLibre, so the four `a`–`d` subdomains are
+  listed explicitly, and the `@2x` retina tiles are requested at `tileSize: 256`. The source
+  carries the "© OpenStreetMap contributors © CARTO" attribution. The attribution/logo ornaments
+  stay on (tile terms); the scale bar and compass are off.
+- **No glyphs, so no map-rendered text.** The style references nothing but the tile source, so a
+  MapLibre `SymbolLayer` can't draw labels. The satellite-name label is a Compose overlay instead,
+  positioned through `CameraState.projection.screenLocationFromPosition`. It lives in its own small
+  composable (`SatelliteLabel`), so the per-frame camera reads while panning only recompose the
+  label.
+- **Layers** (bottom to top, Flow 1): footprint fill (12% `primary`) + outline, dashed track,
+  position halo + dot. Flow 2: track + AOS (filled) / LOS (hollow) end markers. The AOS/LOS
+  markers were optional per the task; they're kept because without them the track has no
+  direction. Colors come from existing theme tokens (`primary`/`onPrimary`/`background`), read in
+  normal composition and passed in as plain values.
+- **Camera**: Flow 1 centers once on the position at first display (zoom 2.5, which fits the
+  ~4000 km footprint). Later polls move the marker but not the camera, since the user may have
+  panned. Flow 2 animates to the track's bounding box (48 dp padding), except when the track is
+  split at the antimeridian: a bbox across ±180° would span the world, so it stays centered on AOS.
+
+### `MapGeometry` — antimeridian/polar rendering (`ui/map/MapGeometry.kt`)
+
+`GeoUtils` (the domain layer) deliberately left antimeridian handling to the renderer. This is that
+half, pure and JVM-tested (`MapGeometryTest`, 10 cases):
+
+- `splitAtAntimeridian(points)`: splits a track wherever consecutive longitudes jump by more than
+  180°. It interpolates the crossing latitude and gives each side an explicit ±180° endpoint, so
+  the pieces meet exactly. The result is rendered as a `MultiLineString`.
+- `footprintRing(ring, center)`: unwraps the footprint's longitudes to be continuous around the
+  center, so near ±180° it draws as one intact circle on the adjacent world copy instead of
+  splitting. If the ring encloses a pole (above roughly ±72° latitude), it finishes the circle to
+  the first point's 360°-shifted copy and closes across the pole side at MapLibre's Mercator limit
+  (±85.05°), which fills the polar cap.
+
+### Navigation — optional `passId`/`satelliteId`, the guard, and every entry point
+
+- **Route**: `map?passId={passId}&satelliteId={satelliteId}`. Both are `NavType.StringType`,
+  `nullable = true`, `defaultValue = null`, keyed by `MapViewModel.PASS_ID_ARG`/`SATELLITE_ID_ARG`.
+  `SatTrakkDestination.Map.buildRoute(passId, satelliteId)` follows the `Uri.encode` convention of
+  `FullPassList`/`PassDetails`. **`satelliteId` goes beyond the task's `map?passId={passId}`
+  sketch**: `MapViewModel`'s live flow needs it, and without it shows "No satellite selected."
+- **Entry points**:
+  - Dashboard FAB → Flow 1 for the Dashboard's `selectedSatellite`.
+  - Bottom-nav Map item → Flow 1 for `selectedSatellite`. It is disabled until one is known, the
+    same fallback the Passes item uses. It uses `navigateToTopLevel(..., restoreState = false)`,
+    so a previously visited Map entry (possibly a pass track) is never restored; the tab is always
+    "live, now."
+  - Pass Details' "Show on map" → pops the modal, then Flow 2 for that `passId`.
+  - Map drawer tap → Flow 2 for the tapped `passId`.
+- **The guard (`navigateToMap`)**: `popUpTo(Map.route) { inclusive = true }` + `launchSingleTop`.
+  At most one Map entry ever exists, drawer-hopping never accumulates entries, and back always
+  leaves Map in one step. Confirmed in `NavControllerImpl.navigate` (navigation-runtime 2.9.7):
+  `popUpTo` runs **before** the single-top check. That is exactly why `launchSingleTop` alone would
+  have been wrong here: it would reuse the current Map entry, whose `MapViewModel` reads its args
+  only once in `init`, so a drawer tap would silently keep showing the old pass. With the pop
+  first, `launchSingleTop` can never match, so it's kept only for parity with `navigateDebounced`.
+- **Rapid-tap debounce**: the same synchronous "is the target already the current top entry?"
+  check that `launchSingleTop` makes, but args-aware (`isShowingMap(passId, satelliteId)`). A
+  repeat tap on the same drawer entry, FAB, or Map tab is dropped instead of tearing down and
+  recreating the screen. Like `navigateDebounced`, it isn't covered by an automated test (no
+  Robolectric/`navigation-testing`/Compose UI test infrastructure).
+- **Leaving Map via the bottom bar no longer saves its state.** `navigateToTopLevel` pops with
+  `saveState = true`, which keeps a popped entry's `ViewModelStore` alive for a later restore. For
+  Map that would have kept `MapViewModel`'s `viewModelScope` polling (position every 15 s) running
+  in the background after the user left. `navigateToTopLevel` now passes `saveState = false` when
+  the current destination is Map. Other tabs are unaffected.
+
+### Drawer — available in both flows
+
+A `ModalNavigationDrawer` listing `MapUiState.notifyEnabledPasses` (both `LiveTrack` and
+`StaticPassTrack` carry it). It opens from the top bar's list button in both flows. Swipe-to-open
+is disabled (`gesturesEnabled = drawerState.isOpen`) because it fights the map's pan gesture;
+swiping or tapping the scrim still closes it. Loading and Error states show an empty-state line.
+Each row shows the satellite name, the AOS local date/time, and "Orbit N", using existing `Pass`
+fields only. In Flow 2 the row for the pass on screen is highlighted. A tap closes the drawer and
+goes through `navigateToMap(passId = ...)`.
+
+**Flagged, not resolved (no ViewModel logic added):**
+- **Satellite name**: `Pass` has only `satelliteId`, and `MapUiState` knows only the on-screen
+  satellite's name (`LiveTrack.satelliteName`). Rows for that satellite show its real name; every
+  other row, and every row in Flow 2, falls back to "Satellite". Closing this needs a catalog
+  lookup in `MapViewModel` (the same `getSatellites()` match `PassDetailsViewModel` does), which
+  is a ViewModel change outside this task.
+- **Drawer contents**: still subject to the data layer's open item above. First-seen passes
+  default to `notify = true` locally while the backend is opt-in, and the query has no time bound,
+  so the drawer will list most cached passes, including past ones.
+
+### Testing
+
+- No Compose UI test convention exists in this project beyond the coarse `MainActivityTest`, and
+  none was invented here. Same flag as every prior UI task. The map rendering, the drawer, the
+  label anchoring, and the nav guard (real `NavController` behavior) are therefore **not**
+  automatically tested. `MapViewModel` itself was already covered by `MapViewModelTest`.
+- New: `MapGeometryTest` (10).
+- Verified in this environment: `:app:compileDebugKotlin`, `:app:testDebugUnitTest` (**225
+  green**: 215 before + 10), and `:app:assembleDebug`, all `BUILD SUCCESSFUL`.
+- **Not verified**: `:app:connectedDebugAndroidTest` and any on-device rendering (no `adb` or
+  emulator available here). Tiles actually loading, the GL surface rendering inside Compose, and
+  label placement need a device.
+- Suggested QA:
+  1. Dashboard FAB → live map: tiles, footprint, and marker appear, and the marker moves after about 15 s.
+  2. Open the drawer → tap a pass → the pass track is framed.
+  3. Tap another pass → press back once → you land back on Dashboard.
+  4. Pass Details "Show on map".
+  5. Bottom-nav Map, then another tab: confirm in the backend logs that position polling stops.
