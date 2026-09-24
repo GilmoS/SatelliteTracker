@@ -93,12 +93,19 @@ com.sattrakk.app/
 │   ├── local/
 │   │   ├── ApiKeyStore.kt          EncryptedSharedPreferences wrapper
 │   │   ├── HiddenSatellitesStore.kt DataStore-backed, local-only hidden-satellite ids (Settings screen)
+│   │   ├── FcmTokenStore.kt        DataStore-backed pending FCM token slot (Step 5)
+│   │   ├── NotificationPromptStore.kt DataStore flag: Dashboard's one-time permission ask done (Step 5)
 │   │   ├── AppDatabase.kt, PassDao.kt, SatelliteDao.kt, NoteDao.kt, CacheMetadataDao.kt,
 │   │   │                          HistoryLoadStateDao.kt (Full Pass List screen)
 │   │   └── entity/                 Room @Entity classes (Pass, Satellite, Note, CacheMetadata,
 │   │                                HistoryLoadState)
 │   ├── permission/
 │   │   └── NotificationPermissionManager.kt  Read-only POST_NOTIFICATIONS status wrapper (Settings screen)
+│   ├── push/                       FCM (Step 5) — see "FCM push notifications" below
+│   │   ├── SatTrakkMessagingService.kt  onNewToken -> pending slot; foreground notification builder
+│   │   ├── FcmTokenSyncObserver.kt Process-lifetime pending-token -> backend sync
+│   │   ├── FcmTokenFetcher.kt      Proactive FirebaseMessaging.token fetch
+│   │   └── PassNotificationDeepLink.kt  passId/type extra contract + parsing
 │   ├── session/
 │   │   └── SessionManager.kt       Global SessionState (Valid/RequiresReauth) (step 3.1)
 │   ├── util/
@@ -120,8 +127,10 @@ com.sattrakk.app/
 │   ├── DatabaseModule.kt           Room AppDatabase + DAOs
 │   ├── ClockModule.kt              java.time.Clock, for testable "now" (step 3.1)
 │   ├── CoroutineScopeModule.kt     @ApplicationScope CoroutineScope, for fire-and-forget work outliving a caller
-│   ├── DataStoreModule.kt          Preferences DataStore singleton + HiddenSatellitesStore binding (Settings screen)
-│   └── PermissionModule.kt         NotificationPermissionManager binding (Settings screen)
+│   ├── DataStoreModule.kt          Preferences DataStore singleton + HiddenSatellitesStore/FcmTokenStore/
+│   │                                NotificationPromptStore bindings
+│   ├── PermissionModule.kt         NotificationPermissionManager binding (Settings screen)
+│   └── PushModule.kt               FcmTokenFetcher binding (Step 5)
 ├── ui/
 │   ├── theme/                       Color.kt, Shape.kt, Type.kt, Theme.kt — M3 tokens from the
 │   │                                design MCP (see below)
@@ -2043,3 +2052,175 @@ environment, same limitation noted in every prior UI task. Two gaps are explicit
 than silently skipped, per this round's own instructions: the navigation-debounce fix (item 3) and
 the scroll-reset fix (item 4) both need testing infrastructure (Robolectric/`navigation-testing`,
 and Compose UI testing respectively) that doesn't exist in this project yet.
+
+---
+
+## Milestone E, Step 5 — FCM push notifications (client side)
+
+Token capture, the pending-token pattern, token sync, the notification-tap deep link, and the
+permission request trigger. Relies on `app/google-services.json` (**gitignored, never
+committed** — a checkout without it fails the build at `process*GoogleServices`, which is intended)
+and on the backend's Notification+Data payload (`passId`, `type = "pass_reminder"` — repo-root
+CLAUDE.md's FCM payload section).
+
+### Firebase setup, and one dependency side effect to know about
+
+- `firebase-bom` 34.19.0 + `firebase-messaging` (the BoM has not shipped `-ktx` modules since
+  34.0.0; their APIs live in the main artifacts) and the `com.google.gms.google-services` plugin
+  4.4.4 (the 4.4.x line, matching the AGP 8 pin — not 4.5.0). Kotlin stdlib resolves to 2.1.21,
+  so the Kotlin 2.1.20 compiler pin is unaffected.
+- **The BoM also bumps `androidx.datastore` from the pinned 1.1.1 to 1.1.7.** DataStore's
+  file-based storage in 1.1.7 commits each write with `File.renameTo`, which cannot replace an
+  existing file **on Windows**, so every JVM DataStore test broke on this dev machine
+  (`"Unable to rename ... multiple instances of DataStore"`). Production is unaffected, since
+  Android's rename does overwrite. Fixed only in tests: `testPreferencesDataStore(file)`
+  (`src/test/.../data/local/TestPreferencesDataStore.kt`) builds the test DataStore on
+  `OkioStorage`, whose atomic move replaces the target. Every DataStore-backed store test must
+  use this helper, not `PreferenceDataStoreFactory.create(produceFile = ...)`.
+
+### `FcmTokenStore` — the pending-token pattern
+
+FCM can issue a token at any time, including before the tester has registered, when
+`SessionManager` is `RequiresReauth` and `PUT /api/settings/me/fcm-token` would just return 401.
+If that token were dropped, the backend wouldn't learn it until FCM happened to rotate it. So
+every token goes into a single persisted **pending** slot unconditionally
+(`FcmTokenStore.savePendingToken`, stored in the same Preferences DataStore file as
+`HiddenSatellitesStore`, same interface + `DataStore*` implementation + `@Provides` binding
+pattern). The slot is cleared only once the backend has confirmed the token.
+`SatTrakkMessagingService.onNewToken` does no session check at all; it just saves on
+`@ApplicationScope` (the service may be destroyed right after `onNewToken` returns).
+
+### `FcmTokenSyncObserver` — process-lifetime sync on the shared `@ApplicationScope`
+
+`data/push/FcmTokenSyncObserver.kt`, started once from `SatTrakkApplication.onCreate`. There was
+no existing app-startup hook, so this adds field injection into the `@HiltAndroidApp` class for
+the first time. It runs on the **existing** `@ApplicationScope` `CoroutineScope`
+(`di/CoroutineScopeModule.kt`, the same scope `PassRepository.getPassById`'s background refresh
+uses). No second scope was added.
+
+- `combine(sessionState, pendingToken)` → `distinctUntilChanged` → `collectLatest`: when the state
+  is `Valid` and a token is pending, it calls `SettingsRepository.updateFcmToken(token)`.
+  `RequiresReauth` with a token pending does nothing, and the token waits.
+- It clears the slot **only** on `ApiResult.Success`, and only if the slot still holds the token
+  that was sent. A newer token saved mid-PUT is never dropped, and `collectLatest` also cancels
+  the stale send.
+- **Any failure leaves the token pending. There is no timed retry loop.** The retry happens on
+  the next trigger: the next app launch (the first emission re-reads both values), a new token
+  arriving, or the session flipping `RequiresReauth` → `Valid`.
+- **Addition beyond the original spec:** on a `RequiresReauth` → `Valid` *transition* (a
+  (re-)registration), the observer also calls `FcmTokenFetcher.fetchToken()`. Without it, a
+  tester who re-registers gets a new `ApiKey` whose `UserSettings` row has no token, while the
+  token synced under the old key was already cleared from the slot. The backend would never learn
+  it until the next FCM rotation. This does not fire when the app *starts* already `Valid`.
+
+### `FcmTokenFetcher` — proactive token fetch
+
+`onNewToken` fires only when a token is created or rotated, never on an ordinary start. So
+`FirebaseFcmTokenFetcher.fetchToken()` (`FirebaseMessaging.getInstance().token` → pending slot,
+fire-and-forget on `@ApplicationScope`) is called:
+
+- after the permission is granted (or found already granted) by Dashboard's one-time ask (below);
+- on the re-registration transition above.
+
+It sits behind an interface only so ViewModels and the observer can be unit-tested without
+FirebaseMessaging's static singleton.
+
+### Foreground vs. background display — `SatTrakkMessagingService.onMessageReceived`
+
+Our pushes are Notification+Data hybrids. Per FCM's **documented** delivery rules:
+
+- **App backgrounded or killed:** FCM shows the `Notification` block itself, and
+  `onMessageReceived` is **not** called. On tap it launches the launcher Activity with every Data
+  key copied in as a String extra.
+- **App in the foreground:** nothing is shown automatically, and `onMessageReceived` **is**
+  called.
+
+So `onMessageReceived` builds an equivalent `NotificationCompat` notification by hand. It uses the
+same title/body and puts the same `passId`/`type` extras on a `PendingIntent` to `MainActivity`
+(`FLAG_IMMUTABLE`, with a per-pass request code and notification id, so a later threshold for the
+same pass replaces the earlier reminder instead of stacking). It skips posting if
+`NotificationPermissionManager.isGranted()` is false, and ignores any payload that isn't a
+well-formed `pass_reminder`.
+
+Both paths use the `pass_reminders` channel. It is created in `SatTrakkApplication.onCreate` and
+declared as FCM's `default_notification_channel_id` in the manifest, along with
+`default_notification_icon` (`drawable/ic_stat_pass_reminder`, an original monochrome glyph).
+**The foreground/background behavior above is FCM's documented contract. It was not observed on a
+device in this task.** See the verification notes below.
+
+### Deep link: notification tap → Pass Details
+
+1. **Parsing.** `PassNotificationDeepLink.passIdFrom(intent)` returns the passId only when
+   `type == "pass_reminder"` and `passId` parses as a UUID. Anything else returns `null`,
+   including an ordinary launcher tap or a future unknown `type`, so a bad payload can never build
+   a garbage route. Both tap paths deliver the same extras (see above), so there is one parser.
+2. **Intake.** `MainActivity` (now `launchMode="singleTop"`) passes its Intent to
+   `AppViewModel.onLaunchIntent` in `onCreate` and in `onNewIntent` (tap while already running).
+   In `onCreate` this happens only when `savedInstanceState == null`: on a recreation,
+   `getIntent()` is still the original launch Intent, and the restored NavController back stack
+   already reflects the link having been handled. `MainActivity` gets `AppViewModel` via
+   `by viewModels()`, the same Activity-scoped instance `SatTrakkApp`'s `hiltViewModel()`
+   resolves, so the pending link survives a config change. A non-reminder Intent never clears an
+   unconsumed pending link.
+3. **Navigation.** `SatTrakkApp` passes `pendingPassDetailsId` into `MainNavHost`. A
+   `LaunchedEffect`, placed after `NavHost` so the graph is already set, calls the existing
+   `navigateDebounced(PassDetails.buildRoute(passId))` (`launchSingleTop`, same as the row taps)
+   and then `onPendingPassDetailsConsumed()`.
+4. **`RequiresReauth` edge case — chosen: defer, don't drop.** Under `RequiresReauth`,
+   `SatTrakkApp` doesn't compose `MainNavHost` at all, so there's no NavController to navigate
+   and nothing can crash. The passId simply stays in `AppViewModel`. When the tester
+   re-registers, the session flips to `Valid`, `MainNavHost` composes, and the `LaunchedEffect`
+   consumes the link. If the process dies before then, the link is lost. That's an accepted
+   tradeoff: the pass is still reachable from Dashboard.
+
+### Where the soft-ask → hard-ask trigger actually lives (corrects the original plan)
+
+The task plan assumed Dashboard already had a soft-ask UI. **It didn't.** The only permission UI
+was the Settings screen's `PermissionStatusCard`, and Dashboard never surfaced permission status
+at all. No Dashboard soft-ask UI was built here. The trigger is a one-time **direct system
+dialog** on Dashboard:
+
+- `DashboardViewModel.maybeRequestNotificationPermission()` runs right after the first successful
+  `getSatellites()` load, if `NotificationPromptStore.hasRequestedNotificationPermission` is
+  false. It marks the flag *before* anything else (persisted in DataStore, so it is never
+  re-asked, even if the process dies mid-dialog). Then:
+  - if `NotificationPermissionManager.isGranted()` (always true below API 33, or already granted
+    from Settings), it calls `FcmTokenFetcher.fetchToken()` directly with no dialog;
+  - otherwise it sets `requestNotificationPermission: StateFlow<Boolean>`.
+- `DashboardScreen` launches the dialog with the **same mechanism SettingsScreen uses**:
+  `rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission())`. It clears the
+  flag (`onNotificationPermissionRequestLaunched()`) before launching, so a recomposition or
+  config change can't launch it twice. The result goes to `onNotificationPermissionResult`, which
+  calls `fetchToken()` on grant and does nothing on denial.
+- After this one ask, the Settings screen's permission card (unchanged) is the only way back to
+  the dialog or to system settings.
+
+### What's automatically tested vs. manually verified only
+
+Automatically tested (JVM unit tests, **192 green**: 156 before this task + 36 new):
+`FcmTokenStoreTest` (5), `NotificationPromptStoreTest` (2), `FcmTokenSyncObserverTest` (10: send
++ clear on success, keep on failure/error, no send under `RequiresReauth`, deferred send on
+`Valid`, the in-flight newer-token race, and the re-registration token fetch),
+`PassNotificationDeepLinkTest` (9: extra parsing including malformed/unknown-type cases, plus the
+route string, with `Uri.encode` mocked via `mockkStatic`), `AppViewModelTest` (4: pending-link
+state), and 6 new `DashboardViewModelTest` cases for the permission trigger. Also
+`:app:compileDebugKotlin` and `:app:assembleDebug` (manifest merge confirmed: service,
+`singleTop`, default channel).
+
+**Not automatically verified. All of these need a real device or emulator with Play Services, and
+none was available:**
+- Real token issuance and `onNewToken` firing; the token actually reaching the backend.
+- Foreground vs. background display of the hybrid payload (the documented behavior above).
+- A tray-notification tap delivering the extras, and the actual navigate into Pass Details, from
+  both the cold-start and `onNewIntent` paths. The `LaunchedEffect` → `NavController` step can't
+  be exercised without Compose UI test / Robolectric / `navigation-testing` infrastructure, the
+  same gap noted in every prior UI task.
+- The system permission dialog and its grant/deny callbacks on API 33+.
+- `:app:connectedDebugAndroidTest` (no `adb` or emulator in this environment). Note that
+  `MainActivityTest` now also initializes Firebase at app startup via `google-services.json`.
+
+Suggested manual QA on a device: fresh install → register → accept the dialog → confirm the
+`UserSettings.FcmToken` row on the backend. Then send a reminder with the app foregrounded, with
+it backgrounded, and with it killed, and tap each one to confirm Pass Details opens for the right
+pass. Also force `RequiresReauth` (deactivate the key), tap a reminder, re-register, and confirm
+the modal opens afterward.
