@@ -2233,6 +2233,10 @@ it backgrounded, and with it killed, and tap each one to confirm Pass Details op
 pass. Also force `RequiresReauth` (deactivate the key), tap a reminder, re-register, and confirm
 the modal opens afterward.
 
+**Update:** this manual QA was run on an emulator during the post-merge integration QA at the end
+of this file. Everything passed except background/killed **delivery**, which the environment
+couldn't verify (the tap handling for those states did pass).
+
 ---
 
 ## Map screen — data layer + ViewModel/UiState (Milestone F prep, no UI yet)
@@ -2493,3 +2497,113 @@ with no new repository method.
   3. Tap another pass → press back once → you land back on Dashboard.
   4. Pass Details "Show on map".
   5. Bottom-nav Map, then another tab: confirm in the backend logs that position polling stops.
+- **All five suggested QA steps above were run on an emulator in the post-merge integration QA
+  below and passed.** That section supersedes this one's "Not verified: on-device rendering".
+
+---
+
+## Post-merge integration QA — FCM + Map (2026-09-24)
+
+**Milestone E Step 5 (FCM) and Step 6 (Map) are complete.** Both are merged into `develop` (PRs
+#41, #42, #43). This run was verification and reconciliation after all three merged, not new
+feature work. **No app code was changed.** Every issue found was either an environment artifact
+or is flagged below as a follow-up.
+
+**Environment:**
+- Real backend (`SatelliteTracker.API` on `:5076`) against the dev Postgres.
+- `Pixel_10` AVD, API 36 Google APIs image with Play Services.
+- Real FCM sends from `PassNotificationJob`, triggered by synthetic passes: a real EROS C3 pass
+  cloned with AOS at now + 5.5 min, the QA tester opted in, `AlertMinutes = {5}`.
+- All QA rows (passes, keys, settings, allowlist entry) were deleted afterwards.
+
+### 1. Build and regression — PASS
+
+- Clean `:app:compileDebugKotlin`, `:app:testDebugUnitTest` and `:app:assembleDebug`, all
+  `BUILD SUCCESSFUL`.
+- **227 tests, 0 failures, 0 skipped** across 28 suites. That's exactly 192 (FCM) + 23 (Map data
+  layer) + 12 (Map UI), so no tests were lost in the merges.
+- The merges didn't overwrite each other. `MapRepository`, `MapViewModel`, `GeoUtils`,
+  `FcmTokenStore` and the four `data/push/` files are all present. `SatTrakkNavHost` carries both
+  the Map `passId`/`satelliteId` args and FCM's deep-link `LaunchedEffect`. The Map PR's
+  `saveState = false` change in `navigateToTopLevel` doesn't touch FCM's `navigateDebounced`.
+
+### 2. FCM checklist
+
+| Item | Result | How |
+|---|---|---|
+| Token capture before login | **PASS** | Fresh install, not registered: `pending_fcm_token` held a real `…:APA91b…` token in DataStore |
+| Token sync on registration | **PASS** | Registering cleared the pending slot; `UserSettings.FcmToken` in the DB matched the device token |
+| Permission flow | **PASS** | First Dashboard load showed the system dialog; `has_requested_notification_permission` was set; Allow → Settings shows "Push notifications enabled" |
+| Delivery, foreground | **PASS** | Pushed while on the live Map: posted by `SatTrakkMessagingService` on `pass_reminders` with the right title/text |
+| Delivery, background / killed | **NOT VERIFIED** (environment) | After the emulator's first reboot, it stopped receiving *any* FCM message, even in the foreground. The backend sent all three with no errors, the token was unchanged, the host could reach `mtalk.google.com:5228`. The emulator's Play Services session is the suspect. Needs a real device. |
+| Tap-to-open, app running | **PASS** | A real tray tap opened Pass Details for the right `passId` over the Map (`onNewIntent`) |
+| Tap-to-open, backgrounded | **PASS** (simulated Intent) | Sent the same launcher Intent + String extras FCM's tray notification sends. `singleTop` → `onNewIntent` → right pass |
+| Tap-to-open, killed | **PASS** (simulated Intent) | Same Intent after `am force-stop`: cold start → Dashboard → Pass Details for the right pass |
+| RequiresReauth edge case | **PASS** | Deactivated the key → an authorized call got 401 → Tester Entry. A deep link sent then didn't crash and didn't navigate. Re-registering opened the held link's Pass Details, and the token was synced to the **new** `ApiKey` within 0.5 s (the re-registration fetch) |
+
+Anonymous GETs keep working with a deactivated key. The switch to Tester Entry needs an
+`[Authorize]`d call, e.g. the notify toggle or Settings. That's the designed behavior, but it
+matters when reproducing this case.
+
+### 3. Map checklist
+
+| Item | Result | Notes |
+|---|---|---|
+| Flow 1: live marker polls every 15 s | **PASS** | Marker/footprint visibly moved; the backend request log showed 4 position requests in ~50 s |
+| Flow 1: footprint | **PASS** | Renders as a circle around the marker |
+| Flow 1: track polyline | **PASS on host GPU** | Invisible under the emulator's default SwiftShader GPU. Removing `dasharray` made it appear, and the **unmodified** build draws it dashed with `-gpu host`. An emulator rendering artifact, not a code bug. |
+| Flow 1: drawer opens, lists notify = true passes | **PASS, with caveat** | Opens and lists names across satellites. The contents are the open item below. |
+| Flow 2: static track, no marker/footprint | **PASS** | Solid track with AOS/LOS markers, bbox-framed, drawer still reachable |
+| Drawer hops, no back-stack buildup | **PASS** | Pass → another pass → double-tap on the same entry → one back press → Dashboard |
+| Tiles load | **FAIL (external)** | Every CARTO tile is watermarked "API KEY REQUIRED", with any request headers; the web frontend is affected too. See follow-ups. |
+| No crash on teardown while polling; polling stops | **PASS** | 0 position requests in 50 s after leaving via bottom nav, and 0 after leaving via back. No crash across many Map exits. |
+
+### 4. Cross-feature checks
+
+- **Push while on Map Flow 1 — PASS.** The notification posted, the Map kept polling, no crash.
+- **Hiding the Map's satellite in Settings — works, but inconsistent (reported, not changed).**
+  You can't be on Map and Settings at once, so the tested path was: Map (EROS C3) → Settings →
+  hide EROS C3 → bottom-nav Map.
+  - **It reopened EROS C3's live track anyway.** `MapViewModel` doesn't observe
+    `HiddenSatellitesStore`, and the bottom-nav/FAB target is `MainNavHost`'s `selectedSatellite`.
+    That only updates when `DashboardScreen` recomposes, so it goes stale while Dashboard is off
+    screen.
+  - Once Dashboard recomposed (it correctly dropped the EROS C3 tab), the next Map entry showed
+    RUNNER-1.
+  - The drawer keeps listing hidden satellites' passes.
+  - No crash, and polling was unaffected.
+  - The Dashboard hidden-satellite fix from round 1 does **not** extend to Map. Whether it should
+    is a product call.
+
+### Small fixes made
+
+None. Every problem found is either an environment artifact (SwiftShader dashes, emulator FCM
+delivery) or a behavior/product decision, listed below as a follow-up rather than changed here.
+
+### Manual-only items (still not covered by automated tests)
+
+- **Real FCM delivery to a backgrounded or killed app.** Unverified here; needs a physical device.
+  The tap handling for both states *is* verified, via the equivalent Intent.
+- Everything this run verified on the emulator stays manual-only: permission dialog, token
+  issuance/sync, notification rendering and tap, Map rendering/polling/drawer/nav guard. The
+  project still has no Compose UI test, Robolectric or `navigation-testing` infrastructure (the
+  same gap as every earlier UI task).
+- `:app:connectedDebugAndroidTest` was not run.
+
+### Open follow-ups (flagged, not changed)
+
+1. **Map basemap: CARTO keyless tiles are now watermarked.** Pick another dark raster provider,
+   or get a CARTO key (client-side by nature). Affects the web frontend too.
+2. **Drawer / `notify` default.** `PassRepository` still defaults first-seen passes to
+   `notify = true` locally, while the backend is opt-in, so:
+   - the drawer lists nearly every cached pass;
+   - **Pass Details shows "Notify me" ON for passes the backend will never notify about.**
+     Verified on device: a fresh tester, with no opt-ins except the synthetic one, saw every real
+     pass in the drawer.
+
+   Fixing it means flipping the default *and* repairing rows already cached on devices (the merge
+   preserves cached values), which is more than a small fix. Separately, `getNotifyEnabled()` has
+   no time bound, so past passes stay listed, and it doesn't respect hidden satellites.
+3. **Map vs. hidden satellites.** See cross-feature check 4.
+4. **Backend: a failed FCM send is logged as sent and never retried.** See the repo-root
+   CLAUDE.md's "Android client status" section.

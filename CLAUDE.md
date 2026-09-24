@@ -482,6 +482,31 @@ Modules/{ModuleName}/
 
 ---
 
+## Android client status — FCM (Milestone E Step 5) and Map (Step 6) complete
+
+Both are merged into `develop` (PRs #41, #42, #43) and passed a post-merge, end-to-end integration
+QA on 2026-09-24 against this backend: real API + Postgres, an emulator with Play Services, real
+FCM sends from `PassNotificationJob`. The per-item results, the manual-only items, and the open
+follow-ups are in `android/CLAUDE.md` ("Post-merge integration QA — FCM + Map"). Backend-relevant
+findings from that run:
+
+- **Push pipeline verified end to end, foreground delivery included.** Pending token before login
+  → synced to `UserSettings.FcmToken` on registration (and to the *new* `ApiKey` on
+  re-registration) → `PassNotificationJob` fired within its ±1 min threshold window → notification
+  shown on device → tap opened Pass Details for the right `passId`.
+- **Open follow-up (pre-existing, not from the merges): a failed FCM send is logged as sent.**
+  `FirebaseService.SendPassNotificationAsync` catches and logs every send exception and returns
+  normally. `PassNotificationJob` then unconditionally writes the `PassNotificationLog` row, so a
+  send that failed (bad token, FCM outage) is recorded as delivered and never retried for that
+  threshold. Whether to retry, and how, is a decision. Not changed here.
+- **Open follow-up: CartoDB basemap tiles now require an API key.** As of 2026-09-24, every keyless
+  `basemaps.cartocdn.com/dark_all` tile comes back watermarked "API KEY REQUIRED", whatever the
+  request headers. This affects both the Android Map and the web frontend (`SatelliteMap.tsx`).
+  Needs a tile-provider or key decision. A basemap key would be client-side by nature, a
+  different concern from the backend-only N2YO key rule below.
+
+---
+
 ## Git Strategy
 
 | Branch      | Purpose                        |
