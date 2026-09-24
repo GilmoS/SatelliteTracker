@@ -3,6 +3,9 @@ package com.sattrakk.app.ui.dashboard
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sattrakk.app.data.local.HiddenSatellitesStore
+import com.sattrakk.app.data.local.NotificationPromptStore
+import com.sattrakk.app.data.permission.NotificationPermissionManager
+import com.sattrakk.app.data.push.FcmTokenFetcher
 import com.sattrakk.app.data.repository.PassRepository
 import com.sattrakk.app.data.repository.SatelliteRepository
 import com.sattrakk.app.domain.model.ApiResult
@@ -23,6 +26,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
@@ -37,8 +41,17 @@ class DashboardViewModel @Inject constructor(
     private val satelliteRepository: SatelliteRepository,
     private val passRepository: PassRepository,
     private val clock: Clock,
-    private val hiddenSatellitesStore: HiddenSatellitesStore
+    private val hiddenSatellitesStore: HiddenSatellitesStore,
+    private val notificationPermissionManager: NotificationPermissionManager,
+    private val notificationPromptStore: NotificationPromptStore,
+    private val fcmTokenFetcher: FcmTokenFetcher
 ) : ViewModel() {
+
+    // True while DashboardScreen should launch the system POST_NOTIFICATIONS dialog. State rather
+    // than a one-shot event (see SessionManager's rationale), cleared by the screen the moment it
+    // launches the dialog so a recomposition/config change can't launch it twice.
+    private val _requestNotificationPermission = MutableStateFlow(false)
+    val requestNotificationPermission: StateFlow<Boolean> = _requestNotificationPermission.asStateFlow()
 
     // Internal source of truth — ALL loaded tabs, regardless of hidden status, exactly as the
     // pre-hidden-satellites design worked. Every existing load/poll/ticker method below reads and
@@ -90,6 +103,7 @@ class DashboardViewModel @Inject constructor(
                         ?: ""
                     _rawState.value = DashboardUiState.Content(tabs = tabs, selectedSatelliteId = selectedId)
                     if (selectedId.isNotEmpty()) startCountdownTicker(selectedId)
+                    maybeRequestNotificationPermission()
                 }
                 else -> _rawState.value = DashboardUiState.Error(errorMessageFor(satellitesResult))
             }
@@ -263,6 +277,32 @@ class DashboardViewModel @Inject constructor(
             }
         }
         _rawState.value = current.copy(tabs = updatedTabs)
+    }
+
+    // The one-time "hard ask" trigger point: the first successful Dashboard load (getSatellites()
+    // succeeded) on this install. The flag is persisted before anything else so the dialog is
+    // never re-triggered on a later app open, even if this process dies mid-dialog — from then on
+    // the Settings screen's permission card is the way back. If the permission is already granted
+    // (always true below API 33, or granted earlier from Settings), no dialog is needed and the
+    // FCM token is fetched straight away.
+    private suspend fun maybeRequestNotificationPermission() {
+        if (notificationPromptStore.hasRequestedNotificationPermission.first()) return
+        notificationPromptStore.markNotificationPermissionRequested()
+        if (notificationPermissionManager.isGranted()) {
+            fcmTokenFetcher.fetchToken()
+        } else {
+            _requestNotificationPermission.value = true
+        }
+    }
+
+    fun onNotificationPermissionRequestLaunched() {
+        _requestNotificationPermission.value = false
+    }
+
+    // On grant, proactively feed the token-sync flow rather than waiting for onNewToken, which
+    // won't fire for an already-stable token. On denial, nothing — no re-ask from Dashboard.
+    fun onNotificationPermissionResult(granted: Boolean) {
+        if (granted) fcmTokenFetcher.fetchToken()
     }
 
     private fun errorMessageFor(result: ApiResult<*>): String = when (result) {

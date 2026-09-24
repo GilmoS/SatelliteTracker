@@ -2,6 +2,9 @@ package com.sattrakk.app.ui.dashboard
 
 import com.sattrakk.app.MainDispatcherRule
 import com.sattrakk.app.data.local.HiddenSatellitesStore
+import com.sattrakk.app.data.local.NotificationPromptStore
+import com.sattrakk.app.data.permission.NotificationPermissionManager
+import com.sattrakk.app.data.push.FcmTokenFetcher
 import com.sattrakk.app.data.repository.PassRepository
 import com.sattrakk.app.data.repository.SatelliteRepository
 import com.sattrakk.app.domain.model.ApiResult
@@ -12,6 +15,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
@@ -52,6 +56,12 @@ class DashboardViewModelTest {
     private val satelliteRepository = mockk<SatelliteRepository>()
     private val passRepository = mockk<PassRepository>()
     private val hiddenSatellitesStore = mockk<HiddenSatellitesStore>()
+    private val notificationPermissionManager = mockk<NotificationPermissionManager>()
+    private val notificationPromptStore = mockk<NotificationPromptStore>()
+    private val fcmTokenFetcher = mockk<FcmTokenFetcher>(relaxed = true)
+    // Defaults to "already requested" so the permission trigger is inert for every test that
+    // isn't about it; the permission tests below reset it to false.
+    private lateinit var hasRequestedPermissionFlow: MutableStateFlow<Boolean>
     private lateinit var hiddenIdsFlow: MutableStateFlow<Set<String>>
     private lateinit var clock: Clock
     private lateinit var viewModel: DashboardViewModel
@@ -74,10 +84,24 @@ class DashboardViewModelTest {
         }
         hiddenIdsFlow = MutableStateFlow(emptySet())
         every { hiddenSatellitesStore.hiddenSatelliteIds } returns hiddenIdsFlow
+        hasRequestedPermissionFlow = MutableStateFlow(true)
+        every { notificationPromptStore.hasRequestedNotificationPermission } returns hasRequestedPermissionFlow
+        coEvery { notificationPromptStore.markNotificationPermissionRequested() } answers {
+            hasRequestedPermissionFlow.value = true
+        }
+        every { notificationPermissionManager.isGranted() } returns false
     }
 
     private fun createViewModel(): DashboardViewModel {
-        val vm = DashboardViewModel(satelliteRepository, passRepository, clock, hiddenSatellitesStore)
+        val vm = DashboardViewModel(
+            satelliteRepository,
+            passRepository,
+            clock,
+            hiddenSatellitesStore,
+            notificationPermissionManager,
+            notificationPromptStore,
+            fcmTokenFetcher
+        )
         runCurrent()
         return vm
     }
@@ -351,5 +375,81 @@ class DashboardViewModelTest {
         val state = viewModel.uiState.value as DashboardUiState.Content
         assertEquals("sat-2", state.selectedSatelliteId)
         assertEquals(listOf("sat-2"), state.tabs.map { it.satelliteId })
+    }
+
+    // --- One-time notification permission trigger (first successful load) ---
+
+    private fun stubSingleSatelliteLoad() {
+        coEvery { satelliteRepository.getSatellites() } returns ApiResult.Success(listOf(satellite(id = "sat-1")))
+        coEvery { passRepository.getPasses("sat-1", false) } returns ApiResult.Success(emptyList())
+    }
+
+    @Test
+    fun `first successful load requests notification permission when not granted`() {
+        hasRequestedPermissionFlow.value = false
+        stubSingleSatelliteLoad()
+
+        viewModel = createViewModel()
+
+        assertTrue(viewModel.requestNotificationPermission.value)
+        assertTrue(hasRequestedPermissionFlow.value)
+        verify(exactly = 0) { fcmTokenFetcher.fetchToken() }
+    }
+
+    @Test
+    fun `first successful load with permission already granted fetches the token without asking`() {
+        hasRequestedPermissionFlow.value = false
+        every { notificationPermissionManager.isGranted() } returns true
+        stubSingleSatelliteLoad()
+
+        viewModel = createViewModel()
+
+        assertFalse(viewModel.requestNotificationPermission.value)
+        assertTrue(hasRequestedPermissionFlow.value)
+        verify(exactly = 1) { fcmTokenFetcher.fetchToken() }
+    }
+
+    @Test
+    fun `permission already requested on an earlier launch is not requested again`() {
+        stubSingleSatelliteLoad()
+
+        viewModel = createViewModel()
+
+        assertFalse(viewModel.requestNotificationPermission.value)
+        coVerify(exactly = 0) { notificationPromptStore.markNotificationPermissionRequested() }
+    }
+
+    @Test
+    fun `failed satellites load does not request notification permission`() {
+        hasRequestedPermissionFlow.value = false
+        coEvery { satelliteRepository.getSatellites() } returns ApiResult.NetworkError
+
+        viewModel = createViewModel()
+
+        assertFalse(viewModel.requestNotificationPermission.value)
+        assertFalse(hasRequestedPermissionFlow.value)
+    }
+
+    @Test
+    fun `launching the dialog clears the request flag`() {
+        hasRequestedPermissionFlow.value = false
+        stubSingleSatelliteLoad()
+        viewModel = createViewModel()
+
+        viewModel.onNotificationPermissionRequestLaunched()
+
+        assertFalse(viewModel.requestNotificationPermission.value)
+    }
+
+    @Test
+    fun `granted result fetches the FCM token and denied result does not`() {
+        stubSingleSatelliteLoad()
+        viewModel = createViewModel()
+
+        viewModel.onNotificationPermissionResult(granted = false)
+        verify(exactly = 0) { fcmTokenFetcher.fetchToken() }
+
+        viewModel.onNotificationPermissionResult(granted = true)
+        verify(exactly = 1) { fcmTokenFetcher.fetchToken() }
     }
 }
