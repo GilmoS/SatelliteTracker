@@ -2282,7 +2282,9 @@ Both nav args are read from `SavedStateHandle` as **optional** (`passId`, `satel
 
 - **`passId` present → `MapUiState.StaticPassTrack`.** `PassTrackDto` carries only `passId` +
   points (no AOS/LOS/elevation), so the header's `Pass` comes from the existing Room-first
-  `PassRepository.getPassById`, fetched in parallel with `getPassTrack`. It is one-shot: **no
+  `PassRepository.getPassById`, fetched in parallel with `getPassTrack` (and, since the Map UI
+  follow-up, the satellite catalog for the drawer's names; its failure is tolerated, see the Map
+  UI section's Drawer part). It is one-shot: **no
   polling and no footprint** (confirmed decision). A failure in either call becomes `Error`.
 - **`passId` absent → `MapUiState.LiveTrack`.** It loads the satellite catalog (for the display
   name, the same lookup `PassDetailsViewModel` uses rather than N2YO's `satName`), position, live
@@ -2450,12 +2452,24 @@ Each row shows the satellite name, the AOS local date/time, and "Orbit N", using
 fields only. In Flow 2 the row for the pass on screen is highlighted. A tap closes the drawer and
 goes through `navigateToMap(passId = ...)`.
 
-**Flagged, not resolved (no ViewModel logic added):**
-- **Satellite name**: `Pass` has only `satelliteId`, and `MapUiState` knows only the on-screen
-  satellite's name (`LiveTrack.satelliteName`). Rows for that satellite show its real name; every
-  other row, and every row in Flow 2, falls back to "Satellite". Closing this needs a catalog
-  lookup in `MapViewModel` (the same `getSatellites()` match `PassDetailsViewModel` does), which
-  is a ViewModel change outside this task.
+**Satellite names — resolved by a `MapViewModel` catalog lookup (follow-up to the UI task):**
+`Pass` carries only `satelliteId`, and the drawer lists passes of *every* satellite. So both
+`MapUiState.LiveTrack` and `.StaticPassTrack` now carry `satelliteNames: Map<String, String>`
+(the whole catalog, id → name), built from `SatelliteRepository.getSatellites()` (24h TTL, Room-
+cached). This is the same "fetch the catalog, match by id" pattern `PassDetailsViewModel` uses,
+with no new repository method.
+- **Flow 1** reuses the catalog it already fetched for `satelliteName`, so there is still exactly
+  one `getSatellites()` call.
+- **Flow 2** adds `getSatellites()` to its existing parallel `async` batch. A failure there is
+  **tolerated**: `satelliteNames` is left empty and the pass track still renders, while pass and
+  track failures remain whole-screen `Error`s. Names are secondary content, the same asymmetry as
+  Pass Details' partial-content handling.
+- The drawer shows `satelliteNames[pass.satelliteId]`, falling back to "Unknown satellite" only
+  when that lookup failed or the id isn't in the catalog.
+- Covered by `MapViewModelTest`: names across satellites in both flows, a single catalog call in
+  Flow 1, and a Flow 2 catalog failure still yielding `StaticPassTrack`.
+
+**Flagged, not resolved:**
 - **Drawer contents**: still subject to the data layer's open item above. First-seen passes
   default to `notify = true` locally while the backend is opt-in, and the query has no time bound,
   so the drawer will list most cached passes, including past ones.
@@ -2466,9 +2480,10 @@ goes through `navigateToMap(passId = ...)`.
   none was invented here. Same flag as every prior UI task. The map rendering, the drawer, the
   label anchoring, and the nav guard (real `NavController` behavior) are therefore **not**
   automatically tested. `MapViewModel` itself was already covered by `MapViewModelTest`.
-- New: `MapGeometryTest` (10).
-- Verified in this environment: `:app:compileDebugKotlin`, `:app:testDebugUnitTest` (**225
-  green**: 215 before + 10), and `:app:assembleDebug`, all `BUILD SUCCESSFUL`.
+- New: `MapGeometryTest` (10), plus 2 `MapViewModelTest` cases for the satellite-name lookup
+  (12 → 14).
+- Verified in this environment: `:app:compileDebugKotlin`, `:app:testDebugUnitTest` (**227
+  green**: 215 before + 10 + 2), and `:app:assembleDebug`, all `BUILD SUCCESSFUL`.
 - **Not verified**: `:app:connectedDebugAndroidTest` and any on-device rendering (no `adb` or
   emulator available here). Tiles actually loading, the GL surface rendering inside Compose, and
   label placement need a device.
