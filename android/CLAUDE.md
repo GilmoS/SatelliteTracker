@@ -113,15 +113,18 @@ com.sattrakk.app/
 │   │   └── CachedNetworkFirst.kt   Shared TTL-gated caching decision tree (step 2.2)
 │   └── repository/                 SatelliteRepository, PassRepository (getPasses/getPassHistory/
 │                                    etc.), NotesRepository (step 2.2), AuthRepository,
-│                                    SettingsRepository (step 2.3)
+│                                    SettingsRepository (step 2.3), MapRepository (Map screen)
 ├── domain/
 │   ├── model/
 │   │   ├── ApiResult.kt            Uniform outcome type for every repository call
 │   │   ├── Satellite.kt, Pass.kt, Note.kt, PassTrack.kt, NotifyStatus.kt (step 2.2)
 │   │   ├── UserSettings.kt         (step 2.3)
-│   │   └── TimeWindow.kt, PassHistoryFilter.kt, PagedResult.kt (Full Pass List screen)
+│   │   ├── TimeWindow.kt, PassHistoryFilter.kt, PagedResult.kt (Full Pass List screen)
+│   │   └── SatellitePosition.kt    SatellitePosition, TrackPoint, LatLng (Map screen)
+│   ├── util/                       PassFilters.kt, GeoUtils.kt (Map footprint geometry)
 │   └── mapper/                     Dto <-> Entity <-> domain extension functions (step 2.2/2.3),
-│                                    PassHistoryFilterMappers.kt (Full Pass List screen)
+│                                    PassHistoryFilterMappers.kt (Full Pass List screen),
+│                                    RealTimeMappers.kt (Map screen)
 ├── di/
 │   ├── NetworkModule.kt            OkHttpClient, Json, Retrofit, SatTrakkApi
 │   ├── DatabaseModule.kt           Room AppDatabase + DAOs
@@ -156,7 +159,8 @@ com.sattrakk.app/
 │   │   ├── PassDetailsEvent.kt     One-shot NavigateToMap event (Pass Details Modal)
 │   │   ├── PassDetailsViewModel.kt Pass Details Modal logic
 │   │   └── PassDetailsScreen.kt    Placeholder only (registered as a dialog destination)
-│   ├── map/MapScreen.kt             Placeholder only (Milestone F)
+│   ├── map/                         MapUiState + MapViewModel (data/logic layer done);
+│   │                                MapScreen.kt still a placeholder (Milestone F)
 │   └── skyview/SkyViewScreen.kt     Placeholder only (Milestone F)
 ├── navigation/
 │   ├── SatTrakkApp.kt               App root: SatTrakkTheme + SessionManager switch (see below)
@@ -2224,3 +2228,103 @@ Suggested manual QA on a device: fresh install → register → accept the dialo
 it backgrounded, and with it killed, and tap each one to confirm Pass Details opens for the right
 pass. Also force `RequiresReauth` (deactivate the key), tap a reminder, re-register, and confirm
 the modal opens afterward.
+
+---
+
+## Map screen — data layer + ViewModel/UiState (Milestone F prep, no UI yet)
+
+`MapRepository`, `GeoUtils`, `MapViewModel`, and `MapUiState`. `MapScreen.kt` is still the
+placeholder; the Composable is a separate task built on top of this. Covered by
+`MapRepositoryTest` (5), `GeoUtilsTest` (6), and `MapViewModelTest` (12).
+
+### `MapRepository` — no Room caching, by design
+
+- `getPosition(satelliteId)` → `GET /api/satellites/{id}/position`, and `getLiveTrack(satelliteId)`
+  → `GET /api/satellites/{id}/track`. Both are straight `safeApiCall` passthroughs with **no Room
+  caching and no DAO writes**, for the same reason as `PassRepository.getPassTrack`: the backend
+  already caches them (30 s and 5 min — repo-root CLAUDE.md's caching table), and real-time
+  position data is never stored (repo-root "What NOT to do"). A client cache would add staleness,
+  not value. `MapRepositoryTest` asserts the DAO is never touched on these paths.
+- `getNotifyEnabledPasses()` → new `PassDao.getNotifyEnabled()` (`notify = 1`, every satellite,
+  `ORDER BY aosEpochMillis ASC`). This is a local-only read, since `notify` is client-cached state.
+  It backs the drawer in **both** flows.
+- The fixed per-pass track is **not** duplicated here. `MapViewModel` reuses the existing
+  `PassRepository.getPassTrack`.
+- Timestamps: `PositionDto`/`TrackPointDto`/`PassTrackPointDto` all carry Unix **seconds** from the
+  backend. `RealTimeMappers.kt` converts them to the domain's `timestampEpochMillis`. This task
+  also fixed `PassTrackMappers`, which had been storing seconds in that millis field; it had no
+  consumer before the Map screen.
+
+### `GeoUtils` — footprint polygon (`domain/util/GeoUtils.kt`)
+
+Pure spherical geometry, with no I/O and no Android dependency. The Earth is modelled as a sphere
+of mean radius 6371 km. `footprintPolygon(center, radiusKm = 2000, points = 72)` returns an open
+polygon (the first point is not repeated) of evenly spaced bearings θ. It uses the standard
+great-circle destination-point formula (Ed Williams' Aviation Formulary / Movable Type), with
+angular distance δ = r / R:
+
+    φ2 = asin(sin φ1 · cos δ + cos φ1 · sin δ · cos θ)
+    λ2 = λ1 + atan2(sin θ · sin δ · cos φ1, cos δ − sin φ1 · sin φ2)
+
+Longitudes are normalized to [-180, 180). `distanceKm` (haversine) is the inverse check used by
+`GeoUtilsTest`: every output point lies within 0.01 km of the requested radius, including near a
+pole and across the antimeridian. Splitting a polygon that crosses the antimeridian for rendering
+is left to the Map UI; this layer only produces correct coordinates.
+
+### `MapViewModel` — two flows, chosen once from nav args
+
+Both nav args are read from `SavedStateHandle` as **optional** (`passId`, `satelliteId`;
+`MapViewModel.PASS_ID_ARG` / `SATELLITE_ID_ARG`):
+
+- **`passId` present → `MapUiState.StaticPassTrack`.** `PassTrackDto` carries only `passId` +
+  points (no AOS/LOS/elevation), so the header's `Pass` comes from the existing Room-first
+  `PassRepository.getPassById`, fetched in parallel with `getPassTrack`. It is one-shot: **no
+  polling and no footprint** (confirmed decision). A failure in either call becomes `Error`.
+- **`passId` absent → `MapUiState.LiveTrack`.** It loads the satellite catalog (for the display
+  name, the same lookup `PassDetailsViewModel` uses rather than N2YO's `satName`), position, live
+  track, and drawer in parallel, and computes the footprint from the position. Any failure in
+  this initial load, or a `satelliteId` that isn't in the catalog, becomes `Error`.
+- **Polling (live flow only)** runs as two independent `viewModelScope` loops, so both are
+  cancelled when the ViewModel is cleared:
+  - **Position every 15 s**, recomputing the footprint each time.
+  - **Live track every 5 min**, not every 15 s. That matches its server-side cache TTL: polling
+    faster only re-reads the backend's cached copy. The track covers about 5 minutes of flight
+    (`RealTimeController`'s `seconds: 300`), so fetching it only once per visit would leave it
+    visibly behind the moving marker during a long viewing session.
+- **Poll failures keep the last good `LiveTrack`** and retry on the next tick. Only the *initial*
+  load's failure becomes `Error`. This deliberately narrows the spec's "any failure → Error" so a
+  transient blip doesn't blank a map the user is watching. An auth failure still flips
+  `SessionManager` via `SafeApiCaller`, which replaces the whole app with Tester Entry.
+- **The drawer (`notifyEnabledPasses`) loads in both flows.** It is read once at load time and
+  not refreshed by polling.
+
+### Open items, flagged rather than decided
+
+- **Map's route has no `satelliteId` yet.** The `map` destination currently takes no args at any
+  entry point: the Dashboard FAB, the bottom nav bar, and Pass Details' "Show on map" (which
+  doesn't pass its `passId` either). Until the nav graph passes `satelliteId` (and `passId` for
+  "Show on map"), the live flow shows `MapUiState.Error("No satellite selected for the map.")`.
+  No default satellite is guessed. The nav task needs to decide what the bottom-nav entry passes;
+  one option is the Dashboard's `selectedSatellite`, which the Passes nav item already uses.
+- **The drawer query is only as good as the local `notify` value.** `PassRepository` still
+  defaults a first-seen pass to `notify = true` (in `getPasses`, `getPassById` and
+  `getPassHistory`) from the old opt-out era, while the backend is now opt-in. So
+  `getNotifyEnabled()` will return nearly every cached pass, not just the ones the tester turned
+  on. The query also has no time bound, so past passes are included. Both need a decision before
+  the drawer UI ships. Not changed here, because it alters existing repository behavior outside
+  this task's scope.
+
+### Testing
+
+`MapViewModelTest` follows `DashboardViewModelTest`'s pattern: no `runTest`, and the Main
+`TestDispatcher`'s scheduler is driven directly. Unlike that test, it **does** cover cancellation.
+The ViewModel is created through a real `ViewModelStore` + `ViewModelProvider`, and the public
+`ViewModelStore.clear()` runs `onCleared()` and cancels `viewModelScope`. It asserts no further
+position or track calls after clearing. Also covered:
+- the exact 15 s / 5 min poll boundaries;
+- zero live-endpoint calls in the static flow over simulated time;
+- keep-last-good on a failed poll;
+- initial-failure and missing-arg `Error`s.
+
+Verified in this environment: `:app:testDebugUnitTest` (**215 green**: 192 before + 23 new) and
+`:app:assembleDebug`. Not verified: `:app:connectedDebugAndroidTest` (no device or emulator).
