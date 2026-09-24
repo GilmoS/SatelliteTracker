@@ -42,6 +42,11 @@ openapiGenerator = "7.11.0"
 # line (not 4.5.0) to match the AGP 8.x pin above.
 firebaseBom = "34.19.0"
 googleServices = "4.4.4"
+# MapLibre Compose: pinned to 0.12.1, NOT the newest (0.17.0). 0.13.0+ are built against
+# kotlin-stdlib 2.3.x/2.4.x and Compose 1.10+/1.12, which the Kotlin 2.1.20 compiler pin above
+# can't read (same failure mode as the kotlinxSerializationJson pin). 0.12.1 is the newest release
+# on kotlin-stdlib 2.2.x (readable one version ahead) and Compose 1.9.x. Bump with `kotlin`.
+maplibreCompose = "0.12.1"
 junit = "4.13.2"
 mockk = "1.13.13"
 androidxTestExtJunit = "1.2.1"
@@ -85,6 +90,7 @@ androidx-room-compiler = { group = "androidx.room", name = "room-compiler", vers
 androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
+maplibre-compose = { group = "org.maplibre.compose", name = "maplibre-compose", version.ref = "maplibreCompose" }
 
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastorePreferences" }
 
