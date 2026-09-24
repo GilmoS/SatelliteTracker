@@ -75,10 +75,21 @@ class MapViewModelTest {
 
     private val drawer = listOf(pass("drawer-1"), pass("drawer-2"))
 
+    private val otherSatelliteId = "sat-2"
+    private val catalog = listOf(
+        Satellite(satelliteId, "EROS C3", 1, null, true, true, epoch),
+        Satellite(otherSatelliteId, "RUNNER 1", 2, null, true, false, epoch),
+    )
+    private val catalogNames = mapOf(satelliteId to "EROS C3", otherSatelliteId to "RUNNER 1")
+
+    init {
+        // Both flows look up the catalog (Flow 2 only for the drawer's names); individual tests
+        // override this where they need a failure or an empty catalog.
+        coEvery { satelliteRepository.getSatellites() } returns ApiResult.Success(catalog)
+    }
+
     private fun stubLiveSuccess() {
-        coEvery { satelliteRepository.getSatellites() } returns ApiResult.Success(
-            listOf(Satellite(satelliteId, "EROS C3", 1, null, true, true, epoch))
-        )
+        coEvery { satelliteRepository.getSatellites() } returns ApiResult.Success(catalog)
         coEvery { mapRepository.getPosition(satelliteId) } returns ApiResult.Success(position(31.5))
         coEvery { mapRepository.getLiveTrack(satelliteId) } returns
             ApiResult.Success(listOf(TrackPoint(31.5, 34.8, 500.0, 0L)))
@@ -100,6 +111,37 @@ class MapViewModelTest {
         assertEquals(passId, state.pass.id)
         assertEquals(points, state.trackPoints)
         assertEquals(drawer, state.notifyEnabledPasses)
+        assertEquals(catalogNames, state.satelliteNames)
+    }
+
+    @Test
+    fun `passId present resolves drawer names for every satellite, not just the pass's own`() {
+        val otherPass = pass("drawer-other").copy(satelliteId = otherSatelliteId)
+        coEvery { passRepository.getPassTrack(passId) } returns ApiResult.Success(PassTrack(passId, emptyList()))
+        coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(pass(passId))
+        coEvery { mapRepository.getNotifyEnabledPasses() } returns drawer + otherPass
+
+        val vm = createViewModel(mapOf("passId" to passId))
+
+        val state = vm.uiState.value as MapUiState.StaticPassTrack
+        assertEquals("RUNNER 1", state.satelliteNames[otherPass.satelliteId])
+        assertEquals("EROS C3", state.satelliteNames[state.pass.satelliteId])
+    }
+
+    @Test
+    fun `passId present with a failed catalog lookup still shows the track, with no names`() {
+        val points = listOf(PassTrackPoint(1.0, 2.0, 500.0, 0L))
+        coEvery { passRepository.getPassTrack(passId) } returns ApiResult.Success(PassTrack(passId, points))
+        coEvery { passRepository.getPassById(passId) } returns ApiResult.Success(pass(passId))
+        coEvery { mapRepository.getNotifyEnabledPasses() } returns drawer
+        coEvery { satelliteRepository.getSatellites() } returns ApiResult.NetworkError
+
+        val vm = createViewModel(mapOf("passId" to passId))
+
+        val state = vm.uiState.value as MapUiState.StaticPassTrack
+        assertEquals(points, state.trackPoints)
+        assertEquals(drawer, state.notifyEnabledPasses)
+        assertTrue(state.satelliteNames.isEmpty())
     }
 
     @Test
@@ -152,6 +194,9 @@ class MapViewModelTest {
         assertEquals(1, state.trackPoints.size)
         assertEquals(drawer, state.notifyEnabledPasses)
         assertEquals(GeoUtils.footprintPolygon(LatLng(31.5, 34.8)), state.footprintPolygon)
+        // Whole catalog, from the same single getSatellites() call used for satelliteName.
+        assertEquals(catalogNames, state.satelliteNames)
+        coVerify(exactly = 1) { satelliteRepository.getSatellites() }
     }
 
     @Test
