@@ -343,17 +343,12 @@ private fun StaticPassTrackMap(state: MapUiState.StaticPassTrack) {
 
 @Composable
 private fun NotifyPassesDrawer(state: MapUiState, onPassClick: (String) -> Unit) {
-    val passes = when (state) {
-        is MapUiState.LiveTrack -> state.notifyEnabledPasses
-        is MapUiState.StaticPassTrack -> state.notifyEnabledPasses
-        MapUiState.Loading, is MapUiState.Error -> emptyList()
+    val (passes, satelliteNames) = when (state) {
+        is MapUiState.LiveTrack -> state.notifyEnabledPasses to state.satelliteNames
+        is MapUiState.StaticPassTrack -> state.notifyEnabledPasses to state.satelliteNames
+        MapUiState.Loading, is MapUiState.Error -> emptyList<Pass>() to emptyMap()
     }
     val currentPassId = (state as? MapUiState.StaticPassTrack)?.pass?.id
-    // Pass carries only satelliteId, and MapUiState only knows the name of the satellite on screen
-    // (LiveTrack.satelliteName). Passes of any other satellite fall back to a generic label —
-    // resolving every name would need a catalog lookup MapViewModel doesn't do (flagged in
-    // android/CLAUDE.md rather than adding ViewModel logic here).
-    val knownNames = (state as? MapUiState.LiveTrack)?.let { mapOf(it.satelliteId to it.satelliteName) }.orEmpty()
 
     ModalDrawerSheet {
         Text(
@@ -375,7 +370,9 @@ private fun NotifyPassesDrawer(state: MapUiState, onPassClick: (String) -> Unit)
                 items(passes, key = { it.id }) { pass ->
                     DrawerPassRow(
                         pass = pass,
-                        satelliteName = knownNames[pass.satelliteId] ?: "Satellite",
+                        // Resolved by MapViewModel's catalog lookup. The fallback only shows if that
+                        // lookup failed (Flow 2 tolerates it) or the id isn't in the catalog.
+                        satelliteName = satelliteNames[pass.satelliteId] ?: "Unknown satellite",
                         isCurrent = pass.id == currentPassId,
                         onClick = { onPassClick(pass.id) },
                     )
