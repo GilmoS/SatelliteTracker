@@ -14,5 +14,6 @@ fun PassTrackPointDto.toDomain(): PassTrackPoint = PassTrackPoint(
     latitude = requireNotNull(latitude) { "PassTrackPointDto.latitude" },
     longitude = requireNotNull(longitude) { "PassTrackPointDto.longitude" },
     altitude = requireNotNull(altitude) { "PassTrackPointDto.altitude" },
-    timestampEpochMillis = requireNotNull(timestamp) { "PassTrackPointDto.timestamp" }
+    // The backend sends Unix *seconds* (PassTrackDto.cs: ToUnixTimeSeconds()), not millis.
+    timestampEpochMillis = requireNotNull(timestamp) { "PassTrackPointDto.timestamp" } * 1000
 )
