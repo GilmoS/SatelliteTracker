@@ -30,15 +30,35 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.SatTrakk">
 
+        <!-- singleTop: a pass-reminder tap while the app is already running is delivered to the
+             existing instance via onNewIntent (see MainActivity) instead of stacking a second one. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.SatTrakk">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".data.push.SatTrakkMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Used by FCM itself for notifications it displays while the app is backgrounded, so they
+             match the ones SatTrakkMessagingService builds in the foreground. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="pass_reminders" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_pass_reminder" />
     </application>
 
 </manifest>

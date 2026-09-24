@@ -9,6 +9,10 @@ plugins {
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
     alias(libs.plugins.openapi.generator)
+    // Reads app/google-services.json (gitignored, never committed) into the generated resources
+    // FirebaseApp auto-initializes from. A checkout without that file fails the build at
+    // process*GoogleServices, by design: FCM cannot work without it.
+    alias(libs.plugins.google.services)
 }
 
 android {
@@ -138,6 +142,11 @@ dependencies {
     implementation(libs.androidx.security.crypto)
 
     implementation(libs.androidx.datastore.preferences)
+
+    // firebase-messaging, not firebase-messaging-ktx: the -ktx modules were folded into the main
+    // artifacts and removed from the BoM as of BoM 34.0.0.
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

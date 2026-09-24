@@ -38,6 +38,10 @@ room = "2.8.1"
 securityCrypto = "1.1.0"
 datastorePreferences = "1.1.1"
 openapiGenerator = "7.11.0"
+# Firebase: the BoM aligns every firebase-* artifact version. google-services stays on the 4.4.x
+# line (not 4.5.0) to match the AGP 8.x pin above.
+firebaseBom = "34.19.0"
+googleServices = "4.4.4"
 junit = "4.13.2"
 mockk = "1.13.13"
 androidxTestExtJunit = "1.2.1"
@@ -79,6 +83,9 @@ androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = 
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 
 androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
+firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
+firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
+
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastorePreferences" }
 
 junit = { group = "junit", name = "junit", version.ref = "junit" }
@@ -93,4 +100,5 @@ kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "ko
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
+google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
 openapi-generator = { id = "org.openapi.generator", version.ref = "openapiGenerator" }

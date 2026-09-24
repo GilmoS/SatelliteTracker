@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SatTrakk</string>
+    <string name="pass_reminder_channel_name">Pass reminders</string>
+    <string name="pass_reminder_fallback_title">Upcoming satellite pass</string>
 </resources>

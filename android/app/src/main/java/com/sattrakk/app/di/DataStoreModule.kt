@@ -4,8 +4,12 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
+import com.sattrakk.app.data.local.DataStoreFcmTokenStore
 import com.sattrakk.app.data.local.DataStoreHiddenSatellitesStore
+import com.sattrakk.app.data.local.DataStoreNotificationPromptStore
+import com.sattrakk.app.data.local.FcmTokenStore
 import com.sattrakk.app.data.local.HiddenSatellitesStore
+import com.sattrakk.app.data.local.NotificationPromptStore
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -15,8 +19,8 @@ import javax.inject.Singleton
 
 // Standard `by preferencesDataStore(name = ...)` Context extension — ties one DataStore<Preferences>
 // instance to the Application Context, matching the singleton lifetime DatabaseModule gives
-// AppDatabase. A single file backs every local preference key (currently just hidden satellite
-// ids); a second key added later reuses this same instance rather than a second DataStore file.
+// AppDatabase. A single file backs every local preference key (hidden satellite ids, the pending
+// FCM token, the notification-prompt flag); new keys reuse this instance, not a second file.
 private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "sattrakk_settings")
 
 @Module
@@ -36,4 +40,12 @@ object DataStoreModule {
     @Provides
     @Singleton
     fun provideHiddenSatellitesStore(impl: DataStoreHiddenSatellitesStore): HiddenSatellitesStore = impl
+
+    @Provides
+    @Singleton
+    fun provideFcmTokenStore(impl: DataStoreFcmTokenStore): FcmTokenStore = impl
+
+    @Provides
+    @Singleton
+    fun provideNotificationPromptStore(impl: DataStoreNotificationPromptStore): NotificationPromptStore = impl
 }

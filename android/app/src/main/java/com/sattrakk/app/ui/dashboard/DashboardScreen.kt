@@ -1,5 +1,8 @@
 package com.sattrakk.app.ui.dashboard
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -87,6 +90,21 @@ fun DashboardScreen(
     onOpenMap: () -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+
+    // The one-time POST_NOTIFICATIONS request after the first successful load — same
+    // RequestPermission launcher mechanism SettingsScreen's permission card uses. The ViewModel
+    // decides *whether* to ask (and only sets this on API 33+ with the permission not yet granted);
+    // this only launches the dialog and reports the result back.
+    val requestNotificationPermission by viewModel.requestNotificationPermission.collectAsStateWithLifecycle()
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted -> viewModel.onNotificationPermissionResult(granted) }
+    LaunchedEffect(requestNotificationPermission) {
+        if (requestNotificationPermission) {
+            viewModel.onNotificationPermissionRequestLaunched()
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 
     // Reports the Dashboard's current selection up to the nav-bar level (see MainNavHost) so the
     // bottom nav's "Passes" item knows which satellite to open. Keyed on selectedSatelliteId
