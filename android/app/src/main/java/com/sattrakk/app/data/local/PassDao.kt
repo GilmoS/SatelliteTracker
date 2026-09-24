@@ -72,6 +72,12 @@ interface PassDao {
         offset: Int
     ): List<PassEntity>
 
+    // Map screen's pass drawer (MapRepository.getNotifyEnabledPasses): every cached pass the tester
+    // has notify on for, across all satellites. Deliberately no time bound — see android/CLAUDE.md's
+    // Map section for the open question about past passes and the notify default.
+    @Query("SELECT * FROM passes WHERE notify = 1 ORDER BY aosEpochMillis ASC")
+    suspend fun getNotifyEnabled(): List<PassEntity>
+
     // Used by PassRepository.setNotify to reflect a tester's own toggle immediately, without
     // waiting for the next TTL-driven refresh. A no-op if the pass isn't currently cached.
     @Query("UPDATE passes SET notify = :notify WHERE id = :id")
