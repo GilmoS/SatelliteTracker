@@ -2,7 +2,6 @@ package com.sattrakk.app.data.local
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import java.io.File
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
@@ -12,8 +11,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
-// Backed by a temp-file DataStore instance — the standard androidx.datastore JVM testing approach
-// (PreferenceDataStoreFactory.create() needs only a produceFile lambda, no Android Context) —
+// Backed by a temp-file DataStore instance (see testPreferencesDataStore) — the standard JVM approach
+// for androidx.datastore (needs only a file path, no Android Context) —
 // rather than an instrumented test. Unlike ApiKeyStore's EncryptedSharedPreferences (which needs
 // the real Android Keystore), Preferences DataStore has no Android-framework dependency forcing
 // this onto a device/emulator.
@@ -25,8 +24,8 @@ class HiddenSatellitesStoreTest {
 
     @Before
     fun setUp() {
-        tempFile = File.createTempFile("hidden_satellites_test", ".preferences_pb")
-        dataStore = PreferenceDataStoreFactory.create(produceFile = { tempFile })
+        tempFile = newTempPreferencesFile("hidden_satellites_test")
+        dataStore = testPreferencesDataStore(tempFile)
         store = DataStoreHiddenSatellitesStore(dataStore)
     }
 
