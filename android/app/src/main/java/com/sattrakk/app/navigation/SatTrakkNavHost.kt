@@ -9,6 +9,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -58,8 +59,17 @@ sealed class SatTrakkDestination(val route: String) {
 // App-root Scaffold: owns the bottom navigation bar (shared chrome across all 5 top-level
 // destinations) and the NavHost. Individual screens own their own top app bar/FAB, if any — see
 // DashboardScreen.
+//
+// pendingPassDetailsId: a pass-reminder notification tap waiting to open Pass Details (see
+// AppViewModel). Consumed once this NavHost exists — which, since SatTrakkApp only composes
+// MainNavHost under SessionState.Valid, is also what defers a link that arrived during
+// RequiresReauth until the tester has re-registered.
 @Composable
-fun MainNavHost(navController: NavHostController = rememberNavController()) {
+fun MainNavHost(
+    navController: NavHostController = rememberNavController(),
+    pendingPassDetailsId: String? = null,
+    onPendingPassDetailsConsumed: () -> Unit = {},
+) {
     // The satellite the Dashboard is currently showing, reported up via DashboardScreen's
     // onSelectedSatelliteChanged callback. Used by the bottom nav bar's "Passes" item, which needs
     // a satelliteId/satelliteName to navigate to (Full Pass List is scoped to one satellite — see
@@ -139,6 +149,15 @@ fun MainNavHost(navController: NavHostController = rememberNavController()) {
                 )
             }
         }
+
+        // After NavHost in composition order, so its graph is already set when this runs. Goes
+        // through navigateDebounced (launchSingleTop) like the row taps: tapping a reminder for the
+        // pass whose modal is already on top updates it in place rather than stacking a copy.
+        LaunchedEffect(pendingPassDetailsId) {
+            val passId = pendingPassDetailsId ?: return@LaunchedEffect
+            navController.navigateDebounced(SatTrakkDestination.PassDetails.buildRoute(passId))
+            onPendingPassDetailsConsumed()
+        }
     }
 }
 
@@ -210,10 +229,9 @@ private fun SatTrakkBottomNavBar(navController: NavHostController, selectedSatel
 // synchronously inside navigate() itself (NavControllerImpl.launchSingleTopInternal) -- if
 // PassDetails is already the current top entry, the existing entry's args are updated in place
 // instead of a new one being pushed, regardless of any animation/lifecycle timing. This works
-// identically for dialog and composable destinations. Used by every row-tap-to-PassDetails call
-// site (Dashboard and Full Pass List are the only two in the codebase -- grep-verified against
-// SatTrakkDestination.PassDetails.buildRoute call sites, see android/CLAUDE.md) rather than
-// duplicating the option at each one.
+// identically for dialog and composable destinations. Used by every navigation to PassDetails
+// (Dashboard's and Full Pass List's row taps, plus the notification-tap deep link in MainNavHost)
+// rather than duplicating the option at each one.
 private fun NavHostController.navigateDebounced(route: String) {
     navigate(route) { launchSingleTop = true }
 }
