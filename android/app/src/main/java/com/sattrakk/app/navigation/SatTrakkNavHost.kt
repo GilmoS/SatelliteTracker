@@ -28,18 +28,36 @@ import androidx.compose.ui.window.DialogProperties
 import com.sattrakk.app.ui.dashboard.DashboardScreen
 import com.sattrakk.app.ui.fullpasslist.FullPassListScreen
 import com.sattrakk.app.ui.map.MapScreen
+import com.sattrakk.app.ui.map.MapViewModel
 import com.sattrakk.app.ui.passdetails.PassDetailsScreen
 import com.sattrakk.app.ui.settings.SettingsScreen
 import com.sattrakk.app.ui.skyview.SkyViewScreen
 
-// The 6 routes. FullPassList/PassDetails carry nav args (both required, per
+// The 6 routes. FullPassList/PassDetails carry required nav args (per
 // FullPassListViewModel/PassDetailsViewModel's SavedStateHandle reads — see android/CLAUDE.md);
-// the other four take none. PassDetails is registered as a dialog destination, not composable —
+// Map carries two optional ones (see Map below); the other three take none. PassDetails is registered as a dialog destination, not composable —
 // it must render as a modal overlay on top of whatever's behind it, not replace the full screen
 // (see android/CLAUDE.md's Pass Details Modal section).
 sealed class SatTrakkDestination(val route: String) {
     data object Dashboard : SatTrakkDestination("dashboard")
-    data object Map : SatTrakkDestination("map")
+    // Both args optional (query params, nullable), read by MapViewModel via SavedStateHandle:
+    //  - passId present      -> Flow 2, that pass's fixed ground track ("Show on map", drawer taps);
+    //  - passId absent       -> Flow 1, the live track of satelliteId (Dashboard FAB, bottom nav).
+    // satelliteId isn't in the task's original "map?passId={passId}" sketch, but MapViewModel's
+    // live flow needs it (with none it shows "No satellite selected") — so it rides along the same
+    // way, rather than MapViewModel guessing a default satellite.
+    data object Map : SatTrakkDestination(
+        "map?${MapViewModel.PASS_ID_ARG}={${MapViewModel.PASS_ID_ARG}}" +
+            "&${MapViewModel.SATELLITE_ID_ARG}={${MapViewModel.SATELLITE_ID_ARG}}"
+    ) {
+        fun buildRoute(passId: String? = null, satelliteId: String? = null): String {
+            val params = listOfNotNull(
+                passId?.let { "${MapViewModel.PASS_ID_ARG}=${Uri.encode(it)}" },
+                satelliteId?.let { "${MapViewModel.SATELLITE_ID_ARG}=${Uri.encode(it)}" },
+            )
+            return if (params.isEmpty()) "map" else "map?" + params.joinToString("&")
+        }
+    }
     data object SkyView : SatTrakkDestination("sky_view")
     data object Settings : SatTrakkDestination("settings")
 
@@ -104,10 +122,37 @@ fun MainNavHost(
                     onPassClick = { passId ->
                         navController.navigateDebounced(SatTrakkDestination.PassDetails.buildRoute(passId))
                     },
-                    onOpenMap = { navController.navigate(SatTrakkDestination.Map.route) },
+                    // Flow 1: no passId, the live track of whichever satellite the Dashboard is
+                    // showing. The FAB is only reachable once Dashboard has loaded, so
+                    // selectedSatellite is set by then; if not, MapViewModel's own "No satellite
+                    // selected" Error covers it rather than a guessed default.
+                    onOpenMap = { navController.navigateToMap(satelliteId = selectedSatellite?.first) },
                 )
             }
-            composable(SatTrakkDestination.Map.route) { MapScreen() }
+            composable(
+                route = SatTrakkDestination.Map.route,
+                arguments = listOf(
+                    navArgument(MapViewModel.PASS_ID_ARG) {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    },
+                    navArgument(MapViewModel.SATELLITE_ID_ARG) {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    },
+                ),
+            ) {
+                // MapViewModel reads both args from this entry's SavedStateHandle via
+                // hiltViewModel(), same pattern as FullPassListScreen/PassDetailsScreen.
+                MapScreen(
+                    onBackClick = { navController.popBackStack() },
+                    // Drawer tap: switch to Flow 2 for the tapped pass, replacing this Map entry
+                    // rather than stacking another one on top of it (see navigateToMap).
+                    onPassSelected = { passId -> navController.navigateToMap(passId = passId) },
+                )
+            }
             composable(SatTrakkDestination.SkyView.route) { SkyViewScreen() }
             composable(SatTrakkDestination.Settings.route) { SettingsScreen() }
             composable(
@@ -139,12 +184,10 @@ fun MainNavHost(
                 // same pattern as FullPassListScreen above.
                 PassDetailsScreen(
                     onBackClick = { navController.popBackStack() },
-                    // "Show on map" dismisses this modal and navigates to the Map placeholder
-                    // (step 6) -- the passId itself has no consumer there yet, matching
-                    // PassDetailsEvent.NavigateToMap's own doc comment (expected, not a gap).
-                    onNavigateToMap = {
+                    // "Show on map" dismisses this modal and opens Map in Flow 2 for this pass.
+                    onNavigateToMap = { passId ->
                         navController.popBackStack()
-                        navController.navigate(SatTrakkDestination.Map.route)
+                        navController.navigateToMap(passId = passId)
                     },
                 )
             }
@@ -184,9 +227,21 @@ private fun SatTrakkBottomNavBar(navController: NavHostController, selectedSatel
             icon = { PassesIcon(if (currentRoute == SatTrakkDestination.FullPassList.route) onSurface else onSurfaceVariant) },
             label = { Text("Passes") },
         )
+        // Always Flow 1 (no passId): the live track of the Dashboard's selected satellite. Disabled
+        // until one is known, same fallback as the Passes item above. restoreState = false: a
+        // previously-visited Map entry (possibly a Flow 2 pass track) is never brought back — the
+        // bottom-nav Map is always "live, now."
         NavigationBarItem(
             selected = currentRoute == SatTrakkDestination.Map.route,
-            onClick = { navController.navigateToTopLevel(SatTrakkDestination.Map.route) },
+            enabled = selectedSatellite != null,
+            onClick = {
+                val (satelliteId, _) = selectedSatellite ?: return@NavigationBarItem
+                if (navController.isShowingMap(passId = null, satelliteId = satelliteId)) return@NavigationBarItem
+                navController.navigateToTopLevel(
+                    SatTrakkDestination.Map.buildRoute(satelliteId = satelliteId),
+                    restoreState = false,
+                )
+            },
             icon = { MapIcon(if (currentRoute == SatTrakkDestination.Map.route) onSurface else onSurfaceVariant) },
             label = { Text("Map") },
         )
@@ -238,10 +293,49 @@ private fun NavHostController.navigateDebounced(route: String) {
 
 // Standard single-top bottom-nav pattern: avoid piling up backstack copies of the same
 // destination, and restore each tab's own scroll/state when switching back to it.
-private fun NavHostController.navigateToTopLevel(route: String) {
+//
+// Exception — never save a Map entry's state when leaving it: saveState keeps a popped entry's
+// ViewModelStore alive for a later restore, and MapViewModel's live-flow polling (position every
+// 15 s, track every 5 min) runs on viewModelScope, which is only cancelled when that store is
+// cleared. Saving it would keep polling the backend in the background after the user left the Map.
+// Map is always re-entered fresh anyway (live data, and restoreState = false on its own nav item).
+private fun NavHostController.navigateToTopLevel(route: String, restoreState: Boolean = true) {
+    val leavingMap = currentDestination?.route == SatTrakkDestination.Map.route
     navigate(route) {
-        popUpTo(graph.findStartDestination().id) { saveState = true }
+        popUpTo(graph.findStartDestination().id) { saveState = !leavingMap }
         launchSingleTop = true
-        restoreState = true
+        this.restoreState = restoreState
     }
+}
+
+// Every non-bottom-nav navigation to Map (Dashboard FAB, Pass Details' "Show on map", the Map
+// drawer) goes through here.
+//
+// popUpTo(Map) { inclusive = true }: at most one Map entry ever exists in the back stack. Any
+// existing one is popped before the new one is pushed, so drawer-tapping through several passes
+// never accumulates Map entries, and back always leaves the Map in one step. NavController applies
+// popUpTo BEFORE its single-top check (NavControllerImpl.navigate, navigation-runtime 2.9.7) — so
+// this also guarantees a fresh entry (and a fresh MapViewModel reading the new args) rather than
+// launchSingleTop reusing the current Map entry, whose ViewModel reads its args only once in init
+// and would silently keep showing the old pass.
+//
+// launchSingleTop = true is kept for parity with navigateDebounced, but on its own it can't dedupe
+// here (the pop above always removes the Map entry it would compare against). The rapid-tap guard
+// is therefore isShowingMap: the same synchronous "is the target already the current top entry?"
+// comparison launchSingleTop makes, but including args — a second tap on the same drawer entry, or
+// a repeat FAB tap, is dropped instead of tearing down and recreating the screen it's already on.
+private fun NavHostController.navigateToMap(passId: String? = null, satelliteId: String? = null) {
+    if (isShowingMap(passId, satelliteId)) return
+    navigate(SatTrakkDestination.Map.buildRoute(passId = passId, satelliteId = satelliteId)) {
+        popUpTo(SatTrakkDestination.Map.route) { inclusive = true }
+        launchSingleTop = true
+    }
+}
+
+private fun NavHostController.isShowingMap(passId: String?, satelliteId: String?): Boolean {
+    val entry = currentBackStackEntry ?: return false
+    if (entry.destination.route != SatTrakkDestination.Map.route) return false
+    val args = entry.arguments
+    return args?.getString(MapViewModel.PASS_ID_ARG) == passId &&
+        args?.getString(MapViewModel.SATELLITE_ID_ARG) == satelliteId
 }
