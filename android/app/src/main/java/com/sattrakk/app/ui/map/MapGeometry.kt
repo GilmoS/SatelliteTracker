@@ -120,18 +120,22 @@ internal object MapGeometry {
     }
 
     /**
-     * Splits a chronological [track] at [timestampEpochMillis] into the part already flown and the
-     * part ahead. Both halves are joined at [joint] (the marker's actual position), so the two
-     * lines meet exactly at the dot rather than at the nearest 30 s track sample. Points at exactly
-     * the timestamp count as flown.
+     * Splits a chronological [track] at [timestampEpochMillis] into a short tail already flown and
+     * the part ahead. The tail keeps only points from the last [pastTailMillis] before the
+     * timestamp: the track includes a full orbit flown, but drawing all of it made a third line
+     * across the band near the marker, since each orbit covers about 390° of longitude. Both halves
+     * are joined at [joint] (the marker's actual position), so the two lines meet exactly at the dot
+     * rather than at the nearest 30 s track sample. Points at exactly the timestamp count as flown.
      */
     fun splitAtTime(
         track: List<TrackPoint>,
         timestampEpochMillis: Long,
         joint: LatLng,
+        pastTailMillis: Long,
     ): Pair<List<LatLng>, List<LatLng>> {
         val (flown, ahead) = track.partition { it.timestampEpochMillis <= timestampEpochMillis }
-        val past = flown.map { LatLng(it.latitude, it.longitude) } + joint
+        val tailStart = timestampEpochMillis - pastTailMillis
+        val past = flown.filter { it.timestampEpochMillis >= tailStart }.map { LatLng(it.latitude, it.longitude) } + joint
         val future = listOf(joint) + ahead.map { LatLng(it.latitude, it.longitude) }
         return past to future
     }

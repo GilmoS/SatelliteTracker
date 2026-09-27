@@ -2468,20 +2468,27 @@ latest TLE; see the repo-root CLAUDE.md, "Full-orbit ground track").
   same `List<TrackPoint>` as before, so `MapUiState.LiveTrack.trackPoints` and the 5-minute poll in
   `MapViewModel` are unchanged. A refresh every 5 min keeps a full orbit ahead of the marker.
 - **Rendering.** `MapGeometry.splitAtTime` splits the track at the position's timestamp, with both
-  halves joined at the marker itself. The orbit already flown is drawn as a thin, dimmed solid line
-  (`orbit-past`), and the orbit ahead as the dashed accent line (`orbit-future`). Antimeridian
-  splitting is the existing `splitAtAntimeridian`.
-- **Reading the map.** One orbit later the ground track passes about 24° further west (Earth's
-  rotation during ~95 min), so the end of the dashed line comes back close to the marker. Two dashed
-  lines near the marker are the start and end of the same orbit ahead, not a bug.
+  halves joined at the marker itself. The orbit ahead is drawn in full as the dashed accent line
+  (`orbit-future`). Of the orbit already flown, only the **last 15 minutes** (`PAST_TAIL_MILLIS`) are
+  drawn, as a thin, dimmed solid tail (`orbit-past`). Antimeridian splitting is the existing
+  `splitAtAntimeridian`.
+- **Why only a tail of the flown orbit.** The first version drew the whole flown orbit too. Each
+  orbit covers about 390° of longitude (the Earth turns under the satellite during the ~95 min), so
+  two full orbits cross every meridian twice, and a ~70° band around the marker three times. That
+  third line, with its abrupt start mid-ocean, was confusing right where the user is looking. The
+  backend still returns the full flown orbit; the trimming is client-side.
+- **Reading the map.** One orbit later the ground track passes about 24° further west, so the end of
+  the dashed line comes back close to the marker. A second dashed line near the marker is the end
+  of the same orbit ahead, not a bug.
 - **Initial zoom is now 1.0** (was 2.5), so the map opens on most of the orbit instead of just the
   footprint. Pinch-zoom still works for detail.
 - **EROS C3's orbit is retrograde, at about 139° inclination.** Its latitude peaks at ±40.8°, and it
   moves west. This is typical of Israeli satellites launched westward over the Mediterranean, and
   it is not a rendering error.
-- Tests: `MapGeometryTest` (+2 for `splitAtTime`), `MapRepositoryTest` (orbit mapping/failures).
-  236 unit tests green. Verified on the `Pixel_10` emulator with real CARTO tiles: the full orbit
-  draws across the Atlantic, the Americas and Africa, with the past/future styling and the arrow.
+- Tests: `MapGeometryTest` (+3 for `splitAtTime`, including the tail trim), `MapRepositoryTest`
+  (orbit mapping/failures). 237 unit tests green. Verified on the `Pixel_10` emulator with real
+  CARTO tiles: the orbit ahead draws across the Atlantic, the Americas and Africa, with the 15-minute
+  flown tail and the arrow.
   The orbit endpoint matched N2YO's live position to within ~2.5 km.
 
 ### Navigation — optional `passId`/`satelliteId`, the guard, and every entry point

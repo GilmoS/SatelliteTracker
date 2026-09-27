@@ -166,7 +166,7 @@ class MapGeometryTest {
         val track = listOf(point(0.0, 0.0, 0), point(1.0, 0.0, 30), point(2.0, 0.0, 60), point(3.0, 0.0, 90))
         val marker = LatLng(1.5, 0.0)
 
-        val (past, future) = MapGeometry.splitAtTime(track, 45_000, marker)
+        val (past, future) = MapGeometry.splitAtTime(track, 45_000, marker, pastTailMillis = 600_000)
 
         assertEquals(listOf(LatLng(0.0, 0.0), LatLng(1.0, 0.0), marker), past)
         assertEquals(listOf(marker, LatLng(2.0, 0.0), LatLng(3.0, 0.0)), future)
@@ -176,9 +176,22 @@ class MapGeometryTest {
     fun `split counts a point at exactly the timestamp as flown`() {
         val track = listOf(point(0.0, 0.0, 0), point(1.0, 0.0, 30))
 
-        val (past, future) = MapGeometry.splitAtTime(track, 30_000, LatLng(1.0, 0.0))
+        val (past, future) = MapGeometry.splitAtTime(track, 30_000, LatLng(1.0, 0.0), pastTailMillis = 600_000)
 
         assertEquals(3, past.size)
         assertEquals(listOf(LatLng(1.0, 0.0)), future)
+    }
+
+    @Test
+    fun `split keeps only the last tail of the flown part and all of the part ahead`() {
+        // Points every 30 s from t = 0 to t = 300 s; "now" is t = 200 s, tail is 60 s.
+        val track = (0..10).map { point(it.toDouble(), 0.0, it * 30L) }
+        val marker = LatLng(6.5, 0.0)
+
+        val (past, future) = MapGeometry.splitAtTime(track, 200_000, marker, pastTailMillis = 60_000)
+
+        // Only t = 150 s and 180 s fall in [140 s, 200 s]; the tail ends at the marker.
+        assertEquals(listOf(LatLng(5.0, 0.0), LatLng(6.0, 0.0), marker), past)
+        assertEquals(listOf(marker) + (7..10).map { LatLng(it.toDouble(), 0.0) }, future)
     }
 }

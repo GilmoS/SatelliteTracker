@@ -57,6 +57,7 @@ import com.sattrakk.app.ui.theme.TelemetryTextStyle
 import kotlinx.coroutines.launch
 import kotlin.math.atan2
 import kotlin.math.cos
+import java.util.concurrent.TimeUnit
 import org.maplibre.compose.camera.CameraPosition
 import org.maplibre.compose.camera.CameraState
 import org.maplibre.compose.camera.rememberCameraState
@@ -186,12 +187,13 @@ private fun LiveTrackMap(state: MapUiState.LiveTrack) {
     )
     // Sorted by time defensively; the backend already returns the orbit track in order.
     val track = remember(state.trackPoints) { state.trackPoints.sortedBy { it.timestampEpochMillis } }
-    // The orbit track is split at the satellite's current time into the orbit already flown
-    // (dimmed) and the orbit ahead (dashed), both joined at the marker. Recomputed when either
-    // poll lands (position every 15 s, track every 5 min).
+    // The orbit track is split at the satellite's current time into a short tail already flown
+    // (dimmed) and the full orbit ahead (dashed), both joined at the marker. Recomputed when
+    // either poll lands (position every 15 s, track every 5 min).
     val (pastGeometry, futureGeometry) = remember(track, position) {
         val (past, future) = MapGeometry.splitAtTime(
             track, position.timestampEpochMillis, LatLng(position.latitude, position.longitude),
+            PAST_TAIL_MILLIS,
         )
         trackGeometry(past) to trackGeometry(future)
     }
@@ -541,6 +543,10 @@ private val HEADING_ARROW_BASE = 18.dp
 private val HEADING_ARROW_TIP = 36.dp
 private val HEADING_ARROW_HALF_WIDTH = 10.dp
 private const val HEADING_PROBE_KM = 50.0
+
+// How much of the flown orbit the live map draws behind the marker: about 6,800 km at LEO speed,
+// enough to show where the satellite came from without a second full line across the map.
+private val PAST_TAIL_MILLIS = TimeUnit.MINUTES.toMillis(15)
 
 private val MAP_OPTIONS = MapOptions(
     // Attribution stays on (required by the CARTO/OSM tile terms); the scale bar would crowd the
