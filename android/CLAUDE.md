@@ -2358,7 +2358,8 @@ assumption. Re-verified item by item against the current code, not carried over 
   halo + dot, not an animated pulse; the pulse animation is still decorative and not built.
 - **[REAL] Footprint polygon**: `LiveTrack.footprintPolygon` (Flow 1 only; none in Flow 2, per the
   confirmed decision).
-- **[REAL] Satellite-name floating label**: `LiveTrack.satelliteName`, anchored above the marker.
+- **[REAL] Satellite-name floating label**: `LiveTrack.satelliteName`, anchored above the marker
+  (below it when the direction arrow points up; see "Direction-of-flight arrow" below).
 - **[REAL] Back arrow + top bar**: nav-only. The title is the satellite name (Flow 1) or "Pass track"
   + orbit/AOS subtitle (Flow 2).
 - **[DECORATIVE, still omitted]** Layer/zoom/compass FABs (no map-control state; pinch-zoom works
@@ -2413,6 +2414,40 @@ half, pure and JVM-tested (`MapGeometryTest`, 10 cases):
   splitting. If the ring encloses a pole (above roughly ±72° latitude), it finishes the circle to
   the first point's 360°-shifted copy and closes across the pole side at MapLibre's Mercator limit
   (±85.05°), which fills the polar cap.
+
+### Direction-of-flight arrow (Flow 1, added 2026-09-27)
+
+An arrowhead just outside the position halo shows which way the satellite is flying. It was added
+after the Map UI task, on explicit request. It needs no new ViewModel/UiState field: the heading is
+derived at render time from data `LiveTrack` already carries.
+
+- **Heading source: the live track, not orbital elements.** `MapGeometry.headingDegrees(position,
+  track)` finds the track point nearest the marker and takes the great-circle bearing
+  (`GeoUtils.initialBearingDegrees`) along the segment leaving it, or arriving at it for the last
+  point. The track is chronological, one point per second, from N2YO via the backend.
+  - Nearest-point matching is used instead of timestamp matching because the track is cached for
+    5 minutes and the position for 30 s. The position's timestamp can fall outside the track's
+    time range, and the marker often runs past the track's end between track polls.
+  - It is recomputed whenever either poll lands. It returns `null` (no arrow) with fewer than two
+    points or a zero-length segment.
+- **Rendering: a Compose `Canvas` overlay**, not a MapLibre `SymbolLayer`, for the same reason as
+  the name label: the inline style has no sprite/glyph source. The label and arrow share one
+  composable (`MarkerOverlay`), so camera moves recompose only it.
+  - The on-screen angle is computed by projecting a point 50 km ahead along the heading
+    (`GeoUtils.destinationPoint`, factored out of `footprintPolygon`), not by using the bearing
+    directly, so it stays correct if the map is ever rotated or tilted. That point's longitude is
+    unwrapped next to the marker's, so near ±180° it doesn't project onto the other world copy.
+- **Label flip.** Both default satellites are in near-polar orbits, so the arrow usually points
+  roughly up or down. When it points up, it would sit under the name label, so the label moves
+  below the marker (the trailing side) whenever the arrow has an upward component.
+- **Flow 2 (static pass track)** has no arrow: its AOS (filled) / LOS (hollow) end markers already
+  show the direction.
+- Tests: `GeoUtilsTest` (+3: cardinal bearings, antimeridian bearing, destination/bearing
+  round-trip) and `MapGeometryTest` (+3: nearest-segment heading, end-of-track heading, null
+  cases). 233 unit tests green. Verified on the `Pixel_10` emulator: EROS C3 moving northwest over
+  the Indian Ocean showed the arrow pointing northwest along the dashed track, with the label
+  below the marker. The overlay drawing itself has no automated test (no Compose UI test
+  infrastructure, as for every UI task).
 
 ### Navigation — optional `passId`/`satelliteId`, the guard, and every entry point
 

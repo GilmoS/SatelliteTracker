@@ -55,4 +55,27 @@ class GeoUtilsTest {
         assertEquals(0.0, GeoUtils.distanceKm(israel, israel), 1e-9)
         assertEquals(GeoUtils.distanceKm(israel, other), GeoUtils.distanceKm(other, israel), 1e-9)
     }
+
+    @Test
+    fun `initialBearingDegrees gives the cardinal directions`() {
+        val origin = LatLng(0.0, 0.0)
+
+        assertEquals(0.0, GeoUtils.initialBearingDegrees(origin, LatLng(1.0, 0.0)), 1e-9)
+        assertEquals(90.0, GeoUtils.initialBearingDegrees(origin, LatLng(0.0, 1.0)), 1e-9)
+        assertEquals(180.0, GeoUtils.initialBearingDegrees(origin, LatLng(-1.0, 0.0)), 1e-9)
+        assertEquals(270.0, GeoUtils.initialBearingDegrees(origin, LatLng(0.0, -1.0)), 1e-9)
+    }
+
+    @Test
+    fun `initialBearingDegrees is eastward across the antimeridian`() {
+        assertEquals(90.0, GeoUtils.initialBearingDegrees(LatLng(0.0, 179.5), LatLng(0.0, -179.5)), 1e-9)
+    }
+
+    @Test
+    fun `destinationPoint round-trips with distanceKm and initialBearingDegrees`() {
+        val dest = GeoUtils.destinationPoint(israel, 37.0, 500.0)
+
+        assertEquals(500.0, GeoUtils.distanceKm(israel, dest), 0.01)
+        assertEquals(37.0, GeoUtils.initialBearingDegrees(israel, dest), 1e-6)
+    }
 }

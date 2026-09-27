@@ -3,6 +3,7 @@ package com.sattrakk.app.ui.map
 import com.sattrakk.app.domain.model.LatLng
 import com.sattrakk.app.domain.util.GeoUtils
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.abs
@@ -113,5 +114,29 @@ class MapGeometryTest {
     @Test
     fun `degenerate ring yields nothing`() {
         assertTrue(MapGeometry.footprintRing(listOf(LatLng(0.0, 0.0), LatLng(1.0, 1.0)), LatLng(0.0, 0.0)).isEmpty())
+    }
+
+    // ---- headingDegrees ----
+
+    @Test
+    fun `heading follows the track segment leaving the nearest point`() {
+        // Northbound track; the marker sits beside the middle point.
+        val track = listOf(LatLng(0.0, 10.0), LatLng(1.0, 10.0), LatLng(2.0, 10.0))
+
+        assertEquals(0.0, MapGeometry.headingDegrees(LatLng(1.05, 10.01), track)!!, 1e-6)
+    }
+
+    @Test
+    fun `heading at the end of the track uses the arriving segment`() {
+        // Westbound track (like EROS C3's live track), marker already past the last point.
+        val track = listOf(LatLng(0.0, 12.0), LatLng(0.0, 11.0), LatLng(0.0, 10.0))
+
+        assertEquals(270.0, MapGeometry.headingDegrees(LatLng(0.0, 9.5), track)!!, 1e-6)
+    }
+
+    @Test
+    fun `heading is null without a usable segment`() {
+        assertNull(MapGeometry.headingDegrees(LatLng(0.0, 0.0), listOf(LatLng(0.0, 0.0))))
+        assertNull(MapGeometry.headingDegrees(LatLng(0.0, 0.0), listOf(LatLng(1.0, 1.0), LatLng(1.0, 1.0))))
     }
 }
