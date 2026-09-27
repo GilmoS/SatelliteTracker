@@ -4,11 +4,13 @@ using Microsoft.Extensions.Options;
 using SatelliteTracker.API.DTOs;
 using SatelliteTracker.Database.Common;
 using SatelliteTracker.Database.Repositories;
+using SatelliteTracker.PassService.Services;
 using SatelliteTracker.TLEService.Client;
 
 namespace SatelliteTracker.API.Controllers;
 
-// This controller provides real-time satellite data, including current position and recent track history.
+// This controller provides real-time satellite data for the live map: current position and recent
+// track history (N2YO), plus the full-orbit ground track (SGP4 from the latest TLE, no N2YO call).
 [ApiController]
 [Route("api/satellites")]
 public class RealTimeController : BaseController
@@ -19,16 +21,43 @@ public class RealTimeController : BaseController
     private readonly IN2YOClient _n2yo; // Client for interacting with the N2YO API to retrieve real-time satellite data
     private readonly IMemoryCache _cache; // In-memory cache for storing recent satellite position and track data to reduce API calls and improve performance
     private readonly ObserverSettings _observer;
+    private readonly IPassService _passService; // SGP4 propagation for the full-orbit track
 
-
+    // How long a computed orbit track is cached. The window is padded by the same amount, so a
+    // cached track still covers a full orbit ahead of "now" until it expires.
+    private static readonly TimeSpan OrbitCacheTtl = TimeSpan.FromMinutes(5);
 
     // Constructor that initializes the satellite repository, N2YO client, and memory cache through dependency injection.
-    public RealTimeController(ISatelliteRepository satelliteRepo, IN2YOClient n2yo, IMemoryCache cache , IOptions<ObserverSettings> observer)
+    public RealTimeController(ISatelliteRepository satelliteRepo, IN2YOClient n2yo, IMemoryCache cache , IOptions<ObserverSettings> observer, IPassService passService)
     {
         _satelliteRepo = satelliteRepo;
         _n2yo = n2yo;
         _cache = cache;
         _observer = observer.Value;
+        _passService = passService;
+    }
+
+    // GET api/satellites/{id}/orbit - The satellite's full ground track, one orbital period before
+    // "now" to one period after it, computed with SGP4 from its latest TLE. Replaces the 5-minute
+    // N2YO /track on the live map: N2YO returns at most 300 seconds of positions per request, while
+    // one LEO orbit is about 95 minutes.
+    [HttpGet("{id:guid}/orbit")]
+    [ProducesResponseType(typeof(OrbitTrackDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
+    public async Task<IActionResult> GetOrbit(Guid id)
+    {
+        var cacheKey = $"orbit:{id}";
+        if (_cache.TryGetValue(cacheKey, out OrbitTrackDto? cached))
+            return Ok(cached);
+
+        var result = await _passService.GetOrbitTrackAsync(id, DateTime.UtcNow, OrbitCacheTtl);
+        if (!result.IsSuccess)
+            return ToError(result.Error!);
+
+        var dto = OrbitTrackDto.From(id, result.Value!);
+        _cache.Set(cacheKey, dto, OrbitCacheTtl);
+        return Ok(dto);
     }
     
 

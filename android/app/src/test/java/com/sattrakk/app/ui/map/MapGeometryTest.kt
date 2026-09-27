@@ -1,6 +1,7 @@
 package com.sattrakk.app.ui.map
 
 import com.sattrakk.app.domain.model.LatLng
+import com.sattrakk.app.domain.model.TrackPoint
 import com.sattrakk.app.domain.util.GeoUtils
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -118,25 +119,66 @@ class MapGeometryTest {
 
     // ---- headingDegrees ----
 
-    @Test
-    fun `heading follows the track segment leaving the nearest point`() {
-        // Northbound track; the marker sits beside the middle point.
-        val track = listOf(LatLng(0.0, 10.0), LatLng(1.0, 10.0), LatLng(2.0, 10.0))
+    private fun point(lat: Double, lon: Double, seconds: Long) = TrackPoint(lat, lon, 500.0, seconds * 1000)
 
-        assertEquals(0.0, MapGeometry.headingDegrees(LatLng(1.05, 10.01), track)!!, 1e-6)
+    @Test
+    fun `heading follows the segment whose time span contains the timestamp`() {
+        // Northbound, then eastbound from t = 60 s.
+        val track = listOf(point(0.0, 10.0, 0), point(1.0, 10.0, 30), point(2.0, 10.0, 60), point(2.0, 11.0, 90))
+
+        assertEquals(0.0, MapGeometry.headingDegrees(45_000, track)!!, 1e-6)
+        assertEquals(0.0, MapGeometry.headingDegrees(30_000, track)!!, 1e-6)
+        assertEquals(90.0, MapGeometry.headingDegrees(75_000, track)!!, 0.1)
     }
 
     @Test
-    fun `heading at the end of the track uses the arriving segment`() {
-        // Westbound track (like EROS C3's live track), marker already past the last point.
-        val track = listOf(LatLng(0.0, 12.0), LatLng(0.0, 11.0), LatLng(0.0, 10.0))
+    fun `heading matches by time, not by nearest point, where the orbits cross`() {
+        // Past segment runs north through (0, 0); the future segment later runs east through the
+        // same spot. At t = 100 s the satellite is on the eastbound segment, even though a
+        // northbound point sits exactly at the crossing too.
+        val track = listOf(
+            point(-1.0, 0.0, 0), point(0.0, 0.0, 30), point(1.0, 0.0, 60),
+            point(0.0, -1.0, 90), point(0.0, 1.0, 120),
+        )
 
-        assertEquals(270.0, MapGeometry.headingDegrees(LatLng(0.0, 9.5), track)!!, 1e-6)
+        assertEquals(90.0, MapGeometry.headingDegrees(100_000, track)!!, 1e-6)
+    }
+
+    @Test
+    fun `heading outside the track uses the first or last segment`() {
+        // Westbound track.
+        val track = listOf(point(0.0, 12.0, 0), point(0.0, 11.0, 30), point(0.0, 10.0, 60))
+
+        assertEquals(270.0, MapGeometry.headingDegrees(-10_000, track)!!, 1e-6)
+        assertEquals(270.0, MapGeometry.headingDegrees(90_000, track)!!, 1e-6)
     }
 
     @Test
     fun `heading is null without a usable segment`() {
-        assertNull(MapGeometry.headingDegrees(LatLng(0.0, 0.0), listOf(LatLng(0.0, 0.0))))
-        assertNull(MapGeometry.headingDegrees(LatLng(0.0, 0.0), listOf(LatLng(1.0, 1.0), LatLng(1.0, 1.0))))
+        assertNull(MapGeometry.headingDegrees(0, listOf(point(0.0, 0.0, 0))))
+        assertNull(MapGeometry.headingDegrees(0, listOf(point(1.0, 1.0, 0), point(1.0, 1.0, 30))))
+    }
+
+    // ---- splitAtTime ----
+
+    @Test
+    fun `split joins the flown and upcoming parts at the marker`() {
+        val track = listOf(point(0.0, 0.0, 0), point(1.0, 0.0, 30), point(2.0, 0.0, 60), point(3.0, 0.0, 90))
+        val marker = LatLng(1.5, 0.0)
+
+        val (past, future) = MapGeometry.splitAtTime(track, 45_000, marker)
+
+        assertEquals(listOf(LatLng(0.0, 0.0), LatLng(1.0, 0.0), marker), past)
+        assertEquals(listOf(marker, LatLng(2.0, 0.0), LatLng(3.0, 0.0)), future)
+    }
+
+    @Test
+    fun `split counts a point at exactly the timestamp as flown`() {
+        val track = listOf(point(0.0, 0.0, 0), point(1.0, 0.0, 30))
+
+        val (past, future) = MapGeometry.splitAtTime(track, 30_000, LatLng(1.0, 0.0))
+
+        assertEquals(3, past.size)
+        assertEquals(listOf(LatLng(1.0, 0.0)), future)
     }
 }

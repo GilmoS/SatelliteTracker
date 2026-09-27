@@ -184,21 +184,24 @@ private fun LiveTrackMap(state: MapUiState.LiveTrack) {
             zoom = LIVE_ZOOM,
         ),
     )
-    val trackGeometry = remember(state.trackPoints) {
-        trackGeometry(state.trackPoints.map { LatLng(it.latitude, it.longitude) })
+    // Sorted by time defensively; the backend already returns the orbit track in order.
+    val track = remember(state.trackPoints) { state.trackPoints.sortedBy { it.timestampEpochMillis } }
+    // The orbit track is split at the satellite's current time into the orbit already flown
+    // (dimmed) and the orbit ahead (dashed), both joined at the marker. Recomputed when either
+    // poll lands (position every 15 s, track every 5 min).
+    val (pastGeometry, futureGeometry) = remember(track, position) {
+        val (past, future) = MapGeometry.splitAtTime(
+            track, position.timestampEpochMillis, LatLng(position.latitude, position.longitude),
+        )
+        trackGeometry(past) to trackGeometry(future)
     }
     val footprintGeometry = remember(state.footprintPolygon, position.latitude, position.longitude) {
         val ring = MapGeometry.footprintRing(state.footprintPolygon, LatLng(position.latitude, position.longitude))
         if (ring.size >= 4) Polygon(listOf(ring.map { it.toPosition() })) else null
     }
     val marker = Point(longitude = position.longitude, latitude = position.latitude)
-    // Direction of flight, recomputed when either poll lands (position every 15 s, track every
-    // 5 min). Sorted by time defensively; the backend already returns the track in order.
-    val heading = remember(state.trackPoints, position.latitude, position.longitude) {
-        MapGeometry.headingDegrees(
-            LatLng(position.latitude, position.longitude),
-            state.trackPoints.sortedBy { it.timestampEpochMillis }.map { LatLng(it.latitude, it.longitude) },
-        )
+    val heading = remember(track, position.timestampEpochMillis) {
+        MapGeometry.headingDegrees(position.timestampEpochMillis, track)
     }
     val colors = MapColors.current()
 
@@ -225,10 +228,20 @@ private fun LiveTrackMap(state: MapUiState.LiveTrack) {
                     width = const(1.dp),
                 )
             }
-            val trackSource = rememberGeoJsonSource(GeoJsonData.Features(trackGeometry))
+            val pastSource = rememberGeoJsonSource(GeoJsonData.Features(pastGeometry))
             LineLayer(
-                id = "live-track",
-                source = trackSource,
+                id = "orbit-past",
+                source = pastSource,
+                color = const(colors.accent),
+                opacity = const(0.35f),
+                width = const(1.5.dp),
+                cap = const(LineCap.Round),
+                join = const(LineJoin.Round),
+            )
+            val futureSource = rememberGeoJsonSource(GeoJsonData.Features(futureGeometry))
+            LineLayer(
+                id = "orbit-future",
+                source = futureSource,
                 color = const(colors.accent),
                 width = const(2.dp),
                 // Dashed, per the design's "dashed ground-track polyline" (units: line widths).
@@ -514,7 +527,9 @@ private fun boundingBoxOf(points: List<LatLng>): BoundingBox = BoundingBox(
 
 private fun LatLng.toPosition() = Position(longitude = longitude, latitude = latitude)
 
-private const val LIVE_ZOOM = 2.5 // Fits the ~4000 km-wide footprint with room around it.
+// Opens wide enough to show most of the full orbit (the world is ~512 dp wide at zoom 1, about a
+// phone screen), while the ~4000 km footprint still reads as a circle around the marker.
+private const val LIVE_ZOOM = 1.0
 private const val STATIC_FALLBACK_ZOOM = 3.0
 private val LABEL_GAP = 16.dp
 

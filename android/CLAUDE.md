@@ -2253,6 +2253,8 @@ placeholder; the Composable is a separate task built on top of this. Covered by
   already caches them (30 s and 5 min — repo-root CLAUDE.md's caching table), and real-time
   position data is never stored (repo-root "What NOT to do"). A client cache would add staleness,
   not value. `MapRepositoryTest` asserts the DAO is never touched on these paths.
+  **Superseded:** `getLiveTrack`/`/track` is now `getOrbitTrack`/`/orbit` (full orbit, same
+  passthrough shape); see "Full-orbit live track" in the Map UI section.
 - `getNotifyEnabledPasses()` → new `PassDao.getNotifyEnabled()` (`notify = 1`, every satellite,
   `ORDER BY aosEpochMillis ASC`). This is a local-only read, since `notify` is client-cached state.
   It backs the drawer in **both** flows.
@@ -2300,7 +2302,8 @@ Both nav args are read from `SavedStateHandle` as **optional** (`passId`, `satel
   - **Live track every 5 min**, not every 15 s. That matches its server-side cache TTL: polling
     faster only re-reads the backend's cached copy. The track covers about 5 minutes of flight
     (`RealTimeController`'s `seconds: 300`), so fetching it only once per visit would leave it
-    visibly behind the moving marker during a long viewing session.
+    visibly behind the moving marker during a long viewing session. (Now the full-orbit track,
+    still polled every 5 min; each refresh keeps a full orbit ahead of the marker.)
 - **Poll failures keep the last good `LiveTrack`** and retry on the next tick. Only the *initial*
   load's failure becomes `Error`. This deliberately narrows the spec's "any failure → Error" so a
   transient blip doesn't blank a map the user is watching. An auth failure still flips
@@ -2352,8 +2355,9 @@ after PR #42 (map data layer) merged. Does not touch any other screen beyond the
 assumption. Re-verified item by item against the current code, not carried over wholesale:
 
 - **[REAL] Basemap**: inline style over CartoDB Dark Matter raster tiles (below).
-- **[REAL] Ground-track polyline (dashed)**: `LiveTrack.trackPoints` (Flow 1, polled every 5 min)
-  or `StaticPassTrack.trackPoints` (Flow 2, solid line, framed by its bounding box).
+- **[REAL] Ground-track polyline (dashed)**: `LiveTrack.trackPoints` (Flow 1, polled every 5 min;
+  now the full orbit, flown part dimmed, see "Full-orbit live track") or
+  `StaticPassTrack.trackPoints` (Flow 2, solid line, framed by its bounding box).
 - **[REAL] Live position dot**: `LiveTrack.currentPosition`, polled every 15 s. It's a static
   halo + dot, not an animated pulse; the pulse animation is still decorative and not built.
 - **[REAL] Footprint polygon**: `LiveTrack.footprintPolygon` (Flow 1 only; none in Flow 2, per the
@@ -2396,8 +2400,8 @@ assumption. Re-verified item by item against the current code, not carried over 
   markers were optional per the task; they're kept because without them the track has no
   direction. Colors come from existing theme tokens (`primary`/`onPrimary`/`background`), read in
   normal composition and passed in as plain values.
-- **Camera**: Flow 1 centers once on the position at first display (zoom 2.5, which fits the
-  ~4000 km footprint). Later polls move the marker but not the camera, since the user may have
+- **Camera**: Flow 1 centers once on the position at first display (zoom 1.0 since the
+  full-orbit change; originally 2.5, which fits the ~4000 km footprint). Later polls move the marker but not the camera, since the user may have
   panned. Flow 2 animates to the track's bounding box (48 dp padding), except when the track is
   split at the antimeridian: a bbox across ±180° would span the world, so it stays centered on AOS.
 
@@ -2421,13 +2425,15 @@ An arrowhead just outside the position halo shows which way the satellite is fly
 after the Map UI task, on explicit request. It needs no new ViewModel/UiState field: the heading is
 derived at render time from data `LiveTrack` already carries.
 
-- **Heading source: the live track, not orbital elements.** `MapGeometry.headingDegrees(position,
-  track)` finds the track point nearest the marker and takes the great-circle bearing
-  (`GeoUtils.initialBearingDegrees`) along the segment leaving it, or arriving at it for the last
-  point. The track is chronological, one point per second, from N2YO via the backend.
-  - Nearest-point matching is used instead of timestamp matching because the track is cached for
-    5 minutes and the position for 30 s. The position's timestamp can fall outside the track's
-    time range, and the marker often runs past the track's end between track polls.
+- **Heading source: the orbit track, not orbital elements.** `MapGeometry.headingDegrees(
+  timestampEpochMillis, track)` takes the great-circle bearing (`GeoUtils.initialBearingDegrees`)
+  along the track segment whose time span contains the position's timestamp, or the first/last
+  segment if the timestamp falls outside the track.
+  - **Matched by time, not by nearest point.** The first version matched by nearest point, which
+    was fine for the old 5-minute N2YO track. The full-orbit track (see "Full-orbit live track"
+    below) spans two orbits, and the past and future orbits cross each other, so near a crossing the
+    nearest point can sit on the wrong orbit. The orbit window always contains "now," so time
+    matching is reliable.
   - It is recomputed whenever either poll lands. It returns `null` (no arrow) with fewer than two
     points or a zero-length segment.
 - **Rendering: a Compose `Canvas` overlay**, not a MapLibre `SymbolLayer`, for the same reason as
@@ -2437,17 +2443,46 @@ derived at render time from data `LiveTrack` already carries.
     (`GeoUtils.destinationPoint`, factored out of `footprintPolygon`), not by using the bearing
     directly, so it stays correct if the map is ever rotated or tilted. That point's longitude is
     unwrapped next to the marker's, so near ±180° it doesn't project onto the other world copy.
-- **Label flip.** Both default satellites are in near-polar orbits, so the arrow usually points
-  roughly up or down. When it points up, it would sit under the name label, so the label moves
-  below the marker (the trailing side) whenever the arrow has an upward component.
+- **Label flip.** An arrow pointing up would sit under the name label, so the label moves below the
+  marker (the trailing side) whenever the arrow has an upward component.
 - **Flow 2 (static pass track)** has no arrow: its AOS (filled) / LOS (hollow) end markers already
   show the direction.
 - Tests: `GeoUtilsTest` (+3: cardinal bearings, antimeridian bearing, destination/bearing
-  round-trip) and `MapGeometryTest` (+3: nearest-segment heading, end-of-track heading, null
-  cases). 233 unit tests green. Verified on the `Pixel_10` emulator: EROS C3 moving northwest over
-  the Indian Ocean showed the arrow pointing northwest along the dashed track, with the label
-  below the marker. The overlay drawing itself has no automated test (no Compose UI test
-  infrastructure, as for every UI task).
+  round-trip) and `MapGeometryTest` (heading: segment by time, orbit-crossing case, before/after the
+  track, null cases). Verified on the `Pixel_10` emulator: EROS C3 moving northwest over the Indian
+  Ocean, and later west across the Atlantic, showed the arrow pointing the right way along the
+  track. The overlay drawing itself has no automated test (no Compose UI test infrastructure, as
+  for every UI task).
+
+### Full-orbit live track (Flow 1, added 2026-09-27)
+
+The live map's line used to be the backend's N2YO `/track`, which covers only 300 seconds (N2YO's
+per-request maximum, about 2,300 km). That's close to the footprint radius, so it looked cut off
+at the footprint. It now shows the satellite's **full orbit**: one orbital period already flown and
+one period (plus 5 min) ahead, from the new backend `GET /api/satellites/{id}/orbit` (SGP4 from the
+latest TLE; see the repo-root CLAUDE.md, "Full-orbit ground track").
+
+- **Data layer.** `SatTrakkApi.getSatelliteOrbit` → `MapRepository.getOrbitTrack` (replaces
+  `getLiveTrack`; the app no longer calls `/track`, which the web frontend still uses). It's still
+  a straight `safeApiCall` passthrough with no Room caching. `OrbitTrackDto.toDomain()` maps to the
+  same `List<TrackPoint>` as before, so `MapUiState.LiveTrack.trackPoints` and the 5-minute poll in
+  `MapViewModel` are unchanged. A refresh every 5 min keeps a full orbit ahead of the marker.
+- **Rendering.** `MapGeometry.splitAtTime` splits the track at the position's timestamp, with both
+  halves joined at the marker itself. The orbit already flown is drawn as a thin, dimmed solid line
+  (`orbit-past`), and the orbit ahead as the dashed accent line (`orbit-future`). Antimeridian
+  splitting is the existing `splitAtAntimeridian`.
+- **Reading the map.** One orbit later the ground track passes about 24° further west (Earth's
+  rotation during ~95 min), so the end of the dashed line comes back close to the marker. Two dashed
+  lines near the marker are the start and end of the same orbit ahead, not a bug.
+- **Initial zoom is now 1.0** (was 2.5), so the map opens on most of the orbit instead of just the
+  footprint. Pinch-zoom still works for detail.
+- **EROS C3's orbit is retrograde, at about 139° inclination.** Its latitude peaks at ±40.8°, and it
+  moves west. This is typical of Israeli satellites launched westward over the Mediterranean, and
+  it is not a rendering error.
+- Tests: `MapGeometryTest` (+2 for `splitAtTime`), `MapRepositoryTest` (orbit mapping/failures).
+  236 unit tests green. Verified on the `Pixel_10` emulator with real CARTO tiles: the full orbit
+  draws across the Atlantic, the Americas and Africa, with the past/future styling and the arrow.
+  The orbit endpoint matched N2YO's live position to within ~2.5 km.
 
 ### Navigation — optional `passId`/`satelliteId`, the guard, and every entry point
 
