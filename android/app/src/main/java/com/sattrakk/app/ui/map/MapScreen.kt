@@ -1,5 +1,6 @@
 package com.sattrakk.app.ui.map
 
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -38,6 +39,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.sattrakk.app.BuildConfig
 import com.sattrakk.app.domain.model.LatLng
 import com.sattrakk.app.domain.model.Pass
 import com.sattrakk.app.navigation.BackArrowIcon
@@ -447,11 +449,13 @@ private val MAP_OPTIONS = MapOptions(
     ornamentOptions = OrnamentOptions(isScaleBarEnabled = false, isCompassEnabled = false),
 )
 
-// Inline style (confirmed decision: no hosted MapLibre/Mapbox style, no API key). One raster
-// source — the same CartoDB Dark Matter tiles the web frontend already uses
+// Inline style (confirmed decision: no hosted MapLibre/Mapbox style). One raster source — the
+// same CartoDB Dark Matter tiles the web frontend already uses
 // (frontend/src/components/SatelliteMap.tsx) — and one raster layer. Leaflet's `{s}`/`{r}`
 // placeholders don't exist in MapLibre, so the subdomains are listed explicitly and the retina
 // variant (@2x, 512 px) is requested at tileSize 256 for crisp tiles on high-density screens.
+// Since 2026-09-23 CARTO requires an API key on every tile request (query parameter `key`), so
+// the URLs carry BuildConfig.MAP_API_KEY, read from local.properties at build time.
 private val CARTO_DARK_STYLE = BaseStyle.Json(
     """
     {
@@ -461,10 +465,10 @@ private val CARTO_DARK_STYLE = BaseStyle.Json(
         "carto-dark": {
           "type": "raster",
           "tiles": [
-            "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
-            "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
-            "https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
-            "https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png"
+            "${cartoTileUrl("a")}",
+            "${cartoTileUrl("b")}",
+            "${cartoTileUrl("c")}",
+            "${cartoTileUrl("d")}"
           ],
           "tileSize": 256,
           "maxzoom": 20,
@@ -477,3 +481,9 @@ private val CARTO_DARK_STYLE = BaseStyle.Json(
     }
     """.trimIndent(),
 )
+
+// CARTO's template is .../rastertiles/dark_all/{z}/{x}/{y}{r}.png?key=KEY; `{r}` is filled with
+// the retina suffix "@2x". Uri.encode keeps the key safe inside both the URL and the JSON string.
+private fun cartoTileUrl(subdomain: String): String =
+    "https://$subdomain.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}@2x.png" +
+        "?key=${Uri.encode(BuildConfig.MAP_API_KEY)}"

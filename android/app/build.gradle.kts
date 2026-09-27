@@ -1,5 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -13,6 +14,18 @@ plugins {
     // FirebaseApp auto-initializes from. A checkout without that file fails the build at
     // process*GoogleServices, by design: FCM cannot work without it.
     alias(libs.plugins.google.services)
+}
+
+// Machine-local secrets (android/local.properties, gitignored). MAP_API_KEY is the CARTO basemap
+// key the Map screen appends to every tile request; see android/CLAUDE.md ("CARTO basemap API
+// key"). A missing key still builds, but CARTO then serves "API KEY REQUIRED"-watermarked tiles.
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+val mapApiKey: String = localProperties.getProperty("MAP_API_KEY")?.trim().orEmpty()
+if (mapApiKey.isEmpty()) {
+    logger.warn("MAP_API_KEY is not set in android/local.properties: Map tiles will be watermarked.")
 }
 
 android {
@@ -33,6 +46,7 @@ android {
         // launchSettings.json); 10.0.2.2 is the standard emulator alias for the host machine's
         // localhost. Override per build type below, or via a real staging URL once one exists.
         buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:5076/\"")
+        buildConfigField("String", "MAP_API_KEY", "\"$mapApiKey\"")
     }
 
     buildTypes {
