@@ -2379,7 +2379,8 @@ assumption. Re-verified item by item against the current code, not carried over 
   or an App Bundle before a real release.
 - **Inline style, not a hosted one** (confirmed decision): `CARTO_DARK_STYLE` in `MapScreen.kt` is a
   `BaseStyle.Json` with one raster source and one raster layer. It uses the same CartoDB Dark Matter
-  tiles the web frontend uses (`frontend/src/components/SatelliteMap.tsx`), with no API key.
+  tiles the web frontend uses (`frontend/src/components/SatelliteMap.tsx`). Keyless when first
+  built; since 2026-09-23 the tile URLs carry a CARTO API key (see "CARTO basemap API key" below).
   Leaflet's `{s}`/`{r}` placeholders don't exist in MapLibre, so the four `a`–`d` subdomains are
   listed explicitly, and the `@2x` retina tiles are requested at `tileSize: 256`. The source
   carries the "© OpenStreetMap contributors © CARTO" attribution. The attribution/logo ornaments
@@ -2592,8 +2593,9 @@ delivery) or a behavior/product decision, listed below as a follow-up rather tha
 
 ### Open follow-ups (flagged, not changed)
 
-1. **Map basemap: CARTO keyless tiles are now watermarked.** Pick another dark raster provider,
-   or get a CARTO key (client-side by nature). Affects the web frontend too.
+1. ~~**Map basemap: CARTO keyless tiles are now watermarked.**~~ **Resolved for Android** by
+   wiring in a CARTO key (see "CARTO basemap API key" below). The web frontend
+   (`SatelliteMap.tsx`) is still keyless and still watermarked.
 2. **Drawer / `notify` default.** `PassRepository` still defaults first-seen passes to
    `notify = true` locally, while the backend is opt-in, so:
    - the drawer lists nearly every cached pass;
@@ -2607,3 +2609,54 @@ delivery) or a behavior/product decision, listed below as a follow-up rather tha
 3. **Map vs. hidden satellites.** See cross-feature check 4.
 4. **Backend: a failed FCM send is logged as sent and never retried.** See the repo-root
    CLAUDE.md's "Android client status" section.
+
+---
+
+## CARTO basemap API key (2026-09-27)
+
+**Why:** CARTO changed its policy on 2026-09-23 and now requires an API key on every basemap tile
+request. Keyless requests still return `200 image/png`, but the tile is an "API KEY REQUIRED"
+watermark instead of map imagery, so nothing fails loudly. This was follow-up 1 of the
+post-merge integration QA above. The fix only adds the key: same provider, same Dark Matter
+style, no other visual change.
+
+**Verified tile URL template** (confirmed by curl against the live CARTO CDN with a real key):
+
+    https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}{r}.png?key=YOUR_KEY
+
+- The query parameter is **`key`**, not `api_key`.
+- `{s}` is `a`/`b`/`c`/`d`. MapLibre has no `{s}`/`{r}` placeholders, so `MapScreen.kt`'s
+  `cartoTileUrl(subdomain)` builds the four URLs explicitly, with `{r}` filled as `@2x` (retina,
+  still requested at `tileSize: 256`).
+- The path is `rastertiles/dark_all`. The old keyless URLs used plain `dark_all`.
+
+**Where the key lives:**
+- `android/local.properties`, as `MAP_API_KEY=...`. That file is gitignored and machine-specific,
+  so the key is never committed. (The task sketch called it `MAPS_API_KEY`; the name already in
+  `local.properties` on the dev machine, `MAP_API_KEY`, was kept.)
+- `app/build.gradle.kts` loads `local.properties` and exposes it as
+  `BuildConfig.MAP_API_KEY`. This is the first build-time secret read from `local.properties`;
+  `API_BASE_URL` is a hardcoded `buildConfigField`, not a secret.
+- If the key is missing, the build still succeeds but logs a Gradle warning, and the map shows
+  the watermark. A fresh checkout or CI therefore needs its own `MAP_API_KEY` line to get real tiles.
+- The style was already built in Kotlin at runtime (`CARTO_DARK_STYLE`, a `BaseStyle.Json` string),
+  not a static asset, so a string substitution was enough. The key is `Uri.encode`d into each URL.
+  It is never logged by app code.
+- A basemap key is client-side by nature: it's in the APK's `BuildConfig` and visible in tile
+  request URLs. This is a different concern from the backend-only N2YO key rule (repo-root
+  CLAUDE.md). Protect it with CARTO-side restrictions/quota, not secrecy.
+
+**Quota:** CARTO's free tier is 5M tile requests/month for **non-commercial** use. **Which
+classification was chosen when this key was registered is not yet recorded here. Confirm it and
+fill it in.** Keep this in mind when monitoring usage: every map pan/zoom fetches tiles, and
+each `@2x` tile counts as a request.
+
+**Verification (2026-09-27):**
+- `:app:testDebugUnitTest` and `:app:assembleDebug` are `BUILD SUCCESSFUL`, with no test changes
+  (it's a config/URL change).
+- curl: the same tile is about 25 KB with the key (real imagery) and about 2.5 KB without it
+  (the watermark).
+- On the `Pixel_10` emulator (`-gpu host`) against the local backend, the live Map (EROS C3)
+  rendered real Dark Matter tiles with country and city labels, the footprint, and the dashed
+  track, both zoomed out and zoomed in. There was no watermark.
+- The web frontend is **not** changed and is still keyless.
