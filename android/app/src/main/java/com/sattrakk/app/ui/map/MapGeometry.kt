@@ -1,6 +1,7 @@
 package com.sattrakk.app.ui.map
 
 import com.sattrakk.app.domain.model.LatLng
+import com.sattrakk.app.domain.util.GeoUtils
 import kotlin.math.abs
 import kotlin.math.sign
 
@@ -95,6 +96,32 @@ internal object MapGeometry {
     }
 
     /** [lon] shifted by a multiple of 360° to lie within 180° of [reference]. */
+    /**
+     * The satellite's direction of flight at [position], as a true-north bearing in degrees
+     * [0, 360), read off the live ground track rather than computed from orbital elements.
+     *
+     * [track] must be in chronological order (the backend returns it that way, one point per
+     * second). The track point nearest [position] is found, and the bearing is taken along the
+     * track segment leaving it (or arriving at it, if it's the last point). Nearest-point matching
+     * rather than timestamp matching, because the live track is cached for 5 minutes on the
+     * backend and the position for 30 s, so the position's timestamp isn't guaranteed to fall
+     * inside the track's time range. The heading barely changes over one segment.
+     *
+     * Returns null when there's no usable segment: fewer than 2 points, or the chosen segment's
+     * two points are identical.
+     */
+    fun headingDegrees(position: LatLng, track: List<LatLng>): Double? {
+        if (track.size < 2) return null
+        val nearestIndex = track.indices.minBy { GeoUtils.distanceKm(position, track[it]) }
+        val (from, to) = if (nearestIndex < track.lastIndex) {
+            track[nearestIndex] to track[nearestIndex + 1]
+        } else {
+            track[nearestIndex - 1] to track[nearestIndex]
+        }
+        if (from == to) return null
+        return GeoUtils.initialBearingDegrees(from, to)
+    }
+
     private fun nearest(lon: Double, reference: Double): Double {
         var result = lon
         while (result - reference > 180.0) result -= 360.0

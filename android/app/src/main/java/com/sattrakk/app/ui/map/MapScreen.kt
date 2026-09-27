@@ -1,6 +1,7 @@
 package com.sattrakk.app.ui.map
 
 import android.net.Uri
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -33,21 +34,29 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sattrakk.app.BuildConfig
 import com.sattrakk.app.domain.model.LatLng
 import com.sattrakk.app.domain.model.Pass
+import com.sattrakk.app.domain.util.GeoUtils
 import com.sattrakk.app.navigation.BackArrowIcon
 import com.sattrakk.app.navigation.PassesIcon
 import com.sattrakk.app.ui.common.formatDateLocal
 import com.sattrakk.app.ui.common.formatTimeLocal
 import com.sattrakk.app.ui.theme.TelemetryTextStyle
 import kotlinx.coroutines.launch
+import kotlin.math.atan2
+import kotlin.math.cos
 import org.maplibre.compose.camera.CameraPosition
 import org.maplibre.compose.camera.CameraState
 import org.maplibre.compose.camera.rememberCameraState
@@ -71,7 +80,7 @@ import org.maplibre.spatialk.geojson.Position
 
 // Map screen, both flows (see MapViewModel/MapUiState — consumed exactly as built, no new logic):
 //  - LiveTrack (Flow 1): live ground track + current-position marker (moves as MapViewModel polls)
-//    + visibility footprint + satellite-name label.
+//    + visibility footprint + satellite-name label + direction-of-flight arrow.
 //  - StaticPassTrack (Flow 2): one pass's fixed ground track with AOS/LOS end markers. No live
 //    marker, no footprint (confirmed decision).
 // The notify-enabled pass drawer is available in both flows. See android/CLAUDE.md's Map screen
@@ -183,6 +192,14 @@ private fun LiveTrackMap(state: MapUiState.LiveTrack) {
         if (ring.size >= 4) Polygon(listOf(ring.map { it.toPosition() })) else null
     }
     val marker = Point(longitude = position.longitude, latitude = position.latitude)
+    // Direction of flight, recomputed when either poll lands (position every 15 s, track every
+    // 5 min). Sorted by time defensively; the backend already returns the track in order.
+    val heading = remember(state.trackPoints, position.latitude, position.longitude) {
+        MapGeometry.headingDegrees(
+            LatLng(position.latitude, position.longitude),
+            state.trackPoints.sortedBy { it.timestampEpochMillis }.map { LatLng(it.latitude, it.longitude) },
+        )
+    }
     val colors = MapColors.current()
 
     Box(Modifier.fillMaxSize()) {
@@ -236,40 +253,98 @@ private fun LiveTrackMap(state: MapUiState.LiveTrack) {
                 strokeWidth = const(2.dp),
             )
         }
-        SatelliteLabel(
+        MarkerOverlay(
             name = state.satelliteName,
-            position = Position(longitude = position.longitude, latitude = position.latitude),
+            position = LatLng(position.latitude, position.longitude),
+            headingDegrees = heading,
+            colors = colors,
             cameraState = cameraState,
         )
     }
 }
 
-// The satellite-name label, anchored just above the position marker. Drawn as a Compose overlay
-// positioned through the map's own projection rather than a MapLibre SymbolLayer: map-rendered text
-// needs a glyphs (font PBF) server in the style, and the inline raster style deliberately
-// references nothing but the CartoDB tile source. Isolated in its own composable so the camera
-// reads below (which change every frame while the user pans) only recompose this label.
+// The satellite-name label and the direction-of-flight arrow around the position marker. Drawn as
+// Compose overlays positioned through the map's own projection rather than MapLibre SymbolLayers:
+// map-rendered text or icons need a glyphs/sprite source in the style, and the inline raster style
+// deliberately references nothing but the CartoDB tile source. Isolated in its own composable so
+// the camera reads below (which change every frame while the user pans) only recompose this.
 @Composable
-private fun SatelliteLabel(name: String, position: Position, cameraState: CameraState) {
+private fun MarkerOverlay(
+    name: String,
+    position: LatLng,
+    headingDegrees: Double?,
+    colors: MapColors,
+    cameraState: CameraState,
+) {
     // Read position to re-run on every camera move; projection is null until the map is attached.
     @Suppress("UNUSED_VARIABLE")
     val cameraPosition = cameraState.position
     val projection = cameraState.projection ?: return
-    val anchor = projection.screenLocationFromPosition(position)
+    val anchor = projection.screenLocationFromPosition(position.toPosition())
 
+    // The arrow's on-screen angle (clockwise from screen-up) comes from projecting a point a short
+    // way ahead along the heading, not from the true-north bearing directly, so it stays right if
+    // the map is ever rotated or tilted. Its longitude is unwrapped next to the marker's so a
+    // marker by the antimeridian doesn't project the ahead point onto the other world copy.
+    val screenAngleDegrees = headingDegrees?.let { heading ->
+        val ahead = GeoUtils.destinationPoint(position, heading, HEADING_PROBE_KM)
+        val aheadLon = ahead.longitude + 360.0 * Math.round((position.longitude - ahead.longitude) / 360.0)
+        val aheadScreen = projection.screenLocationFromPosition(
+            Position(longitude = aheadLon, latitude = ahead.latitude),
+        )
+        val dx = (aheadScreen.x - anchor.x).value
+        val dy = (aheadScreen.y - anchor.y).value
+        if (dx == 0f && dy == 0f) null else Math.toDegrees(atan2(dx, -dy).toDouble()).toFloat()
+    }
+
+    if (screenAngleDegrees != null) {
+        Canvas(
+            modifier = Modifier
+                .layout { measurable, constraints ->
+                    val size = HEADING_ARROW_BOX.roundToPx()
+                    val placeable = measurable.measure(Constraints.fixed(size, size))
+                    layout(size, size) {
+                        placeable.place(anchor.x.roundToPx() - size / 2, anchor.y.roundToPx() - size / 2)
+                    }
+                }
+                .rotate(screenAngleDegrees),
+        ) {
+            // Drawn pointing up (screen north) and rotated as a whole: an arrowhead just outside
+            // the position halo, on the side the satellite is heading.
+            val c = center
+            val tip = HEADING_ARROW_TIP.toPx()
+            val base = HEADING_ARROW_BASE.toPx()
+            val halfWidth = HEADING_ARROW_HALF_WIDTH.toPx()
+            val arrow = Path().apply {
+                moveTo(c.x, c.y - tip)
+                lineTo(c.x + halfWidth, c.y - base)
+                lineTo(c.x, c.y - base - (tip - base) * 0.3f)
+                lineTo(c.x - halfWidth, c.y - base)
+                close()
+            }
+            drawPath(arrow, colors.accent)
+            drawPath(arrow, colors.onAccent, style = Stroke(width = 1.5.dp.toPx(), join = StrokeJoin.Round))
+        }
+    }
+
+    // The label sits above the marker, unless the arrow points upward (the usual case for these
+    // near-polar orbits), where it would cover the arrow. Then it goes below, on the trailing side.
+    val labelBelow = screenAngleDegrees != null && cos(Math.toRadians(screenAngleDegrees.toDouble())) > 0
     Text(
         text = name,
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onPrimaryContainer,
         modifier = Modifier
-            // Center horizontally over the marker and sit just above its halo.
+            // Centered horizontally on the marker, just clear of its halo.
             .layout { measurable, constraints ->
                 val placeable = measurable.measure(constraints.copy(minWidth = 0, minHeight = 0))
                 layout(placeable.width, placeable.height) {
-                    placeable.place(
-                        x = anchor.x.roundToPx() - placeable.width / 2,
-                        y = anchor.y.roundToPx() - placeable.height - LABEL_GAP.roundToPx(),
-                    )
+                    val y = if (labelBelow) {
+                        anchor.y.roundToPx() + LABEL_GAP.roundToPx()
+                    } else {
+                        anchor.y.roundToPx() - placeable.height - LABEL_GAP.roundToPx()
+                    }
+                    placeable.place(x = anchor.x.roundToPx() - placeable.width / 2, y = y)
                 }
             }
             .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(8.dp))
@@ -442,6 +517,15 @@ private fun LatLng.toPosition() = Position(longitude = longitude, latitude = lat
 private const val LIVE_ZOOM = 2.5 // Fits the ~4000 km-wide footprint with room around it.
 private const val STATIC_FALLBACK_ZOOM = 3.0
 private val LABEL_GAP = 16.dp
+
+// Direction-of-flight arrowhead, in dp from the marker's center: it starts just outside the 14 dp
+// halo. HEADING_PROBE_KM is how far ahead along the heading the screen angle is sampled; short
+// enough that the great circle is effectively straight on screen.
+private val HEADING_ARROW_BOX = 80.dp
+private val HEADING_ARROW_BASE = 18.dp
+private val HEADING_ARROW_TIP = 36.dp
+private val HEADING_ARROW_HALF_WIDTH = 10.dp
+private const val HEADING_PROBE_KM = 50.0
 
 private val MAP_OPTIONS = MapOptions(
     // Attribution stays on (required by the CARTO/OSM tile terms); the scale bar would crowd the

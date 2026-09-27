@@ -33,21 +33,39 @@ object GeoUtils {
         require(points >= 3) { "A polygon needs at least 3 points, got $points" }
         require(radiusKm > 0) { "radiusKm must be positive, got $radiusKm" }
 
-        val lat1 = Math.toRadians(center.latitude)
-        val lon1 = Math.toRadians(center.longitude)
-        val angularDistance = radiusKm / EARTH_MEAN_RADIUS_KM
+        return List(points) { i -> destinationPoint(center, 360.0 * i / points, radiusKm) }
+    }
 
-        return List(points) { i ->
-            val bearing = Math.toRadians(360.0 * i / points)
-            val lat2 = asin(
-                sin(lat1) * cos(angularDistance) + cos(lat1) * sin(angularDistance) * cos(bearing)
-            )
-            val lon2 = lon1 + atan2(
-                sin(bearing) * sin(angularDistance) * cos(lat1),
-                cos(angularDistance) - sin(lat1) * sin(lat2)
-            )
-            LatLng(Math.toDegrees(lat2), normalizeLongitude(Math.toDegrees(lon2)))
-        }
+    // The point `distanceKm` away from `from` along the great circle leaving it at
+    // `bearingDegrees` (clockwise from true north). The formula documented on footprintPolygon;
+    // longitude normalized to [-180, 180).
+    fun destinationPoint(from: LatLng, bearingDegrees: Double, distanceKm: Double): LatLng {
+        val lat1 = Math.toRadians(from.latitude)
+        val lon1 = Math.toRadians(from.longitude)
+        val bearing = Math.toRadians(bearingDegrees)
+        val angularDistance = distanceKm / EARTH_MEAN_RADIUS_KM
+        val lat2 = asin(
+            sin(lat1) * cos(angularDistance) + cos(lat1) * sin(angularDistance) * cos(bearing)
+        )
+        val lon2 = lon1 + atan2(
+            sin(bearing) * sin(angularDistance) * cos(lat1),
+            cos(angularDistance) - sin(lat1) * sin(lat2)
+        )
+        return LatLng(Math.toDegrees(lat2), normalizeLongitude(Math.toDegrees(lon2)))
+    }
+
+    // Initial great-circle bearing from `from` to `to`, in degrees clockwise from true north,
+    // normalized to [0, 360):
+    //   θ = atan2( sin Δλ · cos φ2, cos φ1 · sin φ2 − sin φ1 · cos φ2 · cos Δλ )
+    // Works across the antimeridian as-is (Δλ goes through sin/cos). Meaningless for identical
+    // points (returns 0).
+    fun initialBearingDegrees(from: LatLng, to: LatLng): Double {
+        val lat1 = Math.toRadians(from.latitude)
+        val lat2 = Math.toRadians(to.latitude)
+        val dLon = Math.toRadians(to.longitude - from.longitude)
+        val y = sin(dLon) * cos(lat2)
+        val x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
+        return (Math.toDegrees(atan2(y, x)) + 360.0) % 360.0
     }
 
     // Haversine great-circle distance in km. Used by tests to verify footprintPolygon's output, and
