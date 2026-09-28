@@ -92,7 +92,7 @@ class MapViewModel @Inject constructor(
         val initial = coroutineScope {
             val satellitesDeferred = async { satelliteRepository.getSatellites() }
             val positionDeferred = async { mapRepository.getPosition(satelliteId) }
-            val trackDeferred = async { mapRepository.getLiveTrack(satelliteId) }
+            val trackDeferred = async { mapRepository.getOrbitTrack(satelliteId) }
             val drawerDeferred = async { mapRepository.getNotifyEnabledPasses() }
             val satellitesResult = satellitesDeferred.await()
             val positionResult = positionDeferred.await()
@@ -130,10 +130,9 @@ class MapViewModel @Inject constructor(
     // Two independent loops on viewModelScope, so both stop when the ViewModel is cleared (leaving
     // the Map destination) — the same lifecycle as DashboardViewModel's ticker/poller:
     //  - position every 15s, recomputing the footprint each time;
-    //  - live track every 5 min, matching its server-side cache TTL. Polling it every 15s would
-    //    only re-read the backend's cached copy; never refreshing it would leave the drawn track
-    //    visibly behind the moving position marker within a single long viewing session (the
-    //    track covers the next ~5 min of flight, per RealTimeController's `seconds: 300`).
+    //  - orbit track every 5 min, matching its server-side cache TTL. Polling it every 15s would
+    //    only re-read the backend's cached copy. The track spans one orbit back to one orbit (plus
+    //    that 5 min) ahead, so each refresh keeps a full orbit ahead of the marker in a long session.
     // A failed poll keeps the last good LiveTrack on screen and simply tries again next tick —
     // only the INITIAL load's failure becomes MapUiState.Error, so a transient network blip
     // doesn't blank a map the user is looking at. (An auth failure still reaches SessionManager
@@ -151,7 +150,7 @@ class MapViewModel @Inject constructor(
         viewModelScope.launch {
             while (isActive) {
                 delay(TRACK_POLL_INTERVAL_MILLIS)
-                val result = mapRepository.getLiveTrack(satelliteId)
+                val result = mapRepository.getOrbitTrack(satelliteId)
                 if (result is ApiResult.Success) {
                     updateLive { it.copy(trackPoints = result.data) }
                 }

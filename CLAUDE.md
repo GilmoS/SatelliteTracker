@@ -110,6 +110,7 @@ controller exists.
 |----------------------------|------------|--------------------------------------|
 | /satellites/{id}/position  | 30 seconds | Changes rapidly                     |
 | /satellites/{id}/track     | 5 minutes  | Live N2YO track, changes slowly     |
+| /satellites/{id}/orbit     | 5 minutes  | SGP4 full orbit, see below          |
 | /passes/{id}/track         | 1 hour     | Deterministic per passId, see below |
 | /passes                    | 1 hour     | Pre-calculated, stable              |
 | /tles                      | 2 hours    | N2YO updates infrequently           |
@@ -123,8 +124,10 @@ No Redis needed at this scale. IMemoryCache is built into .NET.
 not redundant:
 
 - **`/satellites/{id}/track`** is *live* — it calls N2YO for the satellite's recent actual
-  position history anchored to "right now." Used by the Android map's live nearest-pass view.
-  Cached 5 minutes, keyed by NORAD ID, because its answer changes as time passes.
+  position history anchored to "right now." Used by the web frontend (`useTrack.ts`); the Android
+  live map switched to `/orbit` below. Covers only 300 seconds (N2YO's per-request maximum), about
+  2,300 km of flight, which is why it looked "cut off at the footprint." Cached 5 minutes, keyed by
+  NORAD ID, because its answer changes as time passes.
 - **`/passes/{id}/track`** is *fixed* — it's the SGP4-computed ground track for one specific,
   already-calculated `Pass`, over its stored `[Aos, Los]` window, propagated from the TLE that was
   in effect when that pass was calculated (`Pass.TleId`) — deliberately **not** the satellite's
@@ -139,6 +142,27 @@ not redundant:
   version/id needed in the key. **The computed track points are never persisted to the
   database** — they're cache-only, recomputed on demand (rare, given the 1-hour cache); this is
   derived/display data, not something the system needs to function.
+
+### Full-orbit ground track — `GET /api/satellites/{id}/orbit`
+
+The Android live map's track: the satellite's full ground track from **one orbital period before
+"now" to one period plus 5 minutes after it** (about 95 + 100 minutes for EROS C3), computed with
+SGP4 (`GroundTrackCalculator`, 30 s steps, about 400 points) from the satellite's **latest** TLE.
+It lives in `RealTimeController` next to `/position` and `/track`, but never calls N2YO.
+
+- `IPassService.GetOrbitTrackAsync(satelliteId, nowUtc, extraAhead)` owns the window. The
+  controller passes its 5-minute cache TTL as `extraAhead`, so a cached response still covers a
+  full orbit ahead of the current time until it expires. Cached keyed by satellite id.
+- The response (`OrbitTrackDto`) carries `periodMinutes` and the same `TrackPointDto` points
+  (Unix seconds) as `/track`.
+- Unlike `/passes/{id}/track`, this is a "now" view, so it deliberately uses the latest TLE, not a
+  stored `TleId`. Output is never persisted.
+- It matched N2YO's live position to within about 2.5 km when checked on 2026-09-27.
+- **Longitude fix that came with it:** `Sgp4Calculator.ToGeodetic` returned longitudes in
+  `[0°, 360°)`, so anything west of Greenwich came out as e.g. 350° instead of −10°. Map clients read
+  that as an antimeridian crossing at 0°. It now returns `[−180°, 180°)`. This also corrects
+  `/passes/{id}/track` for western-hemisphere points. It had gone unnoticed because passes seen from
+  Israel sit around 10–60° E.
 
 ### Paginated + filterable pass history — `GET /api/passes/{satelliteId}/history`
 
@@ -478,6 +502,8 @@ Modules/{ModuleName}/
   through Cache → N2YO
 - /passes/{id}/track works from DB (Pass + its stored TleRecord) + SGP4, not N2YO — see the
   caching table above for how it differs from /satellites/{id}/track
+- /satellites/{id}/orbit works from DB (the latest TleRecord) + SGP4, not N2YO, even though it
+  sits in RealTimeController — see "Full-orbit ground track" above
 - All other endpoints work from DB only
 
 ---

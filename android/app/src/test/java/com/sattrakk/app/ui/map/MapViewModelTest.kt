@@ -91,7 +91,7 @@ class MapViewModelTest {
     private fun stubLiveSuccess() {
         coEvery { satelliteRepository.getSatellites() } returns ApiResult.Success(catalog)
         coEvery { mapRepository.getPosition(satelliteId) } returns ApiResult.Success(position(31.5))
-        coEvery { mapRepository.getLiveTrack(satelliteId) } returns
+        coEvery { mapRepository.getOrbitTrack(satelliteId) } returns
             ApiResult.Success(listOf(TrackPoint(31.5, 34.8, 500.0, 0L)))
         coEvery { mapRepository.getNotifyEnabledPasses() } returns drawer
     }
@@ -155,7 +155,7 @@ class MapViewModelTest {
 
         coVerify(exactly = 1) { passRepository.getPassTrack(passId) }
         coVerify(exactly = 0) { mapRepository.getPosition(any()) }
-        coVerify(exactly = 0) { mapRepository.getLiveTrack(any()) }
+        coVerify(exactly = 0) { mapRepository.getOrbitTrack(any()) }
     }
 
     @Test
@@ -225,10 +225,10 @@ class MapViewModelTest {
         createViewModel(mapOf("satelliteId" to satelliteId))
 
         advanceTimeBy(MapViewModel.TRACK_POLL_INTERVAL_MILLIS - 1)
-        coVerify(exactly = 1) { mapRepository.getLiveTrack(satelliteId) }
+        coVerify(exactly = 1) { mapRepository.getOrbitTrack(satelliteId) }
 
         advanceTimeBy(1)
-        coVerify(exactly = 2) { mapRepository.getLiveTrack(satelliteId) }
+        coVerify(exactly = 2) { mapRepository.getOrbitTrack(satelliteId) }
     }
 
     @Test
@@ -256,7 +256,7 @@ class MapViewModelTest {
         advanceTimeBy(MapViewModel.TRACK_POLL_INTERVAL_MILLIS * 2)
 
         coVerify(exactly = 2) { mapRepository.getPosition(satelliteId) }
-        coVerify(exactly = 1) { mapRepository.getLiveTrack(satelliteId) }
+        coVerify(exactly = 1) { mapRepository.getOrbitTrack(satelliteId) }
     }
 
     @Test

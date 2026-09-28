@@ -15,7 +15,7 @@ import javax.inject.Singleton
 
 // Map screen data. The two real-time reads are straight safeApiCall passthroughs with NO Room
 // caching, same rationale as PassRepository.getPassTrack: the backend already caches them
-// (position 30s, live track 5 min — repo-root CLAUDE.md's caching table), and the repo-root rule
+// (position 30s, orbit track 5 min — repo-root CLAUDE.md's caching table), and the repo-root rule
 // is that real-time position data is never stored. A client-side cache would add staleness, not
 // value. The fixed per-pass track is NOT here — MapViewModel reuses PassRepository.getPassTrack.
 @Singleton
@@ -28,8 +28,8 @@ class MapRepository @Inject constructor(
     suspend fun getPosition(satelliteId: String): ApiResult<SatellitePosition> =
         safeApiCall { api.getSatellitePosition(UUID.fromString(satelliteId)) }.mapSuccess { it.toDomain() }
 
-    suspend fun getLiveTrack(satelliteId: String): ApiResult<List<TrackPoint>> =
-        safeApiCall { api.getSatelliteTrack(UUID.fromString(satelliteId)) }.mapSuccess { it.toDomain() }
+    suspend fun getOrbitTrack(satelliteId: String): ApiResult<List<TrackPoint>> =
+        safeApiCall { api.getSatelliteOrbit(UUID.fromString(satelliteId)) }.mapSuccess { it.toDomain() }
 
     // Local-only read: `notify` is client-cached state (see PassEntity), so Room is the source here,
     // not the network. Backs the Map drawer in both the live and the static-pass flow.

@@ -24,4 +24,12 @@ public interface IPassService
     /// (<see cref="Pass.TleId"/>) — not the satellite's currently-latest TLE.
     /// </summary>
     Task<Result<IEnumerable<GroundTrackPoint>>> GetPassTrackAsync(Guid passId);
+
+    /// <summary>
+    /// Computes the satellite's full ground track from its latest TLE: one orbital period before
+    /// <paramref name="nowUtc"/> through one period plus <paramref name="extraAhead"/> after it.
+    /// <paramref name="extraAhead"/> lets a caller that caches the result for that long still
+    /// have a full period ahead of "now" for the whole cache lifetime.
+    /// </summary>
+    Task<Result<OrbitTrack>> GetOrbitTrackAsync(Guid satelliteId, DateTime nowUtc, TimeSpan extraAhead);
 }

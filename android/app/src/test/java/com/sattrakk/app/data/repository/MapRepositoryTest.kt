@@ -3,8 +3,8 @@ package com.sattrakk.app.data.repository
 import com.sattrakk.app.data.local.PassDao
 import com.sattrakk.app.data.local.entity.PassEntity
 import com.sattrakk.app.data.remote.SatTrakkApi
+import com.sattrakk.app.data.remote.dto.OrbitTrackDto
 import com.sattrakk.app.data.remote.dto.PositionDto
-import com.sattrakk.app.data.remote.dto.TrackDto
 import com.sattrakk.app.data.remote.dto.TrackPointDto
 import com.sattrakk.app.data.session.SessionManager
 import com.sattrakk.app.data.util.SafeApiCaller
@@ -68,10 +68,10 @@ class MapRepositoryTest {
     }
 
     @Test
-    fun `getLiveTrack success maps every point`() = runTest {
-        coEvery { api.getSatelliteTrack(satelliteUuid) } returns Response.success(
-            TrackDto(
-                noradId = 1, satName = "SAT",
+    fun `getOrbitTrack success maps every point`() = runTest {
+        coEvery { api.getSatelliteOrbit(satelliteUuid) } returns Response.success(
+            OrbitTrackDto(
+                satelliteId = satelliteUuid, noradId = 1, periodMinutes = 95.0,
                 points = listOf(
                     TrackPointDto(latitude = 1.0, longitude = 2.0, altitude = 500.0, timestamp = 10L),
                     TrackPointDto(latitude = 3.0, longitude = 4.0, altitude = 501.0, timestamp = 11L)
@@ -79,7 +79,7 @@ class MapRepositoryTest {
             )
         )
 
-        val points = (repository.getLiveTrack(satelliteId) as ApiResult.Success).data
+        val points = (repository.getOrbitTrack(satelliteId) as ApiResult.Success).data
 
         assertEquals(2, points.size)
         assertEquals(3.0, points[1].latitude, 0.0)
@@ -88,12 +88,12 @@ class MapRepositoryTest {
     }
 
     @Test
-    fun `getLiveTrack failures propagate and never touch the DAO`() = runTest {
-        coEvery { api.getSatelliteTrack(satelliteUuid) } returns errorBody(404)
-        assertTrue(repository.getLiveTrack(satelliteId) is ApiResult.Error)
+    fun `getOrbitTrack failures propagate and never touch the DAO`() = runTest {
+        coEvery { api.getSatelliteOrbit(satelliteUuid) } returns errorBody(404)
+        assertTrue(repository.getOrbitTrack(satelliteId) is ApiResult.Error)
 
-        coEvery { api.getSatelliteTrack(satelliteUuid) } throws IOException("offline")
-        assertTrue(repository.getLiveTrack(satelliteId) is ApiResult.NetworkError)
+        coEvery { api.getSatelliteOrbit(satelliteUuid) } throws IOException("offline")
+        assertTrue(repository.getOrbitTrack(satelliteId) is ApiResult.NetworkError)
 
         confirmVerified(passDao)
     }

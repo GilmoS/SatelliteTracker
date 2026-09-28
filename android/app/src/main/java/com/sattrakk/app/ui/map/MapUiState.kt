@@ -7,7 +7,8 @@ import com.sattrakk.app.domain.model.SatellitePosition
 import com.sattrakk.app.domain.model.TrackPoint
 
 // Two mutually exclusive flows, chosen once from the nav args (see MapViewModel):
-//  - LiveTrack (no passId): the satellite's position right now, polled, plus its live track and
+//  - LiveTrack (no passId): the satellite's position right now, polled, plus its full orbit track
+//    (one orbit back to one orbit ahead, from GET /api/satellites/{id}/orbit) and
 //    a ~2000 km visibility footprint around the current sub-satellite point.
 //  - StaticPassTrack (passId): one already-calculated pass's fixed ground track. No polling, no
 //    footprint.

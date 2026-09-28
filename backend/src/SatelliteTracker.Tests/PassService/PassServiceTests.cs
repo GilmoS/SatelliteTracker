@@ -384,4 +384,74 @@ public class PassServiceTests
         Assert.NotEmpty(points);
         Assert.All(points, p => Assert.False(double.IsNaN(p.Latitude) || double.IsNaN(p.Longitude)));
     }
+
+    // ── GetOrbitTrackAsync ───────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetOrbitTrackAsync_SatelliteNotFound_ReturnsFailure()
+    {
+        var (service, satRepo, _, _) = CreateService();
+        satRepo.Setup(r => r.GetByIdAsync(TestSatelliteId))
+            .ReturnsAsync(Result<Satellite>.Failure($"Satellite {TestSatelliteId} not found."));
+
+        var result = await service.GetOrbitTrackAsync(TestSatelliteId, DateTime.UtcNow, TimeSpan.Zero);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("not found", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GetOrbitTrackAsync_NoTle_ReturnsFailure()
+    {
+        var (service, satRepo, tleRepo, _) = CreateService();
+        satRepo.Setup(r => r.GetByIdAsync(TestSatelliteId)).ReturnsAsync(Result<Satellite>.Success(TestSatellite));
+        tleRepo.Setup(r => r.GetLatestByNoradIdAsync(TestNoradId))
+            .ReturnsAsync(Result<TleRecord>.Failure($"No TLE record found for NORAD ID {TestNoradId}."));
+
+        var result = await service.GetOrbitTrackAsync(TestSatelliteId, DateTime.UtcNow, TimeSpan.Zero);
+
+        Assert.False(result.IsSuccess);
+    }
+
+    [Fact]
+    public async Task GetOrbitTrackAsync_SpansOnePeriodBackToOnePeriodPlusExtraAhead()
+    {
+        var (service, satRepo, tleRepo, _) = CreateService();
+        satRepo.Setup(r => r.GetByIdAsync(TestSatelliteId)).ReturnsAsync(Result<Satellite>.Success(TestSatellite));
+        tleRepo.Setup(r => r.GetLatestByNoradIdAsync(TestNoradId)).ReturnsAsync(Result<TleRecord>.Success(MakeTleRecord(IssLine2)));
+        var parsed = TleParser.Parse(IssLine1, IssLine2);
+        var now = parsed.Epoch.AddHours(2);
+        var extra = TimeSpan.FromMinutes(5);
+
+        var result = await service.GetOrbitTrackAsync(TestSatelliteId, now, extra);
+
+        Assert.True(result.IsSuccess);
+        var track = result.Value!;
+        var period = TimeSpan.FromMinutes(1440.0 / parsed.MeanMotion);
+        Assert.Equal(TestNoradId, track.NoradId);
+        Assert.Equal(1440.0 / parsed.MeanMotion, track.PeriodMinutes, 9);
+        Assert.Equal(now - period, track.Points.First().TimestampUtc);
+        Assert.Equal(now + period + extra, track.Points.Last().TimestampUtc);
+        Assert.Equal(TimeSpan.FromSeconds(30), track.Points[1].TimestampUtc - track.Points[0].TimestampUtc);
+        Assert.All(track.Points, p => Assert.False(double.IsNaN(p.Latitude) || double.IsNaN(p.Longitude)));
+        // ISS inclination is 51.6 degrees, so a full orbit reaches close to +/-51.6 latitude.
+        Assert.InRange(track.Points.Max(p => p.Latitude), 50.0, 52.5);
+        Assert.InRange(track.Points.Min(p => p.Latitude), -52.5, -50.0);
+    }
+
+    [Fact]
+    public async Task GetOrbitTrackAsync_UsesLatestTle()
+    {
+        var (service, satRepo, tleRepo, _) = CreateService();
+        satRepo.Setup(r => r.GetByIdAsync(TestSatelliteId)).ReturnsAsync(Result<Satellite>.Success(TestSatellite));
+        // The latest TLE is the 2-degree-inclination orbit, so the whole track stays near the equator.
+        tleRepo.Setup(r => r.GetLatestByNoradIdAsync(TestNoradId)).ReturnsAsync(Result<TleRecord>.Success(MakeTleRecord(LowIncLine2)));
+        var now = TleParser.Parse(IssLine1, LowIncLine2).Epoch.AddHours(1);
+
+        var result = await service.GetOrbitTrackAsync(TestSatelliteId, now, TimeSpan.Zero);
+
+        Assert.True(result.IsSuccess);
+        Assert.All(result.Value!.Points, p => Assert.InRange(p.Latitude, -3.0, 3.0));
+        tleRepo.Verify(r => r.GetByIdAsync(It.IsAny<Guid>()), Times.Never);
+    }
 }

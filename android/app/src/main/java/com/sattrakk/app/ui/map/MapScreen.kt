@@ -57,6 +57,7 @@ import com.sattrakk.app.ui.theme.TelemetryTextStyle
 import kotlinx.coroutines.launch
 import kotlin.math.atan2
 import kotlin.math.cos
+import java.util.concurrent.TimeUnit
 import org.maplibre.compose.camera.CameraPosition
 import org.maplibre.compose.camera.CameraState
 import org.maplibre.compose.camera.rememberCameraState
@@ -184,21 +185,25 @@ private fun LiveTrackMap(state: MapUiState.LiveTrack) {
             zoom = LIVE_ZOOM,
         ),
     )
-    val trackGeometry = remember(state.trackPoints) {
-        trackGeometry(state.trackPoints.map { LatLng(it.latitude, it.longitude) })
+    // Sorted by time defensively; the backend already returns the orbit track in order.
+    val track = remember(state.trackPoints) { state.trackPoints.sortedBy { it.timestampEpochMillis } }
+    // The orbit track is split at the satellite's current time into a short tail already flown
+    // (dimmed) and the full orbit ahead (dashed), both joined at the marker. Recomputed when
+    // either poll lands (position every 15 s, track every 5 min).
+    val (pastGeometry, futureGeometry) = remember(track, position) {
+        val (past, future) = MapGeometry.splitAtTime(
+            track, position.timestampEpochMillis, LatLng(position.latitude, position.longitude),
+            PAST_TAIL_MILLIS,
+        )
+        trackGeometry(past) to trackGeometry(future)
     }
     val footprintGeometry = remember(state.footprintPolygon, position.latitude, position.longitude) {
         val ring = MapGeometry.footprintRing(state.footprintPolygon, LatLng(position.latitude, position.longitude))
         if (ring.size >= 4) Polygon(listOf(ring.map { it.toPosition() })) else null
     }
     val marker = Point(longitude = position.longitude, latitude = position.latitude)
-    // Direction of flight, recomputed when either poll lands (position every 15 s, track every
-    // 5 min). Sorted by time defensively; the backend already returns the track in order.
-    val heading = remember(state.trackPoints, position.latitude, position.longitude) {
-        MapGeometry.headingDegrees(
-            LatLng(position.latitude, position.longitude),
-            state.trackPoints.sortedBy { it.timestampEpochMillis }.map { LatLng(it.latitude, it.longitude) },
-        )
+    val heading = remember(track, position.timestampEpochMillis) {
+        MapGeometry.headingDegrees(position.timestampEpochMillis, track)
     }
     val colors = MapColors.current()
 
@@ -225,10 +230,20 @@ private fun LiveTrackMap(state: MapUiState.LiveTrack) {
                     width = const(1.dp),
                 )
             }
-            val trackSource = rememberGeoJsonSource(GeoJsonData.Features(trackGeometry))
+            val pastSource = rememberGeoJsonSource(GeoJsonData.Features(pastGeometry))
             LineLayer(
-                id = "live-track",
-                source = trackSource,
+                id = "orbit-past",
+                source = pastSource,
+                color = const(colors.accent),
+                opacity = const(0.35f),
+                width = const(1.5.dp),
+                cap = const(LineCap.Round),
+                join = const(LineJoin.Round),
+            )
+            val futureSource = rememberGeoJsonSource(GeoJsonData.Features(futureGeometry))
+            LineLayer(
+                id = "orbit-future",
+                source = futureSource,
                 color = const(colors.accent),
                 width = const(2.dp),
                 // Dashed, per the design's "dashed ground-track polyline" (units: line widths).
@@ -514,7 +529,9 @@ private fun boundingBoxOf(points: List<LatLng>): BoundingBox = BoundingBox(
 
 private fun LatLng.toPosition() = Position(longitude = longitude, latitude = latitude)
 
-private const val LIVE_ZOOM = 2.5 // Fits the ~4000 km-wide footprint with room around it.
+// Opens wide enough to show most of the full orbit (the world is ~512 dp wide at zoom 1, about a
+// phone screen), while the ~4000 km footprint still reads as a circle around the marker.
+private const val LIVE_ZOOM = 1.0
 private const val STATIC_FALLBACK_ZOOM = 3.0
 private val LABEL_GAP = 16.dp
 
@@ -526,6 +543,10 @@ private val HEADING_ARROW_BASE = 18.dp
 private val HEADING_ARROW_TIP = 36.dp
 private val HEADING_ARROW_HALF_WIDTH = 10.dp
 private const val HEADING_PROBE_KM = 50.0
+
+// How much of the flown orbit the live map draws behind the marker: about 6,800 km at LEO speed,
+// enough to show where the satellite came from without a second full line across the map.
+private val PAST_TAIL_MILLIS = TimeUnit.MINUTES.toMillis(15)
 
 private val MAP_OPTIONS = MapOptions(
     // Attribution stays on (required by the CARTO/OSM tile terms); the scale bar would crowd the

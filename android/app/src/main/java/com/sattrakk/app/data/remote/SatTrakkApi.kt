@@ -15,7 +15,7 @@ import com.sattrakk.app.data.remote.dto.SatelliteDto
 import com.sattrakk.app.data.remote.dto.ScheduleCalendarRequest
 import com.sattrakk.app.data.remote.dto.SettingsDto
 import com.sattrakk.app.data.remote.dto.TleDto
-import com.sattrakk.app.data.remote.dto.TrackDto
+import com.sattrakk.app.data.remote.dto.OrbitTrackDto
 import com.sattrakk.app.data.remote.dto.UpdateAlertMinutesRequest
 import com.sattrakk.app.data.remote.dto.UpdateFcmTokenRequest
 import com.sattrakk.app.data.remote.dto.UpdateNoteRequest
@@ -69,8 +69,10 @@ interface SatTrakkApi {
     @GET("api/satellites/{id}/position")
     suspend fun getSatellitePosition(@Path("id") id: UUID): Response<PositionDto>
 
-    @GET("api/satellites/{id}/track")
-    suspend fun getSatelliteTrack(@Path("id") id: UUID): Response<TrackDto>
+    // Full ground track, one orbit back to one orbit ahead, SGP4 from the latest TLE (not N2YO,
+    // which caps a track at 300 s). The web frontend still uses the N2YO /track; this app does not.
+    @GET("api/satellites/{id}/orbit")
+    suspend fun getSatelliteOrbit(@Path("id") id: UUID): Response<OrbitTrackDto>
 
     // ---- TLEs ----
 
@@ -109,7 +111,7 @@ interface SatTrakkApi {
     suspend fun getPassById(@Path("id") id: UUID): Response<PassDto>
 
     // Fixed, TleId-anchored ground track for one already-calculated pass — distinct from
-    // getSatelliteTrack above. See backend CLAUDE.md, "Two different /track endpoints."
+    // getSatelliteOrbit above. See backend CLAUDE.md, "Two different /track endpoints."
     @GET("api/passes/{id}/track")
     suspend fun getPassTrack(@Path("id") id: UUID): Response<PassTrackDto>
 

@@ -1,6 +1,7 @@
 package com.sattrakk.app.ui.map
 
 import com.sattrakk.app.domain.model.LatLng
+import com.sattrakk.app.domain.model.TrackPoint
 import com.sattrakk.app.domain.util.GeoUtils
 import kotlin.math.abs
 import kotlin.math.sign
@@ -95,32 +96,51 @@ internal object MapGeometry {
         return unwrapped
     }
 
-    /** [lon] shifted by a multiple of 360° to lie within 180° of [reference]. */
     /**
-     * The satellite's direction of flight at [position], as a true-north bearing in degrees
-     * [0, 360), read off the live ground track rather than computed from orbital elements.
+     * The satellite's direction of flight at [timestampEpochMillis], as a true-north bearing in
+     * degrees [0, 360), read off the orbit track rather than computed from orbital elements.
      *
-     * [track] must be in chronological order (the backend returns it that way, one point per
-     * second). The track point nearest [position] is found, and the bearing is taken along the
-     * track segment leaving it (or arriving at it, if it's the last point). Nearest-point matching
-     * rather than timestamp matching, because the live track is cached for 5 minutes on the
-     * backend and the position for 30 s, so the position's timestamp isn't guaranteed to fall
-     * inside the track's time range. The heading barely changes over one segment.
+     * [track] must be in chronological order (the backend returns it that way, 30 s apart). The
+     * bearing is taken along the track segment whose time span contains the timestamp, or the
+     * first/last segment when the timestamp falls before/after the whole track. Matched by time,
+     * not by nearest point: the track spans two orbits, and the past and future orbits cross each
+     * other, so near a crossing the nearest point can lie on the wrong orbit.
      *
      * Returns null when there's no usable segment: fewer than 2 points, or the chosen segment's
      * two points are identical.
      */
-    fun headingDegrees(position: LatLng, track: List<LatLng>): Double? {
+    fun headingDegrees(timestampEpochMillis: Long, track: List<TrackPoint>): Double? {
         if (track.size < 2) return null
-        val nearestIndex = track.indices.minBy { GeoUtils.distanceKm(position, track[it]) }
-        val (from, to) = if (nearestIndex < track.lastIndex) {
-            track[nearestIndex] to track[nearestIndex + 1]
-        } else {
-            track[nearestIndex - 1] to track[nearestIndex]
-        }
+        val lastAtOrBefore = track.indexOfLast { it.timestampEpochMillis <= timestampEpochMillis }
+        val start = lastAtOrBefore.coerceIn(0, track.lastIndex - 1)
+        val from = LatLng(track[start].latitude, track[start].longitude)
+        val to = LatLng(track[start + 1].latitude, track[start + 1].longitude)
         if (from == to) return null
         return GeoUtils.initialBearingDegrees(from, to)
     }
+
+    /**
+     * Splits a chronological [track] at [timestampEpochMillis] into a short tail already flown and
+     * the part ahead. The tail keeps only points from the last [pastTailMillis] before the
+     * timestamp: the track includes a full orbit flown, but drawing all of it made a third line
+     * across the band near the marker, since each orbit covers about 390° of longitude. Both halves
+     * are joined at [joint] (the marker's actual position), so the two lines meet exactly at the dot
+     * rather than at the nearest 30 s track sample. Points at exactly the timestamp count as flown.
+     */
+    fun splitAtTime(
+        track: List<TrackPoint>,
+        timestampEpochMillis: Long,
+        joint: LatLng,
+        pastTailMillis: Long,
+    ): Pair<List<LatLng>, List<LatLng>> {
+        val (flown, ahead) = track.partition { it.timestampEpochMillis <= timestampEpochMillis }
+        val tailStart = timestampEpochMillis - pastTailMillis
+        val past = flown.filter { it.timestampEpochMillis >= tailStart }.map { LatLng(it.latitude, it.longitude) } + joint
+        val future = listOf(joint) + ahead.map { LatLng(it.latitude, it.longitude) }
+        return past to future
+    }
+
+    /** [lon] shifted by a multiple of 360° to lie within 180° of [reference]. */
 
     private fun nearest(lon: Double, reference: Double): Double {
         var result = lon

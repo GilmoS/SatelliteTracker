@@ -148,6 +148,39 @@ public class PassService : IPassService
         return Result<IEnumerable<GroundTrackPoint>>.Success(points);
     }
 
+    // 30 s between orbit-track points: roughly 230 km apart for a LEO satellite, smooth at world
+    // zoom, and about 400 points for the two-period window.
+    private const int OrbitTrackStepSeconds = 30;
+
+    public async Task<Result<OrbitTrack>> GetOrbitTrackAsync(Guid satelliteId, DateTime nowUtc, TimeSpan extraAhead)
+    {
+        var satResult = await _satelliteRepo.GetByIdAsync(satelliteId);
+        if (!satResult.IsSuccess)
+            return Result<OrbitTrack>.Failure(satResult.Error!);
+
+        // Unlike GetPassTrackAsync, this is a "now" view, so it uses the satellite's latest TLE.
+        var tleResult = await _tleRepo.GetLatestByNoradIdAsync(satResult.Value!.NoradId);
+        if (!tleResult.IsSuccess)
+            return Result<OrbitTrack>.Failure(tleResult.Error!);
+
+        TleData tleData;
+        try
+        {
+            tleData = TleParser.Parse(tleResult.Value!.Line1, tleResult.Value!.Line2);
+        }
+        catch (TleParseException ex)
+        {
+            return Result<OrbitTrack>.Failure($"TLE parse error: {ex.Message}");
+        }
+
+        // MeanMotion is in revs/day, so 1440 / MeanMotion is the orbital period in minutes.
+        double periodMinutes = 1440.0 / tleData.MeanMotion;
+        var period = TimeSpan.FromMinutes(periodMinutes);
+        var points = GroundTrackCalculator.ComputeGroundTrack(
+            tleData, nowUtc - period, nowUtc + period + extraAhead, OrbitTrackStepSeconds);
+        return Result<OrbitTrack>.Success(new OrbitTrack(satResult.Value!.NoradId, periodMinutes, points));
+    }
+
     // Computes the revolution number at a given pass time by advancing the TLE's Revolution
     // Number at Epoch by however many full orbits elapse between the TLE epoch and the pass AOS.
     // MeanMotion is in revs/day, so 1440 / MeanMotion gives the orbital period in minutes.
