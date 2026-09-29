@@ -1,0 +1,83 @@
+name: Android CI
+
+# Same triggers as the backend's ci.yml: every push to any branch (feature/*, fix/*, develop, and
+# merges into develop), plus PRs into main.
+on:
+  push:
+  pull_request:
+    branches: [ main ]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: android
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # JDK 21: gradle/gradle-daemon-jvm.properties pins the Gradle daemon to toolchainVersion=21.
+      # The app itself compiles to JVM 17 bytecode (app/build.gradle.kts).
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # No gradlew scripts are committed, so read the pinned version from the wrapper properties
+      # (the single source of truth) and let setup-gradle install that exact Gradle.
+      - name: Read Gradle version
+        id: gradle-version
+        run: |
+          version=$(sed -n 's/^distributionUrl=.*gradle-\([0-9.]*\)-bin\.zip$/\1/p' gradle/wrapper/gradle-wrapper.properties)
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Also caches ~/.gradle (dependencies, wrapper dists). Only develop and main write the cache;
+      # other branches read it. The project directory, where the secret files live, is never cached.
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ steps.gradle-version.outputs.version }}
+          cache-read-only: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
+
+      # Both files exist only on this runner for this run: gitignored, never uploaded, never printed.
+      # Secrets go through env vars, not inline ${{ }} in the script.
+      - name: Reconstruct google-services.json and local.properties
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+          MAP_API_KEY: ${{ secrets.MAP_API_KEY }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON_BASE64" ] || [ -z "$MAP_API_KEY" ]; then
+            echo "::error::GOOGLE_SERVICES_JSON_BASE64 and MAP_API_KEY repository secrets are both required"
+            exit 1
+          fi
+          # The secret may hold the JSON itself (as it currently does) or its base64 encoding. Base64
+          # input tolerates Windows-produced encodings (CRLF wrapping, certutil's -----BEGIN/END-----
+          # lines) and URL-safe base64 (-_ instead of +/).
+          trimmed=$(printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" | sed 's/^[[:space:]]*//')
+          if [ "${trimmed:0:1}" = "{" ]; then
+            printf '%s\n' "$GOOGLE_SERVICES_JSON_BASE64" > app/google-services.json
+          elif encoded=$(printf '%s\n' "$GOOGLE_SERVICES_JSON_BASE64" | tr -d '\r' | grep -v '^-----' | tr -d ' \t\n' | tr -- '-_' '+/'); \
+               ! printf '%s' "$encoded" | base64 --decode > app/google-services.json 2>/dev/null; then
+            # Describe the value's shape without printing any of it.
+            case "$encoded" in \{*) looks_json=yes ;; *) looks_json=no ;; esac
+            bad=$(printf '%s' "$encoded" | tr -d 'A-Za-z0-9+/=' | wc -c)
+            echo "::error::GOOGLE_SERVICES_JSON_BASE64 is not valid base64 (length ${#encoded}, ${bad} non-base64 chars, starts with '{': ${looks_json})"
+            exit 1
+          fi
+          jq empty app/google-services.json
+          # The decoded JSON's values aren't covered by the base64 secret's own masking.
+          jq -r '.. | .current_key? // empty' app/google-services.json | while read -r key; do
+            echo "::add-mask::$key"
+          done
+          printf 'MAP_API_KEY=%s\n' "$MAP_API_KEY" >> local.properties
+
+      - name: Build and test
+        run: gradle compileDebugKotlin testDebugUnitTest assembleDebug
