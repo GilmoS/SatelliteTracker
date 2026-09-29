@@ -1513,13 +1513,16 @@ Any future repository that adds its own mutating endpoint should follow this sam
 ### `notify` is local-only state, not on `PassDto`
 
 `PassDto` (the list/detail response shape) has no `notify` field at all — effective per-tester
-notify status is sparse opt-out state living server-side in `PassSubscription` (repo-root
-CLAUDE.md), not on `Pass`. `PassEntity.notify` and domain `Pass.notify` exist purely as
-client-cached state: `PassRepository.getPasses`' network-success path merges in whatever `notify`
-value is already cached locally for each pass id (defaulting to `true`, the backend's own sparse
-default, only for a pass id seen for the first time) before writing the refreshed rows — without
-this merge, a tester's own `setNotify` toggle would be silently reverted by the very next
-TTL-driven or force-refreshed fetch.
+notify status is sparse **opt-in** state living server-side in `PassSubscription` (repo-root
+CLAUDE.md), not on `Pass`, and there is no `GET` for it (only `PATCH /api/passes/{id}/notify`).
+`PassEntity.notify` and domain `Pass.notify` exist purely as client-cached state:
+`PassRepository.getPasses`' network-success path merges in whatever `notify` value is already
+cached locally for each pass id (defaulting to `PassRepository.NEW_PASS_NOTIFY_DEFAULT = false`,
+matching the backend's opt-in default, only for a pass id seen for the first time) before writing
+the refreshed rows — without this merge, a tester's own `setNotify` toggle would be silently
+reverted by the very next TTL-driven or force-refreshed fetch. `getPassById` and `getPassHistory`
+use the same constant. It was `true` until the notify-default fix (see "Notify default — Android
+followed the backend's opt-in flip late" at the end of this file).
 
 ### `PassRepository.getPassById` — point lookup, deliberately outside the TTL/CacheMetadata system
 
@@ -1529,9 +1532,9 @@ it isn't in Room yet. It follows a Room-first/network-fallback shape like the li
 **not** wired into `cachedNetworkFirst`/`CacheMetadataEntity` at all:
 
 1. `PassDao.getById(passId)` — if found, return it mapped to domain immediately. No network call.
-2. If not found, `GET /api/passes/{id}` via `safeApiCall`, mapped to domain with `notify = true`
-   (no prior local value to preserve — same default-for-new-pass rule `getPasses`' merge already
-   uses).
+2. If not found, `GET /api/passes/{id}` via `safeApiCall`, mapped to domain with
+   `notify = NEW_PASS_NOTIFY_DEFAULT` (`false`; no prior local value to preserve — same
+   default-for-new-pass rule `getPasses`' merge already uses).
 3. On success: upsert the single row into Room via the new `PassDao.upsert` (single-row
    insert-or-replace — **not** `replaceForSatellite`, which deletes and replaces every row for a
    satellite and would wipe out the rest of that satellite's already-cached passes for a fetch
@@ -2001,7 +2004,9 @@ derived `now`, plus a dedicated page-boundary regression test (exactly one page 
 turned out not to be the actual cause. Verifying the SQL predicate itself end-to-end would need a
 real (in-memory) Room database — this project has no Room-backed DAO test (instrumented or
 otherwise) for `PassDao` at all yet, only repository-level tests that mock the DAO; flagged rather
-than invented ad hoc for this round.
+than invented ad hoc for this round. (**Since added:** the instrumented `PassDaoTest`, from the
+notify-default fix, covers `getNotifyEnabled` only. `getFilteredForSatellite`'s `nowMillis` bound
+still has no SQL-level test; the same in-memory setup would cover it.)
 
 ### 6. Elapsed-ratio ring — fully removed, not deferred as a placeholder
 
@@ -2317,13 +2322,10 @@ Both nav args are read from `SavedStateHandle` as **optional** (`passId`, `satel
   `map?passId=&satelliteId=`, and every entry point passes one (see "Map screen — MapLibre Compose
   UI + navigation" below). The FAB and bottom-nav Map item pass the Dashboard's
   `selectedSatellite`.
-- **The drawer query is only as good as the local `notify` value.** `PassRepository` still
-  defaults a first-seen pass to `notify = true` (in `getPasses`, `getPassById` and
-  `getPassHistory`) from the old opt-out era, while the backend is now opt-in. So
-  `getNotifyEnabled()` will return nearly every cached pass, not just the ones the tester turned
-  on. The query also has no time bound, so past passes are included. Both need a decision before
-  the drawer UI ships. Not changed here, because it alters existing repository behavior outside
-  this task's scope.
+- ~~**The drawer query is only as good as the local `notify` value.**~~ **Default resolved** by
+  the notify-default fix (see the end of this file): first-seen passes are now `notify = false`
+  in all three `PassRepository` paths. **Still open:** the query has no time bound, so past
+  opted-in passes stay listed, and it doesn't respect hidden satellites.
 
 ### Testing
 
@@ -2552,9 +2554,9 @@ with no new repository method.
   Flow 1, and a Flow 2 catalog failure still yielding `StaticPassTrack`.
 
 **Flagged, not resolved:**
-- **Drawer contents**: still subject to the data layer's open item above. First-seen passes
-  default to `notify = true` locally while the backend is opt-in, and the query has no time bound,
-  so the drawer will list most cached passes, including past ones.
+- **Drawer contents**: the `notify = true` default is fixed (see the end of this file), so the
+  drawer lists only passes the tester opted into. Still open: the query has no time bound, so
+  past opted-in passes stay listed.
 
 ### Testing
 
@@ -2673,8 +2675,11 @@ delivery) or a behavior/product decision, listed below as a follow-up rather tha
 1. ~~**Map basemap: CARTO keyless tiles are now watermarked.**~~ **Resolved for Android** by
    wiring in a CARTO key (see "CARTO basemap API key" below). The web frontend
    (`SatelliteMap.tsx`) is still keyless and still watermarked.
-2. **Drawer / `notify` default.** `PassRepository` still defaults first-seen passes to
-   `notify = true` locally, while the backend is opt-in, so:
+2. ~~**Drawer / `notify` default.**~~ **Resolved** (default flipped and the stale cache dropped;
+   see "Notify default — Android followed the backend's opt-in flip late" at the end of this
+   file). The time bound and hidden-satellite parts at the end of this item are still open.
+   Original finding: `PassRepository` still defaulted first-seen passes to `notify = true`
+   locally, while the backend is opt-in, so:
    - the drawer lists nearly every cached pass;
    - **Pass Details shows "Notify me" ON for passes the backend will never notify about.**
      Verified on device: a fresh tester, with no opt-ins except the synthetic one, saw every real
@@ -2737,3 +2742,97 @@ each `@2x` tile counts as a request.
   rendered real Dark Matter tiles with country and city labels, the footprint, and the dashed
   track, both zoomed out and zoomed in. There was no watermark.
 - The web frontend is **not** changed and is still keyless.
+
+---
+
+## Notify default — Android followed the backend's opt-in flip late (2026-09-29)
+
+Branch `fix/notify-default-android-sync`. The symptom: new passes kept showing as notified, and the
+Map drawer listed nearly every cached pass. Closes follow-up 2 of the post-merge integration QA
+above (except the parts noted there as still open).
+
+### Diagnosis, in order
+
+**Backend — ruled out.** Checked live against the local API with a throwaway QA tester (deleted
+afterwards). On a pass with no `PassSubscription` row, `PATCH /notify {false}` returned `false`;
+`{true}` returned `true`; `{false}` again returned `false` and deleted the row. The backend's
+opt-in default is correct.
+
+**Why Android can't just trust the backend.** `PassDto` has no `notify` field (per-tester state
+lives in `PassSubscription`, not on `Pass`), and there is no `GET /api/passes/{id}/notify` (it
+returns `405`). So the app has no way to *read* a pass's effective status; it only learns it from
+the `PATCH` response when the tester toggles. That is why the local merge in
+`PassRepository` has to exist: the client has to guess a first-seen pass's value and preserve it
+afterwards. The merge stays; only its guess was wrong.
+
+**Hypothesis 1 — the root cause.** The guess was still `true`, the old opt-out default. It
+predated the backend flip and wasn't in one place, but in **three**:
+
+| Path | Code before the fix |
+|---|---|
+| `getPasses` (merge) | `cachedNotifyById[dto.id] ?: true` |
+| `getPassById` (cold fetch) | `dto.toDomain(notify = true)` |
+| `getPassHistory` (merge) | `passDao.getById(id)?.notify ?: true` |
+
+Every pass the app fetched through any of the three was written to Room as `notify = 1`.
+
+**Hypothesis 2 — the drawer query: not a separate cause.** `PassDao.getNotifyEnabled()` is
+`SELECT * FROM passes WHERE notify = 1`, reading the local column directly. It has no join and no
+`NULL` handling (the column is non-null), so it only showed what hypothesis 1 wrote.
+
+**Hypothesis 3 — the Room schema: not a cause.** `PassEntity.notify` is `val notify: Boolean`
+with no Kotlin default and no `@ColumnInfo(defaultValue)`. The instrumented `PassDaoTest` checks
+`PRAGMA table_info(passes)`: `notify` has no SQL default.
+
+### A second, hidden half: rows already on devices
+
+Flipping the default alone wouldn't have emptied the drawer. The merge **preserves** whatever is
+cached, so a pass already stored as `notify = 1` would stay `1` on every refresh. History rows are
+only ever upserted, never replaced, and the drawer has no time bound, so they would have stayed
+listed indefinitely. The fix bumps `AppDatabase` from 3 to 4 with no schema change, and the existing
+`fallbackToDestructiveMigration` drops the cache. Everything in Room is a refetchable cache.
+
+**Accepted tradeoff:** a pass the tester genuinely opted into (after the backend flip) shows as
+off locally after the upgrade. The backend still has the opt-in and still notifies. Toggling it
+again restores the local state (`PATCH true` is idempotent). This is rare in practice: under the
+old default everything already showed "on", so there was nothing to opt into.
+
+### The fix
+
+- One `private const val NEW_PASS_NOTIFY_DEFAULT = false` in `PassRepository`'s companion, used by
+  all three paths, so they can't drift apart again. Its doc comment explains why it must match the
+  backend's `PassSubscription` default.
+- Stale "defaults to true / opt-out" wording corrected in `PassRepository`, `PassEntity`,
+  `PassMappers`, `PassDao` and this file.
+
+### Same class of bug as before
+
+This is the same failure pattern as the `HiddenSatellitesStore`/Dashboard gap from round 1:
+a behavior change landed in one place (there, a new store only `SettingsViewModel` observed; here,
+a backend default flip), and another place quietly kept the old assumption. The backend flip was
+fully verified *on the backend* (job, repository, inverted tests), which is why this was missed.
+The backend's own tests cannot see a client-side copy of the default. **When a backend default or
+semantic changes, grep the Android side for its own copy of that assumption** (here, `?: true`
+next to `notify`).
+
+### Tests
+
+- **Regression** (`PassRepositoryTest`): a brand-new pass (no cache entry, and on the backend no
+  subscription row) comes back `notify = false` from a fresh `getPasses()` fetch, *and* the row
+  written to Room is `false`. A new mixed-fetch case checks a cached opt-in (`true`) staying
+  `true` while three new passes come back `false`.
+- **Inverted, not duplicated:** `getPassById`'s cold fetch and `getPassHistory`'s new-pass case
+  now assert `false`. The two "preserves the cached value" cases now preserve a cached **`true`**:
+  a cached `false` equals the new default, so the old assertion could no longer tell preservation
+  from defaulting.
+- Temporarily restoring `true` made 4 tests fail (the regression test, the mixed fetch,
+  `getPassById` and history), so they do catch this bug.
+- **Drawer query** (`androidTest/.../PassDaoTest`, instrumented, real in-memory Room — the first
+  Room-backed DAO test in the project): only `notify = 1` rows, across satellites, in AOS order;
+  empty when nothing is opted in; follows `updateNotify` both ways; no SQL default on the column.
+
+Verified in this environment: `:app:testDebugUnitTest` — **238 tests, 0 failures** (237 before
++1). `PassDaoTest` — **4/4 green** on the `Pixel_10` emulator. The full
+`:app:connectedDebugAndroidTest` run has one failure, `MainActivityTest.dashboardIsStartDestination`.
+It is **pre-existing and unrelated**: it fails identically on unmodified `develop` code, because
+a fresh test install has no API key and opens on Tester Entry, not Dashboard. Not fixed here.
