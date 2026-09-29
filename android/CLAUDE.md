@@ -33,8 +33,10 @@ below), including two small `PassDetailsUiState`/`PassDetailsViewModel` addition
 (`satelliteName`/`satelliteNoradId` resolution and the `exportToCalendar()`/`stubMessage` stub).
 **This completes Step 3's full screen set** — Dashboard, Full Pass List, Settings, and Pass
 Details all now have real Composable content. **Map now has real content too** (MapLibre Compose,
-Milestone F — see "Map screen — MapLibre Compose UI + navigation" near the end of this file);
-**Sky View remains placeholder-only**.
+Milestone F — see "Map screen — MapLibre Compose UI + navigation" near the end of this file).
+**Sky View has its Step 7 groundwork only**: a device compatibility check (ARCore + rotation-vector
+sensor) with an informational screen, and no camera or AR. See "Sky View groundwork" at the end of
+this file.
 
 ---
 
@@ -102,6 +104,8 @@ com.sattrakk.app/
 │   │                                HistoryLoadState)
 │   ├── permission/
 │   │   └── NotificationPermissionManager.kt  Read-only POST_NOTIFICATIONS status wrapper (Settings screen)
+│   ├── device/
+│   │   └── ArCompatibilityChecker.kt  ARCore availability + rotation-vector sensor check (Sky View)
 │   ├── push/                       FCM (Step 5) — see "FCM push notifications" below
 │   │   ├── SatTrakkMessagingService.kt  onNewToken -> pending slot; foreground notification builder
 │   │   ├── FcmTokenSyncObserver.kt Process-lifetime pending-token -> backend sync
@@ -121,7 +125,8 @@ com.sattrakk.app/
 │   │   ├── Satellite.kt, Pass.kt, Note.kt, PassTrack.kt, NotifyStatus.kt (step 2.2)
 │   │   ├── UserSettings.kt         (step 2.3)
 │   │   ├── TimeWindow.kt, PassHistoryFilter.kt, PagedResult.kt (Full Pass List screen)
-│   │   └── SatellitePosition.kt    SatellitePosition, TrackPoint, LatLng (Map screen)
+│   │   ├── SatellitePosition.kt    SatellitePosition, TrackPoint, LatLng (Map screen)
+│   │   └── ArCoreCompatibility.kt  UI-facing wrapper of ArCoreApk.Availability (Sky View)
 │   ├── util/                       PassFilters.kt, GeoUtils.kt (Map footprint geometry)
 │   └── mapper/                     Dto <-> Entity <-> domain extension functions (step 2.2/2.3),
 │                                    PassHistoryFilterMappers.kt (Full Pass List screen),
@@ -134,7 +139,8 @@ com.sattrakk.app/
 │   ├── DataStoreModule.kt          Preferences DataStore singleton + HiddenSatellitesStore/FcmTokenStore/
 │   │                                NotificationPromptStore bindings
 │   ├── PermissionModule.kt         NotificationPermissionManager binding (Settings screen)
-│   └── PushModule.kt               FcmTokenFetcher binding (Step 5)
+│   ├── PushModule.kt               FcmTokenFetcher binding (Step 5)
+│   └── DeviceModule.kt             ArCompatibilityChecker binding (Sky View)
 ├── ui/
 │   ├── theme/                       Color.kt, Shape.kt, Type.kt, Theme.kt — M3 tokens from the
 │   │                                design MCP (see below)
@@ -163,7 +169,8 @@ com.sattrakk.app/
 │   ├── map/                         MapUiState + MapViewModel (data/logic layer), MapScreen.kt
 │   │                                (MapLibre Compose UI, both flows + drawer), MapGeometry.kt
 │   │                                (antimeridian/polar geometry for rendering)
-│   └── skyview/SkyViewScreen.kt     Placeholder only (Milestone F)
+│   └── skyview/                     SkyViewUiState + SkyViewViewModel + SkyViewScreen: compatibility
+│                                    check only (Step 7 groundwork); AR itself is a future milestone
 ├── navigation/
 │   ├── SatTrakkApp.kt               App root: SatTrakkTheme + SessionManager switch (see below)
 │   ├── SatTrakkNavHost.kt           SatTrakkDestination routes + MainNavHost (Scaffold + bottom nav)
@@ -472,7 +479,7 @@ up, omitted, or approximated; nothing was assumed from the mockup alone.
 |---|---|---|---|
 | `dashboard` | `composable` | none | **Real content** (this task) |
 | `map?passId={passId}&satelliteId={satelliteId}` | `composable` | both optional (nullable) | **Real content** (Milestone F — see the Map UI section near the end of this file) |
-| `sky_view` | `composable` | none | Placeholder (Milestone F) |
+| `sky_view` | `composable` | none | Compatibility check only (Step 7 groundwork — see "Sky View groundwork" at the end of this file) |
 | `settings` | `composable` | none | Placeholder (pending a future UI task) |
 | `full_pass_list/{satelliteId}/{satelliteName}` | `composable` | both required | Placeholder (pending a future UI task) |
 | `pass_details/{passId}` | **`dialog`**, not `composable` | required | Placeholder (pending a future UI task) |
@@ -2947,3 +2954,139 @@ isn't in the drawer, so it has nothing to highlight. That's consistent, not a bu
 Verified in this environment: `:app:testDebugUnitTest` — **247 tests, 0 failures** (238 before
 + 9) — and `:app:assembleDebug`, both `BUILD SUCCESSFUL`. Not run: `:app:connectedDebugAndroidTest`
 and on-device QA of the new state.
+
+---
+
+## Sky View groundwork — compatibility check only (Milestone E, Step 7, 2026-09-29)
+
+Branch `feature/skyview-groundwork`. This replaces the one-line `SkyViewScreen` placeholder with a
+device compatibility check and an informational result. **This is groundwork only.** There is no
+camera preview, no ARCore `Session`, and no AR rendering. The full camera/AR mode is a separate
+future milestone (F).
+
+### No runtime permission exists or is requested at this stage
+
+This corrects an earlier assumption that Sky View would need a permission flow first. Neither
+check needs one:
+
+- **Motion sensors never require a runtime permission.** Android's documentation says this
+  directly, unlike camera, location or notifications. Reading `SensorManager.getDefaultSensor(
+  TYPE_ROTATION_VECTOR)` needs nothing.
+- **`ArCoreApk.checkAvailabilityAsync` needs no permission.** It only asks whether the device is
+  ARCore-certified and whether the "Google Play Services for AR" APK is installed and recent
+  enough. It never opens the camera.
+
+So there is **no** permission request, soft-ask, permission-status UI, or settings toggle here, by
+design. There is nothing to grant or revoke. Don't mirror the Settings screen's push-notification
+permission card: it doesn't apply. The manifest's existing `CAMERA` declaration (from the Milestone
+E skeleton) is still **not requested at runtime anywhere**. The future AR milestone will need to
+request it, and that's where camera-permission UI belongs.
+
+### `ArCompatibilityChecker` (`data/device/`)
+
+The one place that touches the ARCore SDK and `SensorManager`, so `SkyViewViewModel` stays free of
+`Context` (same reasoning as `NotificationPermissionManager`). It is bound in `di/DeviceModule.kt`.
+
+- **`checkArCore()`** wraps `ArCoreApk.checkAvailabilityAsync` in a suspend call. That API can
+  report `UNKNOWN_CHECKING` while ARCore is still fetching its device profile. Google's sample
+  re-queries after about 200 ms, and so does this: up to 10 tries, 200 ms apart. A check still
+  transient after that ends as `UNKNOWN`.
+- **`hasRotationVectorSensor()`**: `getDefaultSensor(TYPE_ROTATION_VECTOR) != null`, and a missing
+  `SensorManager` counts as `false`.
+- `AndroidArCompatibilityChecker` has an `internal` constructor that takes `ArCoreApk` and
+  `SensorManager?` directly, which is what the tests mock. Hilt uses an `@Inject` secondary
+  constructor that resolves `ArCoreApk.getInstance()` and the system service itself.
+
+### `ArCoreCompatibility`: `ArCoreApk.Availability` mapped, not collapsed to a boolean
+
+| `ArCoreApk.Availability` (ARCore 1.56.0) | `ArCoreCompatibility` |
+|---|---|
+| `SUPPORTED_INSTALLED` | `SUPPORTED` |
+| `SUPPORTED_NOT_INSTALLED` | `SUPPORTED_APK_NOT_INSTALLED` |
+| `SUPPORTED_APK_TOO_OLD` | `SUPPORTED_APK_TOO_OLD` |
+| `UNSUPPORTED_DEVICE_NOT_CAPABLE` | `UNSUPPORTED` |
+| `UNKNOWN_ERROR`, `UNKNOWN_TIMED_OUT`, `UNKNOWN_CHECKING` (after retries) | `UNKNOWN` |
+
+**`UNKNOWN` is kept separate from `UNSUPPORTED` on purpose.** It usually means a first check with no
+network, not a verdict on the device, so telling the user "your device doesn't support AR" would be
+wrong. The screen says the check couldn't be completed and will run again.
+
+### `SkyViewViewModel` + `SkyViewUiState` (`ui/skyview/`)
+
+- `SkyViewUiState` is `Checking` or `Result(arCoreStatus, hasRotationVectorSensor)`, as specified.
+  `Result` also has a computed `support: SkyViewSupport`, the screen's verdict. It's derived in
+  the state (like `SettingsUiState.sendPushEnabled`) so the precedence is unit-tested rather than
+  buried in the Composable:
+  1. No rotation-vector sensor → `UNSUPPORTED_DEVICE`. Missing hardware beats every ARCore state,
+     since no install can fix it.
+  2. ARCore `UNSUPPORTED` → `UNSUPPORTED_DEVICE`.
+  3. APK not installed / too old → `ARCORE_NOT_INSTALLED` / `ARCORE_TOO_OLD`.
+  4. ARCore `UNKNOWN` → `UNDETERMINED`.
+  5. Otherwise → `SUPPORTED`.
+- **The check runs every time the screen is entered, and is never cached or persisted.**
+  `SkyViewScreen` calls `checkCompatibility()` from `LifecycleEventEffect(ON_RESUME)` on its nav
+  entry. That fires on first entry (a new observer is caught up to `RESUMED`), on every return to
+  the tab, and on coming back from the Play Store. It isn't called from `init`: Sky View is a
+  bottom-nav tab (`restoreState = true`), so its ViewModel can survive tab switches, and the
+  ARCore APK state can change between visits.
+- A re-check cancels any check still in flight, and it leaves the previous `Result` on screen
+  until the new one arrives, so returning to the tab doesn't flash the spinner. `Checking` is only
+  seen on the very first check.
+
+### `SkyViewScreen`
+
+Built in the app's existing M3 language (no design source exists for this screen). It uses a
+Settings-style `TopAppBar` + divider, `titleSmall`/`primary` section labels, and
+`surfaceContainerLow` cards with `shapes.large`. There are two cards:
+
+- **"AR compatibility"**: one message per `SkyViewSupport`:
+  - supported → "full AR mode coming in a future update";
+  - ARCore not installed / too old → says so, distinct from unsupported;
+  - unsupported (either check fails) → "This device doesn't support AR features";
+  - undetermined → "couldn't check, will retry next time".
+- **"Device check"**: the two raw results (ARCore status, orientation sensor), `primary` when OK.
+
+**Play Store link: included.** For the not-installed and too-old cases, a button opens the "Google
+Play Services for AR" (`com.google.ar.core`) listing with a plain `ACTION_VIEW` `market://` intent.
+It falls back to the `https://play.google.com` URL and does nothing if neither resolves. It is
+deliberately **not** `ArCoreApk.requestInstall()`, which drives ARCore's own install flow and
+belongs to the AR milestone. The ON_RESUME re-check picks up the new state when the user returns.
+
+### Dependency and manifest
+
+- **`com.google.ar:core` 1.56.0** (newest on Google Maven as of 2026-09-29). It's a plain Java AAR
+  whose only dependency is `androidx.annotation`, so it isn't bound by the Kotlin 2.1.20 pin that
+  holds MapLibre and kotlinx.serialization back.
+- The AAR merges in a `<queries>` block (for `com.google.ar.core` and the Play Store),
+  `com.google.ar.core.InstallActivity`, and a `min_apk_version` meta-data. **It adds no
+  permissions.**
+- The app manifest now declares `<meta-data android:name="com.google.ar.core"
+  android:value="optional" />` ("AR Optional"). With it, Play doesn't hide the app from devices
+  without ARCore, and ARCore isn't installed automatically with the app. The stale "declared ahead
+  of Milestone F, not used" comment on the `CAMERA`/sensor declarations was corrected.
+
+### Tests
+
+- **`SkyViewViewModelTest` (11)** runs the ViewModel over the **real** `AndroidArCompatibilityChecker`,
+  with `ArCoreApk.checkAvailabilityAsync` and `SensorManager.getDefaultSensor` mocked. Cases:
+  - `Checking` before the first check, with no query made;
+  - both present → `SUPPORTED`;
+  - APK missing, APK too old;
+  - sensor absent (including when ARCore is installable);
+  - ARCore device not capable;
+  - fully unsupported;
+  - no `SensorManager`;
+  - an `UNKNOWN_ERROR` → `UNDETERMINED`;
+  - a second check picking up an ARCore install between visits (and re-querying both).
+- **`AndroidArCompatibilityCheckerTest` (4)**: all 7 `Availability` values mapped (it also fails if
+  a future SDK adds one), `UNKNOWN_CHECKING` retried until a final answer, a stuck check giving up
+  as `UNKNOWN` after 10 tries, and no retry on a non-transient answer.
+- As in every UI task, there are no Compose UI tests: `SkyViewScreen`'s rendering, the
+  `LifecycleEventEffect` trigger, and the Play Store intent are untested.
+
+Verified in this environment: `:app:testDebugUnitTest` — **262 tests, 0 failures, 0 skipped**
+(247 before + 15) — and `:app:assembleDebug`, both `BUILD SUCCESSFUL`. **Not verified**: the check
+on a real device or emulator, i.e. actual `checkAvailabilityAsync` results and whether an emulator
+image reports the rotation-vector sensor. Suggested QA: open Sky View on the `Pixel_10` AVD and on
+a physical ARCore-certified phone, and uninstall "Google Play Services for AR" on the phone to see
+the install message and that returning from the Play Store re-checks.
