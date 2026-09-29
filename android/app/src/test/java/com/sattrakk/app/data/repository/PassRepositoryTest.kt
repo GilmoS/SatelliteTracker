@@ -109,24 +109,30 @@ class PassRepositoryTest {
         coEvery { cacheMetadataDao.get(cacheKey) } returns
             CacheMetadataEntity(cacheKey, System.currentTimeMillis() - TimeUnit.HOURS.toMillis(2))
         // Two calls: once to build the notify-preservation map, once (implicitly, not re-stubbed
-        // differently) since the repository reads the cache before fetching.
-        coEvery { passDao.getCachedForSatellite(satelliteId.toString()) } returns listOf(cachedEntity)
+        // differently) since the repository reads the cache before fetching. The cached value is
+        // the tester's own opt-in (true), the opposite of the false default, so the assertion
+        // below can only pass if the merge actually preserved it.
+        coEvery { passDao.getCachedForSatellite(satelliteId.toString()) } returns
+            listOf(cachedEntity.copy(notify = true))
         coEvery { api.getUpcomingPasses(satelliteId) } returns Response.success(listOf(passDto()))
 
         val result = repository.getPasses(satelliteId.toString())
 
         assertTrue(result is ApiResult.Success)
         val pass = (result as ApiResult.Success).data.single()
-        assertFalse(pass.notify) // preserved from cachedEntity, not reset to the true default
+        assertTrue(pass.notify) // preserved from the cached opt-in, not reset to the false default
 
         val slot = slot<List<PassEntity>>()
         coVerify(exactly = 1) { passDao.replaceForSatellite(satelliteId.toString(), capture(slot)) }
-        assertFalse(slot.captured.single().notify)
+        assertTrue(slot.captured.single().notify)
         coVerify(exactly = 1) { cacheMetadataDao.upsert(any()) }
     }
 
+    // Regression test for fix/notify-default-android-sync: the backend is opt-in (no
+    // PassSubscription row = false), but getPasses still defaulted a first-seen pass to true, so
+    // every fetched pass was cached with notify = 1 and listed in the Map drawer.
     @Test
-    fun `stale cache with network success defaults notify to true for a newly seen pass`() = runTest {
+    fun `stale cache with network success defaults notify to false for a newly seen pass`() = runTest {
         coEvery { cacheMetadataDao.get(cacheKey) } returns
             CacheMetadataEntity(cacheKey, System.currentTimeMillis() - TimeUnit.HOURS.toMillis(2))
         coEvery { passDao.getCachedForSatellite(satelliteId.toString()) } returns emptyList()
@@ -136,7 +142,28 @@ class PassRepositoryTest {
         val result = repository.getPasses(satelliteId.toString())
 
         assertTrue(result is ApiResult.Success)
-        assertTrue((result as ApiResult.Success).data.single().notify)
+        assertFalse((result as ApiResult.Success).data.single().notify)
+        // What the drawer actually reads: the row written to Room.
+        val slot = slot<List<PassEntity>>()
+        coVerify(exactly = 1) { passDao.replaceForSatellite(satelliteId.toString(), capture(slot)) }
+        assertFalse(slot.captured.single().notify)
+    }
+
+    @Test
+    fun `fresh network fetch keeps opted-in passes and defaults every new pass to false`() = runTest {
+        coEvery { cacheMetadataDao.get(cacheKey) } returns
+            CacheMetadataEntity(cacheKey, System.currentTimeMillis() - TimeUnit.HOURS.toMillis(2))
+        coEvery { passDao.getCachedForSatellite(satelliteId.toString()) } returns
+            listOf(cachedEntity.copy(notify = true))
+        val newIds = List(3) { UUID.randomUUID() }
+        coEvery { api.getUpcomingPasses(satelliteId) } returns
+            Response.success(listOf(passDto(id = passId)) + newIds.map { passDto(id = it) })
+
+        val result = repository.getPasses(satelliteId.toString())
+
+        assertTrue(result is ApiResult.Success)
+        val notifyById = (result as ApiResult.Success).data.associate { it.id to it.notify }
+        assertEquals(mapOf(passId.toString() to true) + newIds.associate { it.toString() to false }, notifyById)
     }
 
     @Test
@@ -246,7 +273,7 @@ class PassRepositoryTest {
 
             assertTrue(result is ApiResult.Success)
             assertEquals(passId.toString(), (result as ApiResult.Success).data.id)
-            assertTrue(result.data.notify) // no prior cached value -> defaults to true
+            assertFalse(result.data.notify) // no prior cached value -> defaults to false (opt-in)
 
             val slot = slot<PassEntity>()
             coVerify(exactly = 1) { passDao.upsert(capture(slot)) }
