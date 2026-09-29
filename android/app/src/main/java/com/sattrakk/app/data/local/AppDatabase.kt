@@ -20,6 +20,12 @@ import com.sattrakk.app.data.local.entity.SatelliteEntity
 // tables, then 2 -> 3 for history_load_state. No migration is provided (see DatabaseModule's
 // fallbackToDestructiveMigration) — this app hasn't shipped yet, so there's no installed data
 // worth preserving across a bump.
+//
+// 3 -> 4 changes no schema. It exists only to drop cached rows: until
+// fix/notify-default-android-sync, every first-seen pass was cached as notify = true, and
+// PassRepository's merge preserves a cached value on every refresh, so those stale rows would
+// keep filling the Map drawer even after the default was fixed. Everything else in Room is a
+// cache that refetches on demand.
 @Database(
     entities = [
         PassEntity::class,
@@ -28,7 +34,7 @@ import com.sattrakk.app.data.local.entity.SatelliteEntity
         CacheMetadataEntity::class,
         HistoryLoadStateEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
