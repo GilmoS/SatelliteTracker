@@ -58,10 +58,14 @@ jobs:
             echo "::error::GOOGLE_SERVICES_JSON_BASE64 and MAP_API_KEY repository secrets are both required"
             exit 1
           fi
-          # Tolerates Windows-produced encodings (CRLF wrapping, certutil's -----BEGIN/END----- lines)
-          # and URL-safe base64 (-_ instead of +/).
-          encoded=$(printf '%s\n' "$GOOGLE_SERVICES_JSON_BASE64" | tr -d '\r' | grep -v '^-----' | tr -d ' \t\n' | tr -- '-_' '+/')
-          if ! printf '%s' "$encoded" | base64 --decode > app/google-services.json 2>/dev/null; then
+          # The secret may hold the JSON itself (as it currently does) or its base64 encoding. Base64
+          # input tolerates Windows-produced encodings (CRLF wrapping, certutil's -----BEGIN/END-----
+          # lines) and URL-safe base64 (-_ instead of +/).
+          trimmed=$(printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" | sed 's/^[[:space:]]*//')
+          if [ "${trimmed:0:1}" = "{" ]; then
+            printf '%s\n' "$GOOGLE_SERVICES_JSON_BASE64" > app/google-services.json
+          elif encoded=$(printf '%s\n' "$GOOGLE_SERVICES_JSON_BASE64" | tr -d '\r' | grep -v '^-----' | tr -d ' \t\n' | tr -- '-_' '+/'); \
+               ! printf '%s' "$encoded" | base64 --decode > app/google-services.json 2>/dev/null; then
             # Describe the value's shape without printing any of it.
             case "$encoded" in \{*) looks_json=yes ;; *) looks_json=no ;; esac
             bad=$(printf '%s' "$encoded" | tr -d 'A-Za-z0-9+/=' | wc -c)

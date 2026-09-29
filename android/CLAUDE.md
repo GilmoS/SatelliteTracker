@@ -3136,7 +3136,7 @@ early with an `::error::` if either is missing.
 
 | Secret | Written to | Format |
 |---|---|---|
-| `GOOGLE_SERVICES_JSON_BASE64` | `android/app/google-services.json` (where the `google-services` plugin reads it; the build fails at `process*GoogleServices` without it) | The whole Firebase `google-services.json`, base64-encoded (`base64 -w0 app/google-services.json`, or `certutil -encode` / PowerShell on Windows: the decode step strips CR, whitespace, and `-----BEGIN/END-----` lines, after the first run failed on exactly that with `base64: invalid input`) |
+| `GOOGLE_SERVICES_JSON_BASE64` | `android/app/google-services.json` (where the `google-services` plugin reads it; the build fails at `process*GoogleServices` without it) | The whole Firebase `google-services.json`, **either as raw JSON (what it currently holds, despite the name) or base64-encoded** (`base64 -w0`, `certutil -encode`, PowerShell, or URL-safe; CR, whitespace and `-----BEGIN/END-----` lines are stripped). A value starting with `{` is written verbatim, anything else is decoded, and `jq` validates the result |
 | `MAP_API_KEY` | `android/local.properties`, as the line `MAP_API_KEY=<key>` | The raw CARTO key, the same value as the local `MAP_API_KEY` (see "CARTO basemap API key") |
 
 The secret is named `MAP_API_KEY`, not `MAPS_API_KEY`, to match the key name
