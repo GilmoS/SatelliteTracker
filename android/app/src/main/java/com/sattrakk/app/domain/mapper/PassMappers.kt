@@ -9,7 +9,7 @@ import java.time.ZoneOffset
 
 // `notify` isn't on PassDto at all — see PassEntity/Pass's doc comments for why. The caller
 // supplies it: PassRepository merges in whatever notify value was already cached locally
-// (defaulting to true for a pass seen for the first time) before this mapper ever runs, so the
+// (defaulting to false for a pass seen for the first time) before this mapper ever runs, so the
 // mapper itself stays a pure DTO-plus-known-value -> domain transform.
 fun PassDto.toDomain(notify: Boolean): Pass = Pass(
     id = requireNotNull(id) { "PassDto.id" }.toString(),

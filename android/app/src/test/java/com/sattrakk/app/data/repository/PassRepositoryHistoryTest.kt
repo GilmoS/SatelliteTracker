@@ -237,11 +237,11 @@ class PassRepositoryHistoryTest {
     }
 
     @Test
-    fun `network fetch preserves cached notify value and defaults to true for a newly seen pass`() = runTest {
+    fun `network fetch preserves cached notify value and defaults to false for a newly seen pass`() = runTest {
         coEvery { historyLoadStateDao.get(satelliteId.toString()) } returns null
         val existingId = UUID.randomUUID()
         val newId = UUID.randomUUID()
-        coEvery { passDao.getById(existingId.toString()) } returns entity(existingId, fixedInstant.toEpochMilli(), notify = false)
+        coEvery { passDao.getById(existingId.toString()) } returns entity(existingId, fixedInstant.toEpochMilli(), notify = true)
         coEvery { passDao.getById(newId.toString()) } returns null
         coEvery { api.getPassHistory(satelliteId, 1, 50, any(), any(), any()) } returns
             Response.success(
@@ -252,8 +252,8 @@ class PassRepositoryHistoryTest {
 
         assertTrue(result is ApiResult.Success)
         val items = (result as ApiResult.Success).data.items.associateBy { it.id }
-        assertFalse(items.getValue(existingId.toString()).notify)
-        assertTrue(items.getValue(newId.toString()).notify)
+        assertTrue(items.getValue(existingId.toString()).notify)
+        assertFalse(items.getValue(newId.toString()).notify)
         coVerify(exactly = 2) { passDao.upsert(any()) }
     }
 

@@ -7,10 +7,10 @@ import androidx.room.PrimaryKey
 // rather than java.util.UUID/OffsetDateTime so this entity needs no Room TypeConverters — mapping
 // to/from the DTO and domain model happens in the repository layer (step 2.2+).
 //
-// `notify` is NOT on PassDto — it's per-tester sparse opt-out state that lives server-side in
+// `notify` is NOT on PassDto — it's per-tester sparse opt-in state that lives server-side in
 // PassSubscription (see repo-root CLAUDE.md), not on Pass. It's a local-only column: populated
 // from PassRepository's TTL-refresh merge (preserving whatever was already cached, defaulting to
-// true for a pass seen for the first time) and updated immediately on a successful
+// false for a pass seen for the first time) and updated immediately on a successful
 // PassRepository.setNotify call. See android/CLAUDE.md's caching strategy section.
 @Entity(tableName = "passes")
 data class PassEntity(

@@ -41,10 +41,10 @@ class PassRepository @Inject constructor(
 
     // TTL-gated network-first read, keyed per satelliteId — see android/CLAUDE.md. `notify` isn't
     // on PassDto (see PassEntity's doc comment), so a fresh network fetch merges in whatever
-    // notify value is already cached locally for each pass id, defaulting to true (the backend's
-    // own sparse-opt-out default) only for a pass seen for the first time. Without this merge, a
-    // tester's own setNotify toggle would be silently reverted by the very next TTL-driven or
-    // force-refresh fetch.
+    // notify value is already cached locally for each pass id, defaulting to NEW_PASS_NOTIFY_DEFAULT
+    // (false, the backend's opt-in default) only for a pass seen for the first time. Without this
+    // merge, a tester's own setNotify toggle would be silently reverted by the very next TTL-driven
+    // or force-refresh fetch.
     suspend fun getPasses(satelliteId: String, forceRefresh: Boolean = false): ApiResult<List<Pass>> =
         cachedNetworkFirst(
             cacheKey = cacheKeyForSatellite(satelliteId),
@@ -56,7 +56,7 @@ class PassRepository @Inject constructor(
                 val cachedNotifyById = passDao.getCachedForSatellite(satelliteId)
                     .associate { it.id to it.notify }
                 safeApiCall { api.getUpcomingPasses(UUID.fromString(satelliteId)) }.mapSuccess { dtos ->
-                    dtos.map { dto -> dto.toDomain(notify = cachedNotifyById[dto.id.toString()] ?: true) }
+                    dtos.map { dto -> dto.toDomain(notify = cachedNotifyById[dto.id.toString()] ?: NEW_PASS_NOTIFY_DEFAULT) }
                 }
             },
             writeCache = { passes -> passDao.replaceForSatellite(satelliteId, passes.map { it.toEntity() }) }
@@ -82,7 +82,7 @@ class PassRepository @Inject constructor(
         // No prior local value to preserve for a pass never seen before — same default-for-new-
         // pass rule getPasses' merge logic already uses.
         val result = safeApiCall { api.getPassById(UUID.fromString(passId)) }
-            .mapSuccess { it.toDomain(notify = true) }
+            .mapSuccess { it.toDomain(notify = NEW_PASS_NOTIFY_DEFAULT) }
 
         if (result is ApiResult.Success) {
             passDao.upsert(result.data.toEntity())
@@ -181,10 +181,10 @@ class PassRepository @Inject constructor(
         return networkResult.mapSuccess { dto ->
             // Same notify-preservation rule as getPasses/getPassById's merge: a pass id already
             // cached keeps whatever notify value it has locally; a pass seen for the first time
-            // defaults to true (the backend's own sparse opt-out default).
+            // gets NEW_PASS_NOTIFY_DEFAULT.
             val passes = dto.items.orEmpty().map { passDto ->
                 val id = requireNotNull(passDto.id) { "PassDto.id" }.toString()
-                val existingNotify = passDao.getById(id)?.notify ?: true
+                val existingNotify = passDao.getById(id)?.notify ?: NEW_PASS_NOTIFY_DEFAULT
                 passDto.toDomain(notify = existingNotify)
             }
             passes.forEach { passDao.upsert(it.toEntity()) }
@@ -210,6 +210,13 @@ class PassRepository @Inject constructor(
     }
 
     private companion object {
+        // Local notify value for a pass id this device has never cached. Must match the backend's
+        // PassSubscription default: opt-in, so a missing row means false. PassDto has no notify
+        // field and there is no GET for it, so this is the only value the app has for a pass until
+        // the tester toggles it. It was true (the old opt-out default) in all three first-seen
+        // paths below, which survived the backend's opt-in flip and filled the Map drawer with
+        // every fetched pass. Used by getPasses, getPassById and getPassHistory.
+        const val NEW_PASS_NOTIFY_DEFAULT = false
         val PASSES_TTL_MILLIS = TimeUnit.HOURS.toMillis(1)
         val HISTORY_FRESHNESS_TTL_MILLIS = TimeUnit.HOURS.toMillis(1)
         const val HISTORY_PAGE_SIZE = 50
