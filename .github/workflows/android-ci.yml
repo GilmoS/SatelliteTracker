@@ -58,7 +58,9 @@ jobs:
             echo "::error::GOOGLE_SERVICES_JSON_BASE64 and MAP_API_KEY repository secrets are both required"
             exit 1
           fi
-          printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > app/google-services.json
+          # Tolerates Windows-produced encodings: CRLF line wrapping and certutil's -----BEGIN/END----- lines.
+          printf '%s\n' "$GOOGLE_SERVICES_JSON_BASE64" | tr -d '\r' | grep -v '^-----' | tr -d ' \t\n' \
+            | base64 --decode > app/google-services.json
           jq empty app/google-services.json
           # The decoded JSON's values aren't covered by the base64 secret's own masking.
           jq -r '.. | .current_key? // empty' app/google-services.json | while read -r key; do

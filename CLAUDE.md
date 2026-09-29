@@ -542,7 +542,9 @@ findings from that run:
 | feature/\*  | One feature per branch         |
 | fix/\*      | Bug fixes                      |
 
-CI runs on GitHub Actions: restore → build → test on every push/PR to main.
+CI runs on GitHub Actions: restore → build → test on every push/PR to main (`ci.yml`, backend).
+`android-ci.yml` runs the Android compile + JVM unit tests + debug build on the same triggers;
+see `android/CLAUDE.md` ("GitHub Actions CI").
 
 ---
 

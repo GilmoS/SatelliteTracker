@@ -3090,3 +3090,61 @@ on a real device or emulator, i.e. actual `checkAvailabilityAsync` results and w
 image reports the rotation-vector sensor. Suggested QA: open Sky View on the `Pixel_10` AVD and on
 a physical ARCore-certified phone, and uninstall "Google Play Services for AR" on the phone to see
 the install message and that returning from the Play Store re-checks.
+
+---
+
+## GitHub Actions CI — `android-ci.yml` (Milestone E, Step 8, 2026-09-29)
+
+`.github/workflows/android-ci.yml` at the repo root, alongside the backend's `ci.yml`. It runs
+`gradle compileDebugKotlin testDebugUnitTest assembleDebug` from `android/` on `ubuntu-latest`.
+
+### Triggers — mirrors the backend CI
+
+It copies `ci.yml`'s trigger block exactly: **`push` to any branch** (so every `feature/*`/`fix/*`
+branch, `develop`, and every merge into `develop`), plus **`pull_request` into `main`**. It is not
+restricted to `develop`: the backend CI isn't either, and a per-branch run is what lets a change
+be verified before it merges. There is no `paths` filter, also matching `ci.yml`, so a
+backend-only push runs the Android build too. Add one to both workflows if that cost matters.
+
+### Scope — unit tests + debug build only, no emulator
+
+- **Covered:** `compileDebugKotlin`, `testDebugUnitTest` (every JVM unit test), `assembleDebug`.
+- **Not covered:** `connectedDebugAndroidTest`. The project has no Compose UI test
+  infrastructure. The only instrumented tests (`MainActivityTest`, `ApiKeyStoreTest`,
+  `PassDaoTest`) need a device, and emulators on hosted runners are slow and flaky.
+  `MainActivityTest` also fails on any fresh install (see the notify-default section).
+- **No release build or signing, no deployment, no artifact uploads.** The backend CI doesn't
+  upload its test results, so the JUnit XML reports aren't uploaded here either. Read failures
+  from the run log.
+
+### Toolchain
+
+- **JDK 21 (Temurin).** `gradle/gradle-daemon-jvm.properties` pins the Gradle daemon to
+  `toolchainVersion=21`. The app compiles to JVM 17 bytecode, which a JDK 21 handles.
+- **No `gradlew` is committed**, so the workflow reads the Gradle version out of
+  `gradle/wrapper/gradle-wrapper.properties` (currently 9.3.1) and installs it with
+  `gradle/actions/setup-gradle`. Bumping the wrapper properties bumps CI too. If wrapper scripts
+  are ever committed, switch the command to `./gradlew` and drop the version-reading step.
+- **Caching:** `setup-gradle` caches `~/.gradle`, the counterpart of the backend's (implicit)
+  NuGet restore. Only `develop` and `main` write the cache. Other branches only read it, so feature
+  branches don't evict each other's entries.
+
+### Required repository secrets
+
+Both are set under the repo's Settings → Secrets and variables → Actions. The build step fails
+early with an `::error::` if either is missing.
+
+| Secret | Written to | Format |
+|---|---|---|
+| `GOOGLE_SERVICES_JSON_BASE64` | `android/app/google-services.json` (where the `google-services` plugin reads it; the build fails at `process*GoogleServices` without it) | The whole Firebase `google-services.json`, base64-encoded (`base64 -w0 app/google-services.json`, or `certutil -encode` / PowerShell on Windows: the decode step strips CR, whitespace, and `-----BEGIN/END-----` lines, after the first run failed on exactly that with `base64: invalid input`) |
+| `MAP_API_KEY` | `android/local.properties`, as the line `MAP_API_KEY=<key>` | The raw CARTO key, the same value as the local `MAP_API_KEY` (see "CARTO basemap API key") |
+
+The secret is named `MAP_API_KEY`, not `MAPS_API_KEY`, to match the key name
+`app/build.gradle.kts` already reads. Without it the build would still pass, just with a
+watermarked basemap, so CI fails on its absence explicitly instead.
+
+- Both files exist only on that run's ephemeral runner. They're gitignored, never uploaded, and
+  never in the Gradle cache (which covers `~/.gradle`, not the project directory).
+- Secrets reach the script through `env:`, not inline `${{ }}` expansion. GitHub masks both secret
+  values in logs, and the step also `::add-mask::`s every `current_key` API key inside the decoded
+  JSON, since masking the base64 string doesn't cover the decoded content.
