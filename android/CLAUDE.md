@@ -2325,7 +2325,8 @@ Both nav args are read from `SavedStateHandle` as **optional** (`passId`, `satel
 - ~~**The drawer query is only as good as the local `notify` value.**~~ **Default resolved** by
   the notify-default fix (see the end of this file): first-seen passes are now `notify = false`
   in all three `PassRepository` paths. **Still open:** the query has no time bound, so past
-  opted-in passes stay listed, and it doesn't respect hidden satellites.
+  opted-in passes stay listed. (Hidden satellites: **resolved** in `MapViewModel`, not in the
+  query; see "Map vs. hidden satellites" at the end of this file.)
 
 ### Testing
 
@@ -2651,6 +2652,8 @@ matters when reproducing this case.
   - Once Dashboard recomposed (it correctly dropped the EROS C3 tab), the next Map entry showed
     RUNNER-1.
   - The drawer keeps listing hidden satellites' passes.
+  - **Resolved** on 2026-09-29, apart from the stale `selectedSatellite`. See "Map vs. hidden
+    satellites" at the end of this file.
   - No crash, and polling was unaffected.
   - The Dashboard hidden-satellite fix from round 1 does **not** extend to Map. Whether it should
     is a product call.
@@ -2687,8 +2690,10 @@ delivery) or a behavior/product decision, listed below as a follow-up rather tha
 
    Fixing it means flipping the default *and* repairing rows already cached on devices (the merge
    preserves cached values), which is more than a small fix. Separately, `getNotifyEnabled()` has
-   no time bound, so past passes stay listed, and it doesn't respect hidden satellites.
-3. **Map vs. hidden satellites.** See cross-feature check 4.
+   no time bound, so past passes stay listed, and it doesn't respect hidden satellites (the
+   latter since resolved; see follow-up 3).
+3. ~~**Map vs. hidden satellites.**~~ **Resolved** (see "Map vs. hidden satellites" at the end of
+   this file). Still open: the stale `selectedSatellite` described in cross-feature check 4.
 4. **Backend: a failed FCM send is logged as sent and never retried.** See the repo-root
    CLAUDE.md's "Android client status" section.
 
@@ -2836,3 +2841,109 @@ Verified in this environment: `:app:testDebugUnitTest` — **238 tests, 0 failur
 `:app:connectedDebugAndroidTest` run has one failure, `MainActivityTest.dashboardIsStartDestination`.
 It is **pre-existing and unrelated**: it fails identically on unmodified `develop` code, because
 a fresh test install has no API key and opens on Tester Entry, not Dashboard. Not fixed here.
+
+---
+
+## Map vs. hidden satellites (2026-09-29)
+
+Branch `fix/map-hidden-satellites`, stacked on `fix/notify-default-android-sync` (it touches the
+same drawer code and docs). Closes follow-up 3 and the drawer half of follow-up 2 from the
+post-merge integration QA above.
+
+### Same root-cause class as the Dashboard gap — the second occurrence
+
+This is the **same failure pattern** as the `DashboardViewModel`/`HiddenSatellitesStore` gap
+fixed in round 1 ("DashboardViewModel now observes `HiddenSatellitesStore`" above). A screen was
+built before a cross-cutting dependency existed, or without it in its task's scope, and was never
+retrofitted when that dependency landed:
+
+- `HiddenSatellitesStore` was built for the Settings screen, and only `SettingsViewModel` observed it.
+- Round 1 retrofitted Dashboard, but nothing checked the *other* screens that show per-satellite
+  data. `MapViewModel` and the drawer's `PassDao.getNotifyEnabled()` query were built later, with
+  no dependency on it at all, since hidden satellites weren't part of either task's scope.
+
+This is the second time, so the check is now a standing checklist item in the repo-root
+`architecture-decisions.md`: **does this new/changed screen need to observe
+`HiddenSatellitesStore`, or any other existing cross-cutting state?** (The notify-default fix above
+is the related "backend default vs. a client copy" variant of the same problem.)
+
+### 1. Drawer — hidden satellites excluded, in both flows
+
+- **Filtered in `MapViewModel`, not in the SQL.** `HiddenSatellitesStore` is DataStore, not Room,
+  so `PassDao.getNotifyEnabled()` can't join against it. That query is unchanged, and so is its
+  instrumented `PassDaoTest`.
+- **Shared filter:** `List<Pass>.excludeHiddenSatellites(hiddenIds)` in `domain/util/PassFilters.kt`,
+  next to `excludePastAos`. Like that one, it is applied only to display state, never to what
+  gets fetched or cached.
+- **Same mechanism as Dashboard's tabs.** `MapViewModel` keeps the private `_uiState` as the raw
+  engine, with everything loaded. The public `uiState` is `combine(_uiState,
+  hiddenSatelliteIds).stateIn(...)`, which applies the filter as its last step. That's why a poll,
+  which only knows the fetched data, can never bring a hidden satellite's passes back. It's also
+  why unhiding restores them with **no reload**: the drawer is still read only once, at load time.
+
+### 2. Flow 1 — the tracked satellite becomes hidden
+
+- `MapViewModel` injects `HiddenSatellitesStore`; Hilt already had the binding.
+- New state **`MapUiState.SatelliteHidden(satelliteId, satelliteName, notifyEnabledPasses,
+  satelliteNames)`**. The combine() projection maps a `LiveTrack` whose own satellite is hidden to
+  it. It carries the drawer fields, so the drawer stays usable in this state.
+- **Polling is actually stopped, not just hidden from view.** `observeHiddenLiveSatellite`
+  collects `satelliteId in hiddenIds` (`distinctUntilChanged`). When the value is true it cancels
+  both polling `Job`s (position 15 s, orbit 5 min).
+- **Unhiding resumes.** The satellite goes back to `LiveTrack`, and polling restarts with an
+  immediate fetch of both, since the last position is stale by then. This goes beyond the spec,
+  which only required stopping. It costs nothing extra: without it, the unhide would show a frozen
+  marker.
+- **No auto-navigation.** `MapScreen` shows "<name> is hidden. Unhide it in Settings to keep
+  tracking." with an **Open Settings** button (`navigateToTopLevel(Settings)`, the same as the
+  bottom-nav tab), plus the usual back arrow and drawer.
+- **Already hidden when the Map opens.** This happens because `MainNavHost`'s `selectedSatellite`
+  can be stale, as in cross-feature check 4. The initial load still does its single
+  position/orbit fetch, then shows `SatelliteHidden` and never starts polling. That one fetch is
+  what lets an unhide resume from a full `LiveTrack`. Before this fix, this path live-tracked the
+  hidden satellite.
+- **Realistic trigger for the mid-session case.** Leaving Map through the bottom bar clears its
+  `ViewModel` (`saveState = false` — see the Map navigation section), so "hide in Settings, come
+  back via Back to the same Map instance" is rarer than the task sketch assumed. The same collector
+  also covers multi-window use and any path that keeps the Map entry alive. The already-hidden-at-
+  open case above is the one QA actually hit.
+
+### 3. Flow 2 (static pass track) — confirmed: no extra gating
+
+The reasoning holds. Flow 2 shows one specific pass the user deliberately opened, from the drawer
+or from Pass Details' "Show on map". Its track is fixed, TLE-anchored data (repo-root CLAUDE.md,
+`/passes/{id}/track`) that stays valid whatever the satellite's visibility. Hidden is a *listing*
+preference, not an access control, so Flow 2 only gets the drawer filtering from section 1.
+
+One consequence to be aware of: with that filtering, the drawer can't *list* a hidden satellite's
+passes, so the only ways into a hidden satellite's Flow 2 are Pass Details' "Show on map" or a
+notification deep link. If the pass on screen belongs to a hidden satellite, its own row simply
+isn't in the drawer, so it has nothing to highlight. That's consistent, not a bug.
+
+### Still open
+
+- **`MainNavHost.selectedSatellite` goes stale** while Dashboard is off screen (cross-feature check
+  4). The bottom-nav Map item and FAB can still target a satellite that was just hidden. The Map
+  now shows `SatelliteHidden` for it instead of tracking it. Picking a visible satellite for that
+  target instead would be a separate nav-host change.
+- The drawer query still has no time bound (past opted-in passes stay listed).
+
+### Tests
+
+- `MapViewModelTest` +7:
+  - drawer excludes a hidden satellite's passes and restores them on unhide, with exactly one
+    `getNotifyEnabledPasses()` call (reactive, no reload);
+  - a position poll landing while hidden doesn't bring them back;
+  - Flow 2's drawer is filtered, but its pass (of a hidden satellite) still shows;
+  - hiding the tracked satellite mid-session → `SatelliteHidden`, and **no further position/orbit
+    calls** over two 5-minute track intervals of simulated time (mock call counts);
+  - unhiding resumes `LiveTrack` with an immediate fetch, then the 15 s cadence;
+  - already hidden at open → `SatelliteHidden`, only the initial fetch, no polling;
+  - hiding a *different* satellite leaves polling running.
+- `PassFiltersTest` +2 for `excludeHiddenSatellites`.
+- `SatelliteHiddenMessage` and the Open Settings button have no automated test, since the project
+  has no Compose UI test infrastructure (same gap as every UI task).
+
+Verified in this environment: `:app:testDebugUnitTest` — **247 tests, 0 failures** (238 before
++ 9) — and `:app:assembleDebug`, both `BUILD SUCCESSFUL`. Not run: `:app:connectedDebugAndroidTest`
+and on-device QA of the new state.

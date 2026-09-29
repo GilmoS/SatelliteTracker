@@ -14,3 +14,10 @@ import java.time.OffsetDateTime
 // Inclusive of exactly `now`: a pass whose AOS is this very instant is still treated as upcoming,
 // not yet past (boundary case chosen deliberately, not the only reasonable choice).
 fun List<Pass>.excludePastAos(now: OffsetDateTime): List<Pass> = filter { !it.aos.isBefore(now) }
+
+// Drops passes whose satellite is in HiddenSatellitesStore's hidden set. The Map drawer (both
+// flows) uses it. Like excludePastAos, apply it only when deriving display state, recomputed each
+// time the hidden set changes (MapViewModel's combine() projection). Never apply it to what gets
+// fetched or cached. Then unhiding a satellite brings its passes back with no reload.
+fun List<Pass>.excludeHiddenSatellites(hiddenSatelliteIds: Set<String>): List<Pass> =
+    if (hiddenSatelliteIds.isEmpty()) this else filterNot { it.satelliteId in hiddenSatelliteIds }

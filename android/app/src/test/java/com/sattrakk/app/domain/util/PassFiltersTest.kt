@@ -7,7 +7,8 @@ import org.junit.Test
 
 // Covers the "exclude past AOS" utility shared by DashboardViewModel and FullPassListViewModel —
 // see android/CLAUDE.md and PassFilters.kt's own doc comment for why this exists and why the
-// boundary (aos == now) is treated as inclusive/still-upcoming.
+// boundary (aos == now) is treated as inclusive/still-upcoming. Also covers
+// excludeHiddenSatellites, used by the Map drawer.
 class PassFiltersTest {
 
     private val now: OffsetDateTime = OffsetDateTime.parse("2026-09-12T12:00:00Z")
@@ -59,5 +60,23 @@ class PassFiltersTest {
         val result = listOf(past, atNow, soon, later).excludePastAos(now)
 
         assertEquals(listOf(atNow, soon, later), result)
+    }
+
+    // --- excludeHiddenSatellites (Map drawer) ---
+
+    @Test
+    fun `passes of hidden satellites are excluded, others kept in order`() {
+        val a = pass("a", now)
+        val b = pass("b", now).copy(satelliteId = "sat-2")
+        val c = pass("c", now.plusMinutes(1))
+
+        assertEquals(listOf(a, c), listOf(a, b, c).excludeHiddenSatellites(setOf("sat-2")))
+    }
+
+    @Test
+    fun `an empty hidden set keeps every pass`() {
+        val passes = listOf(pass("a", now), pass("b", now).copy(satelliteId = "sat-2"))
+
+        assertEquals(passes, passes.excludeHiddenSatellites(emptySet()))
     }
 }
