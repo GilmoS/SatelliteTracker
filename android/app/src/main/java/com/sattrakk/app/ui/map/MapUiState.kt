@@ -12,7 +12,8 @@ import com.sattrakk.app.domain.model.TrackPoint
 //    a ~2000 km visibility footprint around the current sub-satellite point.
 //  - StaticPassTrack (passId): one already-calculated pass's fixed ground track. No polling, no
 //    footprint.
-// The notify-enabled pass drawer is available in both.
+// The notify-enabled pass drawer is available in both. Its list never includes passes of hidden
+// satellites (HiddenSatellitesStore); MapViewModel filters them out reactively.
 //
 // satelliteNames (satelliteId -> name, the whole catalog) exists for the drawer: Pass carries only
 // satelliteId, and the drawer lists passes of every satellite, not just the one on screen.
@@ -34,6 +35,17 @@ sealed interface MapUiState {
     data class StaticPassTrack(
         val pass: Pass,
         val trackPoints: List<PassTrackPoint>,
+        val notifyEnabledPasses: List<Pass>,
+        val satelliteNames: Map<String, String>,
+    ) : MapUiState
+
+    // Flow 1 only: the satellite being tracked was hidden in Settings (HiddenSatellitesStore) while
+    // this Map instance was alive, or before it opened. Polling is stopped while in this state (see
+    // MapViewModel.observeHiddenLiveSatellite). Unhiding it resumes polling and returns to
+    // LiveTrack. The drawer stays available, so it still carries the drawer's fields.
+    data class SatelliteHidden(
+        val satelliteId: String,
+        val satelliteName: String,
         val notifyEnabledPasses: List<Pass>,
         val satelliteNames: Map<String, String>,
     ) : MapUiState

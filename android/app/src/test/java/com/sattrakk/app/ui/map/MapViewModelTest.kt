@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import com.sattrakk.app.MainDispatcherRule
+import com.sattrakk.app.data.local.HiddenSatellitesStore
 import com.sattrakk.app.data.repository.MapRepository
 import com.sattrakk.app.data.repository.PassRepository
 import com.sattrakk.app.data.repository.SatelliteRepository
@@ -19,10 +20,12 @@ import com.sattrakk.app.domain.model.TrackPoint
 import com.sattrakk.app.domain.util.GeoUtils
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -44,6 +47,12 @@ class MapViewModelTest {
     private val satelliteRepository = mockk<SatelliteRepository>()
     private val store = ViewModelStore()
 
+    // Stands in for HiddenSatellitesStore's DataStore-backed Flow; tests hide/unhide by writing it.
+    private val hiddenIdsFlow = MutableStateFlow<Set<String>>(emptySet())
+    private val hiddenSatellitesStore = mockk<HiddenSatellitesStore> {
+        every { hiddenSatelliteIds } returns hiddenIdsFlow
+    }
+
     private val satelliteId = "sat-1"
     private val passId = "pass-1"
     private val epoch = OffsetDateTime.of(2026, 9, 24, 12, 0, 0, 0, ZoneOffset.UTC)
@@ -58,7 +67,9 @@ class MapViewModelTest {
         val factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                MapViewModel(mapRepository, passRepository, satelliteRepository, SavedStateHandle(args)) as T
+                MapViewModel(
+                    mapRepository, passRepository, satelliteRepository, hiddenSatellitesStore, SavedStateHandle(args)
+                ) as T
         }
         val vm = ViewModelProvider(store, factory)[MapViewModel::class.java]
         runCurrent()
@@ -289,5 +300,135 @@ class MapViewModelTest {
         val vm = createViewModel(mapOf("satelliteId" to satelliteId))
 
         assertEquals(MapUiState.Error("Unknown satellite."), vm.uiState.value)
+    }
+
+    // --- Hidden satellites (HiddenSatellitesStore) ---
+
+    private val otherSatellitePass = pass("drawer-other").copy(satelliteId = otherSatelliteId)
+
+    @Test
+    fun `drawer excludes a hidden satellite's notify passes and brings them back on unhide, with no reload`() {
+        stubLiveSuccess()
+        coEvery { mapRepository.getNotifyEnabledPasses() } returns drawer + otherSatellitePass
+        hiddenIdsFlow.value = setOf(otherSatelliteId)
+
+        val vm = createViewModel(mapOf("satelliteId" to satelliteId))
+        assertEquals(drawer, (vm.uiState.value as MapUiState.LiveTrack).notifyEnabledPasses)
+
+        hiddenIdsFlow.value = emptySet()
+        runCurrent()
+
+        assertEquals(drawer + otherSatellitePass, (vm.uiState.value as MapUiState.LiveTrack).notifyEnabledPasses)
+        // Reactive: the drawer was read once at load time, never again.
+        coVerify(exactly = 1) { mapRepository.getNotifyEnabledPasses() }
+    }
+
+    @Test
+    fun `a position poll landing while a satellite is hidden doesn't bring its drawer passes back`() {
+        stubLiveSuccess()
+        coEvery { mapRepository.getNotifyEnabledPasses() } returns drawer + otherSatellitePass
+        hiddenIdsFlow.value = setOf(otherSatelliteId)
+        val vm = createViewModel(mapOf("satelliteId" to satelliteId))
+
+        advanceTimeBy(MapViewModel.POSITION_POLL_INTERVAL_MILLIS)
+
+        coVerify(exactly = 2) { mapRepository.getPosition(satelliteId) }
+        assertEquals(drawer, (vm.uiState.value as MapUiState.LiveTrack).notifyEnabledPasses)
+    }
+
+    @Test
+    fun `static pass track drawer also excludes hidden satellites, but the pass itself is still shown`() {
+        coEvery { passRepository.getPassTrack(passId) } returns ApiResult.Success(PassTrack(passId, emptyList()))
+        // The pass on screen belongs to sat-2, which is hidden: Flow 2 is not gated by hidden status.
+        coEvery { passRepository.getPassById(passId) } returns
+            ApiResult.Success(pass(passId).copy(satelliteId = otherSatelliteId))
+        coEvery { mapRepository.getNotifyEnabledPasses() } returns drawer + otherSatellitePass
+        hiddenIdsFlow.value = setOf(otherSatelliteId)
+
+        val vm = createViewModel(mapOf("passId" to passId))
+
+        val state = vm.uiState.value as MapUiState.StaticPassTrack
+        assertEquals(passId, state.pass.id)
+        assertEquals(drawer, state.notifyEnabledPasses)
+
+        hiddenIdsFlow.value = emptySet()
+        runCurrent()
+        assertEquals(drawer + otherSatellitePass, (vm.uiState.value as MapUiState.StaticPassTrack).notifyEnabledPasses)
+    }
+
+    @Test
+    fun `hiding the tracked satellite mid-session shows SatelliteHidden and stops all polling`() {
+        stubLiveSuccess()
+        coEvery { mapRepository.getNotifyEnabledPasses() } returns drawer + otherSatellitePass
+        val vm = createViewModel(mapOf("satelliteId" to satelliteId))
+        advanceTimeBy(MapViewModel.POSITION_POLL_INTERVAL_MILLIS)
+        coVerify(exactly = 2) { mapRepository.getPosition(satelliteId) }
+
+        hiddenIdsFlow.value = setOf(satelliteId)
+        runCurrent()
+
+        assertEquals(
+            MapUiState.SatelliteHidden(
+                satelliteId = satelliteId,
+                satelliteName = "EROS C3",
+                // The drawer is still available; only the hidden satellite's own passes drop out.
+                notifyEnabledPasses = listOf(otherSatellitePass),
+                satelliteNames = catalogNames,
+            ),
+            vm.uiState.value,
+        )
+
+        // Well past several position ticks and a track tick: no further calls at all.
+        advanceTimeBy(MapViewModel.TRACK_POLL_INTERVAL_MILLIS * 2)
+        coVerify(exactly = 2) { mapRepository.getPosition(satelliteId) }
+        coVerify(exactly = 1) { mapRepository.getOrbitTrack(satelliteId) }
+    }
+
+    @Test
+    fun `unhiding the tracked satellite resumes LiveTrack and polling, fetching at once`() {
+        stubLiveSuccess()
+        val vm = createViewModel(mapOf("satelliteId" to satelliteId))
+        hiddenIdsFlow.value = setOf(satelliteId)
+        runCurrent()
+        advanceTimeBy(MapViewModel.POSITION_POLL_INTERVAL_MILLIS * 4)
+        coVerify(exactly = 1) { mapRepository.getPosition(satelliteId) }
+
+        coEvery { mapRepository.getPosition(satelliteId) } returns ApiResult.Success(position(38.0))
+        hiddenIdsFlow.value = emptySet()
+        runCurrent()
+
+        // Immediate refresh of both, since the last position is stale by now.
+        coVerify(exactly = 2) { mapRepository.getPosition(satelliteId) }
+        coVerify(exactly = 2) { mapRepository.getOrbitTrack(satelliteId) }
+        assertEquals(38.0, (vm.uiState.value as MapUiState.LiveTrack).currentPosition.latitude, 0.0)
+
+        advanceTimeBy(MapViewModel.POSITION_POLL_INTERVAL_MILLIS)
+        coVerify(exactly = 3) { mapRepository.getPosition(satelliteId) }
+    }
+
+    @Test
+    fun `a satellite already hidden when the Map opens shows SatelliteHidden and never polls`() {
+        stubLiveSuccess()
+        hiddenIdsFlow.value = setOf(satelliteId)
+
+        val vm = createViewModel(mapOf("satelliteId" to satelliteId))
+        advanceTimeBy(MapViewModel.TRACK_POLL_INTERVAL_MILLIS * 2)
+
+        assertTrue(vm.uiState.value is MapUiState.SatelliteHidden)
+        // Only the initial load's single fetch; no polling after it.
+        coVerify(exactly = 1) { mapRepository.getPosition(satelliteId) }
+        coVerify(exactly = 1) { mapRepository.getOrbitTrack(satelliteId) }
+    }
+
+    @Test
+    fun `hiding a different satellite leaves live tracking running`() {
+        stubLiveSuccess()
+        val vm = createViewModel(mapOf("satelliteId" to satelliteId))
+
+        hiddenIdsFlow.value = setOf(otherSatelliteId)
+        advanceTimeBy(MapViewModel.POSITION_POLL_INTERVAL_MILLIS)
+
+        assertTrue(vm.uiState.value is MapUiState.LiveTrack)
+        coVerify(exactly = 2) { mapRepository.getPosition(satelliteId) }
     }
 }

@@ -151,6 +151,8 @@ fun MainNavHost(
                     // Drawer tap: switch to Flow 2 for the tapped pass, replacing this Map entry
                     // rather than stacking another one on top of it (see navigateToMap).
                     onPassSelected = { passId -> navController.navigateToMap(passId = passId) },
+                    // From the "satellite is hidden" state: same as the bottom-nav Settings tab.
+                    onOpenSettings = { navController.navigateToTopLevel(SatTrakkDestination.Settings.route) },
                 )
             }
             composable(SatTrakkDestination.SkyView.route) { SkyViewScreen() }

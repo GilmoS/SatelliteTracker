@@ -25,6 +25,7 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -84,13 +85,16 @@ import org.maplibre.spatialk.geojson.Position
 //    + visibility footprint + satellite-name label + direction-of-flight arrow.
 //  - StaticPassTrack (Flow 2): one pass's fixed ground track with AOS/LOS end markers. No live
 //    marker, no footprint (confirmed decision).
-// The notify-enabled pass drawer is available in both flows. See android/CLAUDE.md's Map screen
+//  - SatelliteHidden (Flow 1): the tracked satellite was hidden in Settings. A message and an
+//    "Open Settings" button, no map.
+// The notify-enabled pass drawer is available in all three. See android/CLAUDE.md's Map screen
 // Composable/UI section.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MapScreen(
     onBackClick: () -> Unit = {},
     onPassSelected: (passId: String) -> Unit = {},
+    onOpenSettings: () -> Unit = {},
     viewModel: MapViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -146,6 +150,11 @@ fun MapScreen(
                     )
                     is MapUiState.LiveTrack -> LiveTrackMap(s)
                     is MapUiState.StaticPassTrack -> StaticPassTrackMap(s)
+                    is MapUiState.SatelliteHidden -> SatelliteHiddenMessage(
+                        satelliteName = s.satelliteName,
+                        onOpenSettings = onOpenSettings,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
                 }
             }
         }
@@ -158,6 +167,7 @@ private fun MapTitle(state: MapUiState) {
         is MapUiState.LiveTrack -> state.satelliteName to "Live ground track"
         is MapUiState.StaticPassTrack ->
             "Pass track" to "Orbit ${state.pass.orbitNumber} · ${formatDateLocal(state.pass.aos)} ${formatTimeLocal(state.pass.aos)}"
+        is MapUiState.SatelliteHidden -> state.satelliteName to "Hidden"
         MapUiState.Loading, is MapUiState.Error -> "Ground track" to null
     }
     Column {
@@ -173,6 +183,26 @@ private fun MapTitle(state: MapUiState) {
 }
 
 // ---- Flow 1 ----
+
+// Flow 1's tracked satellite is hidden in Settings. MapViewModel has stopped polling. Nothing
+// navigates away on its own: the user can unhide it (tracking resumes here), open a drawer pass,
+// or go back.
+@Composable
+private fun SatelliteHiddenMessage(satelliteName: String, onOpenSettings: () -> Unit, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = "$satelliteName is hidden. Unhide it in Settings to keep tracking.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        TextButton(onClick = onOpenSettings) { Text("Open Settings") }
+    }
+}
 
 @Composable
 private fun LiveTrackMap(state: MapUiState.LiveTrack) {
@@ -438,6 +468,7 @@ private fun NotifyPassesDrawer(state: MapUiState, onPassClick: (String) -> Unit)
     val (passes, satelliteNames) = when (state) {
         is MapUiState.LiveTrack -> state.notifyEnabledPasses to state.satelliteNames
         is MapUiState.StaticPassTrack -> state.notifyEnabledPasses to state.satelliteNames
+        is MapUiState.SatelliteHidden -> state.notifyEnabledPasses to state.satelliteNames
         MapUiState.Loading, is MapUiState.Error -> emptyList<Pass>() to emptyMap()
     }
     val currentPassId = (state as? MapUiState.StaticPassTrack)?.pass?.id
