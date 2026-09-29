@@ -164,6 +164,8 @@ dependencies {
 
     implementation(libs.maplibre.compose)
 
+    implementation(libs.arcore)
+
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
