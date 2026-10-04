@@ -19,16 +19,18 @@ public class PassService : IPassService
     private readonly IPassRepository _passRepo; // Repository for accessing and storing satellite pass data
     private readonly ILogger<PassService> _logger; // Logger for logging information and errors
     private readonly ObserverSettings _observer;
+    private readonly TimeProvider _timeProvider; // Clock for the calculation window, injectable for tests
 
 
     // Constructor that initializes the repositories and logger through dependency injection.
-    public PassService(ISatelliteRepository satelliteRepo,ITleRepository tleRepo,IPassRepository passRepo,ILogger<PassService> logger , IOptions<ObserverSettings> observer)
+    public PassService(ISatelliteRepository satelliteRepo,ITleRepository tleRepo,IPassRepository passRepo,ILogger<PassService> logger , IOptions<ObserverSettings> observer, TimeProvider timeProvider)
     {
         _satelliteRepo = satelliteRepo;
         _tleRepo = tleRepo;
         _passRepo = passRepo;
         _logger = logger;
         _observer = observer.Value;
+        _timeProvider = timeProvider;
     }
 
     // This method calculates the upcoming passes of a satellite and saves them to the database.
@@ -60,6 +62,10 @@ public class PassService : IPassService
             return Result<IEnumerable<PassResult>>.Failure($"TLE parse error: {ex.Message}");
         }
 
+        // One "now" for the whole calculation: it is both the prediction window start and the
+        // boundary between upcoming passes (this job's to manage) and past/in-progress ones.
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+
         // Use the PassPredictor to calculate the upcoming passes of the satellite based on the TLE data and observer's location
         var passResults = PassPredictor.PredictPasses(
             tleData,
@@ -67,9 +73,13 @@ public class PassService : IPassService
             _observer.Lat,
             _observer.Lng,
             _observer.AltMeters,
-            DateTime.UtcNow,
-            DateTime.UtcNow.AddDays(7),
-            _observer.MinElevationDeg).ToList();
+            now,
+            now.AddDays(7),
+            _observer.MinElevationDeg)
+            // A pass already in progress at "now" comes back with its AOS clamped to the window
+            // start, so its times are wrong. It isn't upcoming either, so it is left alone.
+            .Where(pr => pr.AOS > now)
+            .ToList();
 
         if (passResults.Count == 0) // If no passes are predicted, return an empty result
             return Result<IEnumerable<PassResult>>.Success(passResults);
@@ -92,11 +102,11 @@ public class PassService : IPassService
             LosAzimuth = (decimal)pr.LosAzimuth,
             DurationSec = pr.DurationSeconds,
             OutlookSynced = false,
-            CalculatedAt = DateTime.UtcNow
+            CalculatedAt = now
         }).ToList();
 
-        //Remove previosly predicted passes 
-        await _passRepo.DeleteUpcomingAsync(satelliteId, DateTime.UtcNow);
+        //Remove previosly predicted passes
+        await _passRepo.DeleteUpcomingAsync(satelliteId, now);
 
         // Save the predicted passes to the database using the pass repository
         var saveResult = await _passRepo.AddRangeAsync(passes);

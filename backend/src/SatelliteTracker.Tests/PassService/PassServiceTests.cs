@@ -46,8 +46,17 @@ public class PassServiceTests
         FetchedAt = DateTime.UtcNow
     };
 
+    // Real EROS C3 TLE from the dev database, used where a test needs "now" pinned near its epoch.
+    private const string ErosLine1 = "1 54880U 22179A   26253.27827296  .00002487  00000-0  13073-3 0  9995";
+    private const string ErosLine2 = "2 54880 139.3347 131.0916 0008568 215.9148 144.1084 15.11381575205203";
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow, TimeSpan.Zero);
+    }
+
     private static (IPassService service, Mock<ISatelliteRepository> satRepo, Mock<ITleRepository> tleRepo,Mock<IPassRepository> passRepo)
-        CreateService()
+        CreateService(TimeProvider? timeProvider = null)
     {
         var satRepo = new Mock<ISatelliteRepository>();
         var tleRepo = new Mock<ITleRepository>();
@@ -61,7 +70,8 @@ public class PassServiceTests
             MinElevationDeg = 5.0
         });
         var service = new SatelliteTracker.PassService.Services.PassService(
-            satRepo.Object, tleRepo.Object, passRepo.Object, logger.Object, observerOptions);
+            satRepo.Object, tleRepo.Object, passRepo.Object, logger.Object, observerOptions,
+            timeProvider ?? TimeProvider.System);
         return (service, satRepo, tleRepo, passRepo);
     }
 
@@ -202,6 +212,43 @@ public class PassServiceTests
         Assert.True(result.IsSuccess);
         Assert.Empty(result.Value!);
         passRepo.Verify(r => r.AddRangeAsync(It.IsAny<IEnumerable<Pass>>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CalculateAndSavePassesAsync_PassInProgressAtNow_IsNotSaved()
+    {
+        // Pin "now" two minutes into a real pass, so the predictor sees the satellite already up.
+        var tle = TleParser.Parse(ErosLine1, ErosLine2);
+        var inProgress = PassPredictor.PredictPasses(tle, TestSatelliteId, 32.0055, 34.8854, 135.0,
+            tle.Epoch, tle.Epoch.AddDays(1)).First(p => p.DurationSeconds > 300);
+        var now = inProgress.AOS.AddMinutes(2);
+
+        var (service, satRepo, tleRepo, passRepo) = CreateService(new FixedTimeProvider(now));
+
+        satRepo.Setup(r => r.GetByIdAsync(TestSatelliteId))
+            .ReturnsAsync(Result<Satellite>.Success(TestSatellite));
+        tleRepo.Setup(r => r.GetLatestByNoradIdAsync(TestNoradId))
+            .ReturnsAsync(Result<TleRecord>.Success(new TleRecord
+            {
+                Id = TestTleId, SatelliteId = TestSatelliteId, Line1 = ErosLine1, Line2 = ErosLine2,
+                Epoch = tle.Epoch, FetchedAt = tle.Epoch
+            }));
+
+        List<Pass>? savedPasses = null;
+        passRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<Pass>>()))
+            .Callback<IEnumerable<Pass>>(p => savedPasses = p.ToList())
+            .ReturnsAsync(Result<bool>.Success(true));
+
+        var result = await service.CalculateAndSavePassesAsync(TestSatelliteId);
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(savedPasses);
+        Assert.NotEmpty(savedPasses!);
+        // Without the filter the predictor returns this pass with its AOS clamped to "now".
+        Assert.All(savedPasses!, p => Assert.True(p.Aos > now));
+        Assert.All(result.Value!, p => Assert.True(p.AOS > now));
+        Assert.DoesNotContain(savedPasses!,
+            p => p.OrbitNumber == OrbitNumberCalculator.ComputeRevolutionNumber(tle, inProgress.AOS));
     }
 
     // ── GetUpcomingPassesAsync ───────────────────────────────────────────────
