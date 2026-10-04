@@ -81,8 +81,8 @@ public class PassService : IPassService
             .Where(pr => pr.AOS > now)
             .ToList();
 
-        if (passResults.Count == 0) // If no passes are predicted, return an empty result
-            return Result<IEnumerable<PassResult>>.Success(passResults);
+        // No early return for an empty result: the upsert below still has to delete upcoming passes
+        // that are no longer predicted.
 
         // Orbit number = TLE revolution number + ascending nodes up to AOS (see OrbitNumberCalculator)
         var orbitNumbers = OrbitNumberCalculator.ComputeRevolutionNumbers(
@@ -105,17 +105,17 @@ public class PassService : IPassService
             CalculatedAt = now
         }).ToList();
 
-        //Remove previosly predicted passes
-        await _passRepo.DeleteUpcomingAsync(satelliteId, now);
-
-        // Save the predicted passes to the database using the pass repository
-        var saveResult = await _passRepo.AddRangeAsync(passes);
+        // Upsert by (SatelliteId, OrbitNumber): existing upcoming passes keep their Id (and their
+        // notes/subscriptions/notification logs), so recalculation no longer churns pass IDs.
+        var saveResult = await _passRepo.UpsertUpcomingAsync(satelliteId, now, passes);
 
         if (!saveResult.IsSuccess)
             return Result<IEnumerable<PassResult>>.Failure(saveResult.Error!);
 
-        // Log the number of passes saved for the satellite
-        _logger.LogInformation("Saved {Count} passes for satellite {SatelliteId}", passes.Count, satelliteId);
+        var upsert = saveResult.Value!;
+        _logger.LogInformation(
+            "Upserted passes for satellite {SatelliteId}: {Inserted} inserted, {Updated} updated, {Deleted} deleted, {SkippedPast} skipped (orbit already past)",
+            satelliteId, upsert.Inserted, upsert.Updated, upsert.Deleted, upsert.SkippedPast);
 
         return Result<IEnumerable<PassResult>>.Success(passResults); // Return the predicted pass results as a successful result
     }

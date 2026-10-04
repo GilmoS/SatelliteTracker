@@ -21,7 +21,17 @@ public interface IPassRepository
     Task<Result<Pass>> AddAsync(Pass pass);
     Task<Result<bool>> AddRangeAsync(IEnumerable<Pass> passes);
     Task<Result<Pass>> UpdateAsync(Pass pass);
-    Task<Result<bool>> DeleteUpcomingAsync(Guid satelliteId, DateTime from);
+
+    /// <summary>
+    /// Reconciles a satellite's upcoming passes (Aos &gt;= <paramref name="now"/>) with a freshly
+    /// computed set, matching on the natural key (SatelliteId, OrbitNumber), in one transaction:
+    /// a computed pass matching an existing upcoming pass updates it in place, keeping its Id
+    /// (and so its notes, subscriptions and notification logs); an unmatched one is inserted; an
+    /// existing upcoming pass missing from the computed set is deleted, cascading its dependents.
+    /// Passes with Aos &lt; now are never modified or deleted, and a computed pass whose orbit
+    /// already belongs to one of them is skipped. On failure nothing is committed.
+    /// </summary>
+    Task<Result<PassUpsertResult>> UpsertUpcomingAsync(Guid satelliteId, DateTime now, IReadOnlyList<Pass> computed);
 
     /// <summary>
     /// Returns all future passes (Aos in the future), Satellite eager-loaded, ordered by Aos.

@@ -119,8 +119,8 @@ public class PassServiceTests
         tleRepo.Setup(r => r.GetLatestByNoradIdAsync(TestNoradId))
             .ReturnsAsync(Result<TleRecord>.Success(MakeTleRecord(IssLine2)));
 
-        passRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<Pass>>()))
-            .ReturnsAsync(Result<bool>.Success(true));
+        passRepo.Setup(r => r.UpsertUpcomingAsync(TestSatelliteId, It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<Pass>>()))
+            .ReturnsAsync(Result<PassUpsertResult>.Success(new PassUpsertResult(0, 0, 0, 0)));
 
         var result = await service.CalculateAndSavePassesAsync(TestSatelliteId);
 
@@ -142,9 +142,9 @@ public class PassServiceTests
             .ReturnsAsync(Result<TleRecord>.Success(MakeTleRecord(IssLine2)));
 
         List<Pass>? savedPasses = null;
-        passRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<Pass>>()))
-            .Callback<IEnumerable<Pass>>(p => savedPasses = p.ToList())
-            .ReturnsAsync(Result<bool>.Success(true));
+        passRepo.Setup(r => r.UpsertUpcomingAsync(TestSatelliteId, It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<Pass>>()))
+            .Callback<Guid, DateTime, IReadOnlyList<Pass>>((_, _, p) => savedPasses = p.ToList())
+            .ReturnsAsync(Result<PassUpsertResult>.Success(new PassUpsertResult(0, 0, 0, 0)));
 
         var result = await service.CalculateAndSavePassesAsync(TestSatelliteId);
 
@@ -179,9 +179,9 @@ public class PassServiceTests
             .ReturnsAsync(Result<TleRecord>.Success(MakeTleRecord(IssLine2)));
 
         List<Pass>? savedPasses = null;
-        passRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<Pass>>()))
-            .Callback<IEnumerable<Pass>>(p => savedPasses = p.ToList())
-            .ReturnsAsync(Result<bool>.Success(true));
+        passRepo.Setup(r => r.UpsertUpcomingAsync(TestSatelliteId, It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<Pass>>()))
+            .Callback<Guid, DateTime, IReadOnlyList<Pass>>((_, _, p) => savedPasses = p.ToList())
+            .ReturnsAsync(Result<PassUpsertResult>.Success(new PassUpsertResult(0, 0, 0, 0)));
 
         await service.CalculateAndSavePassesAsync(TestSatelliteId);
 
@@ -196,7 +196,7 @@ public class PassServiceTests
     }
 
     [Fact]
-    public async Task CalculateAndSavePassesAsync_LowInclinationTle_ReturnsEmptyListWithoutSaving()
+    public async Task CalculateAndSavePassesAsync_LowInclinationTle_ReturnsEmptyList_AndUpsertsEmptySet()
     {
         var (service, satRepo, tleRepo, passRepo) = CreateService();
 
@@ -207,11 +207,34 @@ public class PassServiceTests
         tleRepo.Setup(r => r.GetLatestByNoradIdAsync(TestNoradId))
             .ReturnsAsync(Result<TleRecord>.Success(MakeTleRecord(LowIncLine2)));
 
+        passRepo.Setup(r => r.UpsertUpcomingAsync(TestSatelliteId, It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<Pass>>()))
+            .ReturnsAsync(Result<PassUpsertResult>.Success(new PassUpsertResult(0, 0, 0, 0)));
+
         var result = await service.CalculateAndSavePassesAsync(TestSatelliteId);
 
         Assert.True(result.IsSuccess);
         Assert.Empty(result.Value!);
-        passRepo.Verify(r => r.AddRangeAsync(It.IsAny<IEnumerable<Pass>>()), Times.Never);
+        // Still upserted, so upcoming passes that are no longer predicted get deleted.
+        passRepo.Verify(r => r.UpsertUpcomingAsync(TestSatelliteId, It.IsAny<DateTime>(),
+            It.Is<IReadOnlyList<Pass>>(p => p.Count == 0)), Times.Once);
+    }
+
+    [Fact]
+    public async Task CalculateAndSavePassesAsync_UpsertFails_ReturnsFailure()
+    {
+        var (service, satRepo, tleRepo, passRepo) = CreateService();
+
+        satRepo.Setup(r => r.GetByIdAsync(TestSatelliteId))
+            .ReturnsAsync(Result<Satellite>.Success(TestSatellite));
+        tleRepo.Setup(r => r.GetLatestByNoradIdAsync(TestNoradId))
+            .ReturnsAsync(Result<TleRecord>.Success(MakeTleRecord(IssLine2)));
+        passRepo.Setup(r => r.UpsertUpcomingAsync(TestSatelliteId, It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<Pass>>()))
+            .ReturnsAsync(Result<PassUpsertResult>.Failure("unique constraint violated"));
+
+        var result = await service.CalculateAndSavePassesAsync(TestSatelliteId);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("unique constraint violated", result.Error);
     }
 
     [Fact]
@@ -235,9 +258,9 @@ public class PassServiceTests
             }));
 
         List<Pass>? savedPasses = null;
-        passRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<Pass>>()))
-            .Callback<IEnumerable<Pass>>(p => savedPasses = p.ToList())
-            .ReturnsAsync(Result<bool>.Success(true));
+        passRepo.Setup(r => r.UpsertUpcomingAsync(TestSatelliteId, It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<Pass>>()))
+            .Callback<Guid, DateTime, IReadOnlyList<Pass>>((_, _, p) => savedPasses = p.ToList())
+            .ReturnsAsync(Result<PassUpsertResult>.Success(new PassUpsertResult(0, 0, 0, 0)));
 
         var result = await service.CalculateAndSavePassesAsync(TestSatelliteId);
 
