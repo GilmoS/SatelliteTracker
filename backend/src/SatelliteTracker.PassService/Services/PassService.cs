@@ -74,13 +74,17 @@ public class PassService : IPassService
         if (passResults.Count == 0) // If no passes are predicted, return an empty result
             return Result<IEnumerable<PassResult>>.Success(passResults);
 
+        // Orbit number = TLE revolution number + ascending nodes up to AOS (see OrbitNumberCalculator)
+        var orbitNumbers = OrbitNumberCalculator.ComputeRevolutionNumbers(
+            tleData, passResults.Select(pr => pr.AOS).ToList());
+
         // Map the predicted pass results to Pass entities for saving to the database
-        var passes = passResults.Select(pr => new Pass
+        var passes = passResults.Select((pr, i) => new Pass
         {
             Id = Guid.NewGuid(),
             SatelliteId = satelliteId,
             TleId = tleRecord.Id,
-            OrbitNumber = ComputeOrbitNumber(tleData, pr.AOS),
+            OrbitNumber = orbitNumbers[i],
             Aos = pr.AOS,
             Los = pr.LOS,
             MaxElevation = (decimal)pr.MaxElevation,
@@ -179,17 +183,5 @@ public class PassService : IPassService
         var points = GroundTrackCalculator.ComputeGroundTrack(
             tleData, nowUtc - period, nowUtc + period + extraAhead, OrbitTrackStepSeconds);
         return Result<OrbitTrack>.Success(new OrbitTrack(satResult.Value!.NoradId, periodMinutes, points));
-    }
-
-    // Computes the revolution number at a given pass time by advancing the TLE's Revolution
-    // Number at Epoch by however many full orbits elapse between the TLE epoch and the pass AOS.
-    // MeanMotion is in revs/day, so 1440 / MeanMotion gives the orbital period in minutes.
-    private static int ComputeOrbitNumber(TleData tle, DateTime passAosUtc)
-    {
-        double orbitalPeriodMinutes = 1440.0 / tle.MeanMotion;
-        double elapsedMinutes = (passAosUtc - tle.Epoch).TotalMinutes;
-        int elapsedOrbits = (int)Math.Floor(elapsedMinutes / orbitalPeriodMinutes);
-
-        return tle.RevolutionNumber + elapsedOrbits;
     }
 }

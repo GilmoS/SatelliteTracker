@@ -121,7 +121,7 @@ public class PassServiceTests
     }
 
     [Fact]
-    public async Task CalculateAndSavePassesAsync_ComputesOrbitNumber_FromTleRevolutionAndElapsedOrbits()
+    public async Task CalculateAndSavePassesAsync_ComputesOrbitNumber_FromTleRevolutionAndAscendingNodes()
     {
         var (service, satRepo, tleRepo, passRepo) = CreateService();
 
@@ -144,15 +144,13 @@ public class PassServiceTests
 
         // Independently derive the expected orbit number from the same TLE, parsed fresh here
         // (TleParser itself is covered by TleParserTests.cs), to verify PassService actually
-        // wires the parsed epoch/mean-motion/revolution-number into the calculation rather than
-        // hardcoding a placeholder.
+        // wires the parsed TLE into OrbitNumberCalculator (covered by OrbitNumberCalculatorTests.cs)
+        // rather than hardcoding a placeholder.
         var tle = TleParser.Parse(IssLine1, IssLine2);
-        double orbitalPeriodMinutes = 1440.0 / tle.MeanMotion;
 
         foreach (var pass in savedPasses!)
         {
-            int expectedOrbitNumber = tle.RevolutionNumber +
-                (int)Math.Floor((pass.Aos - tle.Epoch).TotalMinutes / orbitalPeriodMinutes);
+            int expectedOrbitNumber = OrbitNumberCalculator.ComputeRevolutionNumber(tle, pass.Aos);
 
             Assert.Equal(expectedOrbitNumber, pass.OrbitNumber);
             Assert.NotEqual(0, pass.OrbitNumber);
@@ -160,7 +158,7 @@ public class PassServiceTests
     }
 
     [Fact]
-    public async Task CalculateAndSavePassesAsync_OrbitNumbers_AreNonDecreasing_AcrossPassesOrderedByAos()
+    public async Task CalculateAndSavePassesAsync_OrbitNumbers_AreStrictlyIncreasing_AcrossPassesOrderedByAos()
     {
         var (service, satRepo, tleRepo, passRepo) = CreateService();
 
@@ -182,8 +180,8 @@ public class PassServiceTests
 
         for (int i = 1; i < orderedByAos.Count; i++)
         {
-            Assert.True(orderedByAos[i].OrbitNumber >= orderedByAos[i - 1].OrbitNumber,
-                "Orbit number must not decrease for a pass with a later AOS.");
+            Assert.True(orderedByAos[i].OrbitNumber > orderedByAos[i - 1].OrbitNumber,
+                "Each later pass must have a higher orbit number — two passes never share one.");
         }
     }
 
