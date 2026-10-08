@@ -30,13 +30,15 @@ dotnet test backend/src/<TestProject>/<TestProject>.csproj
 dotnet test --filter "FullyQualifiedName~TestMethodName"
 
 # Add a new EF Core migration
-dotnet ef migrations add <MigrationName> --project backend/src/SatelliteTracker.Database
+dotnet ef migrations add <MigrationName> --project backend/src/SatelliteTracker.Database --startup-project backend/src/SatelliteTracker.API
 
 # Apply migrations
-dotnet ef database update --project backend/src/SatelliteTracker.Database
+dotnet ef database update --project backend/src/SatelliteTracker.Database --startup-project backend/src/SatelliteTracker.API
 ```
 
-Connection string: `ConnectionStrings:DefaultConnection` in `appsettings.Development.json` (not committed).
+Connection string: `ConnectionStrings:DefaultConnection` in the API project's `appsettings.Development.json`
+(not committed). The `dotnet ef` commands need `--startup-project` pointing at the API, or EF fails
+with "Unable to create a 'DbContext'" because it can't find the connection string.
 
 ---
 
