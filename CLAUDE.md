@@ -56,6 +56,11 @@ SatelliteTracker.Database       → EF Core, Migrations, Repositories
 ### Single Source of Truth Rules
 - Web and Android clients NEVER call N2YO or Microsoft Graph directly
 - The N2YO API key lives ONLY on the backend — never exposed to clients
+- …and never in logs. N2YO takes the key as a URL parameter, and IHttpClientFactory's default
+  loggers write full request URLs at Information. So `AddN2YOClient()`
+  (`SatelliteTracker.API.Http`) removes those loggers and uses `N2YOHttpClientLogger`, which logs
+  the same events with `apiKey=REDACTED`. Don't register the N2YO client with a plain
+  `AddHttpClient` again. `N2YOHttpClientLoggerTests` catches a regression.
 - All data flows through one point: our API
 
 ---
