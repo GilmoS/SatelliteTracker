@@ -30,13 +30,15 @@ dotnet test backend/src/<TestProject>/<TestProject>.csproj
 dotnet test --filter "FullyQualifiedName~TestMethodName"
 
 # Add a new EF Core migration
-dotnet ef migrations add <MigrationName> --project backend/src/SatelliteTracker.Database
+dotnet ef migrations add <MigrationName> --project backend/src/SatelliteTracker.Database --startup-project backend/src/SatelliteTracker.API
 
 # Apply migrations
-dotnet ef database update --project backend/src/SatelliteTracker.Database
+dotnet ef database update --project backend/src/SatelliteTracker.Database --startup-project backend/src/SatelliteTracker.API
 ```
 
-Connection string: `ConnectionStrings:DefaultConnection` in `appsettings.Development.json` (not committed).
+Connection string: `ConnectionStrings:DefaultConnection` in the API project's `appsettings.Development.json`
+(not committed). The `dotnet ef` commands need `--startup-project` pointing at the API, or EF fails
+with "Unable to create a 'DbContext'" because it can't find the connection string.
 
 ---
 
@@ -56,6 +58,11 @@ SatelliteTracker.Database       → EF Core, Migrations, Repositories
 ### Single Source of Truth Rules
 - Web and Android clients NEVER call N2YO or Microsoft Graph directly
 - The N2YO API key lives ONLY on the backend — never exposed to clients
+- …and never in logs. N2YO takes the key as a URL parameter, and IHttpClientFactory's default
+  loggers write full request URLs at Information. So `AddN2YOClient()`
+  (`SatelliteTracker.API.Http`) removes those loggers and uses `N2YOHttpClientLogger`, which logs
+  the same events with `apiKey=REDACTED`. Don't register the N2YO client with a plain
+  `AddHttpClient` again. `N2YOHttpClientLoggerTests` catches a regression.
 - All data flows through one point: our API
 
 ---
