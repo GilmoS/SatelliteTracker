@@ -89,10 +89,10 @@ controller exists.
 - **UID formula:** `CalendarEventMapper` builds each event's `Uid` as
   `{norad_id}-{orbit_number}@sattrakk.com`. It was chosen over alternatives (e.g. a rounded-AOS
   timestamp) because it's stable and monotonic per satellite and unique per physical pass, so a
-  re-sync updates the existing calendar event instead of creating a duplicate. Accepted limitation:
-  a TLE re-snapshot can rarely shift `orbit_number` by one at an orbit-count boundary for the same
-  physical pass, causing a duplicate event on re-sync instead of an update — this is deliberately
-  not engineered around (low severity, user deletes the stray duplicate manually), not a pending TODO.
+  re-sync updates the existing calendar event instead of creating a duplicate. `orbit_number` is
+  the ascending-node revolution number (see "Pass identity" under Database), which doesn't shift
+  between TLEs. Switching to that definition on 2026-10-04 changed the orbit numbers, and so the
+  UIDs, of every pass once; that was accepted because no beta tester had imported events yet.
 - **`TeamEmail`** on `CalendarSyncSettings` is intentional dead code / future-Graph
   infrastructure. `CalendarController` always passes `TeamEmail: null` — the ICS model has no
   programmatic way to notify a third party, so sharing happens on-device via `ACTION_SEND` after
@@ -200,7 +200,7 @@ Ten tables. All PKs are UUID (Guid in C#). All relationships via Fluent API in O
 |------------------------|-------------------------------------------------------------------|
 | satellites             | Satellite catalog. NoradId is unique.                             |
 | tles                   | TLE history per satellite. Up to 6 months back.                   |
-| passes                 | Calculated passes. 1 week forward + 6 months history.             |
+| passes                 | Calculated passes. 1 week forward + 6 months history. Unique on (SatelliteId, OrbitNumber). |
 | notes                  | Free-text per pass. CASCADE delete with pass.                     |
 | settings               | Single global row: MinElevation, OutlookDays, TeamEmail.          |
 | api_keys               | One row per registered beta tester. See below.                    |
@@ -208,6 +208,48 @@ Ten tables. All PKs are UUID (Guid in C#). All relationships via Fluent API in O
 | pass_subscriptions     | Per-tester notify opt-in per pass. Sparse. See below.             |
 | pass_notification_logs | Per-tester, per-threshold sent-notification ledger. See below.    |
 | allowlisted_emails     | Admin-managed beta signup allowlist. See below.                   |
+
+### Pass identity — natural key (SatelliteId, OrbitNumber) and upsert
+
+A pass's identity is **(SatelliteId, OrbitNumber)**: one physical pass per satellite per orbit.
+`Pass.Id` is only an internal surrogate key. It stays the same across recalculations, so notes,
+subscriptions, notification logs, Android deep links and cached pass IDs stay valid. A unique
+index (`IX_Passes_SatelliteId_OrbitNumber`, migration `AddPassNaturalKeyIndex`) enforces the key.
+
+- **Orbit number = ascending-node revolution number.** `OrbitNumberCalculator` takes the TLE's
+  revolution number at epoch (Line 2) and adds the northbound equator crossings (ECI Z going from
+  negative to non-negative, found by SGP4) between the TLE epoch and the pass AOS. All of one
+  calculation's AOS times share a single forward sweep from the epoch.
+  - **This replaced `rev + floor((AOS − epoch) / period)`**, which started each orbit at the TLE
+    epoch's arbitrary phase. Consecutive passes over Israel are about 93 min apart against a
+    period of about 95 min, so two different passes regularly got the same number.
+  - **Why ascending nodes work:** passes over Israel (~31° N) never have their AOS near the
+    equator, so each pass falls clearly inside one revolution and every TLE agrees which one.
+  - **Validated against the stored TLE history** (17 EROS C3 + 12 RUNNER-1 sets): 27/27
+    consecutive TLE pairs agree on the revolution number, and 459/459 passes keep their number
+    across consecutive TLEs.
+  - **Epoch-node tolerance:** our TLEs have their epoch exactly on an ascending node. A node
+    within ±60 s of the epoch is treated as the start of the TLE's own revolution and is never
+    counted again. Without this, float noise at the epoch could add 1 to every pass.
+- **Recalculation is an upsert, not delete-and-recreate.**
+  `PassService.CalculateAndSavePassesAsync` (run hourly by `PassCalculationJob`) calls
+  `IPassRepository.UpsertUpcomingAsync`, which handles one satellite in one transaction:
+  - **Match:** a computed pass whose key matches an existing upcoming pass (`Aos >= now`) updates
+    it in place: `Aos`, `Los`, `MaxElevation`, `AosAzimuth`, `LosAzimuth`, `DurationSec`, `TleId`
+    and `CalculatedAt`. Its `Id` and `OutlookSynced` are kept.
+  - **No match:** the computed pass is inserted.
+  - **Vanished:** an existing upcoming pass missing from the computed set is deleted. Its notes,
+    subscriptions and notification logs cascade with it, which is intentional because that pass
+    will no longer happen. This also runs when the computed set is empty.
+  - **Atomic:** if anything fails, nothing is committed.
+- **Scope boundary: `Aos < now` is never touched.** Past and in-progress passes are never modified
+  or deleted by the calculation.
+  - A pass already in progress at the window start comes back from `PassPredictor` with its AOS
+    clamped to "now", so its times are wrong. `PassService` drops any computed pass with
+    `AOS <= now`.
+  - The upsert also skips any computed pass whose orbit already belongs to a row with `Aos < now`.
+  - `now` comes from an injected `TimeProvider` and is read once per calculation. It is used for
+    the prediction window, the scope boundary and `CalculatedAt`.
 
 ### Beta multi-tester model — ApiKey and UserSettings
 
@@ -270,9 +312,9 @@ migration) — not deprecated, not kept-but-unused. That state is now split into
   once any tester's earliest threshold fired, the pass was marked done and no other tester —
   including one who registered afterward — could ever be notified about it.
 - Both `PassSubscription` and `PassNotificationLog` rows CASCADE-delete when their `Pass` row is
-  deleted (mirrors `Note`'s cascade pattern) — this covers the "pass cancelled/recalculated" case,
-  since `PassService.CalculateAndSavePassesAsync` deletes and replaces upcoming `Pass` rows via
-  `IPassRepository.DeleteUpcomingAsync` on every recalculation.
+  deleted (mirrors `Note`'s cascade pattern). Recalculation updates upcoming passes in place, so
+  this only fires for a pass that genuinely vanished from the prediction (see "Pass identity"
+  below), never for an ordinary hourly recalculation.
 - **Unresolved tension, flagged for a decision, not resolved here**: there is no existing job that
   deletes `Pass` rows once they're in the past (LOS in the past) — the 6-month history requirement
   means historical `Pass` rows are kept, only filtered out by `GetHistoryAsync`'s date range, never

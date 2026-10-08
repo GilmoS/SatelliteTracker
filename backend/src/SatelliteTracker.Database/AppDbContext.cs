@@ -83,6 +83,9 @@ private static void ConfigureEntities(ModelBuilder modelBuilder)
         e.HasOne(p => p.TleRecord)
          .WithMany(t => t.Passes)
          .HasForeignKey(p => p.TleId);
+        // A pass's natural identity: one physical pass per satellite per orbit. Id is a surrogate
+        // key; PassCalculationJob upserts on this pair so recalculation keeps a pass's Id.
+        e.HasIndex(p => new { p.SatelliteId, p.OrbitNumber }).IsUnique();
     });
     modelBuilder.Entity<Note>(e =>
     {

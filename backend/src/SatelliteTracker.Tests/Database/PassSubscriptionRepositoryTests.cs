@@ -63,11 +63,15 @@ public class PassSubscriptionRepositoryTests : IDisposable
         return (sat, tle, apiKey);
     }
 
+    // Unique per pass: (SatelliteId, OrbitNumber) is a unique index.
+    private int _nextOrbitNumber = 1;
+
     private Pass MakePass(Guid satelliteId, Guid tleId) => new()
     {
         Id = Guid.NewGuid(),
         SatelliteId = satelliteId,
         TleId = tleId,
+        OrbitNumber = _nextOrbitNumber++,
         Aos = DateTime.UtcNow.AddHours(1),
         Los = DateTime.UtcNow.AddHours(1).AddMinutes(10),
         MaxElevation = 45,

@@ -34,6 +34,7 @@ builder.Services.AddScoped<IApiKeyRepository, ApiKeyRepository>();
 // Services
 builder.Services.AddScoped<ITleService, TleService>();
 builder.Services.AddScoped<IPassService, PassService>();
+builder.Services.AddSingleton(TimeProvider.System);
 
 // N2YO HTTP client (reads N2YO:ApiKey from configuration)
 builder.Services.AddHttpClient<IN2YOClient, N2YOClient>();

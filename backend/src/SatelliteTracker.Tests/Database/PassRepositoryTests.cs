@@ -51,11 +51,15 @@ public class PassRepositoryTests : IDisposable
         return (sat, tle);
     }
 
+    // Unique per pass: (SatelliteId, OrbitNumber) is a unique index.
+    private int _nextOrbitNumber = 1;
+
     private Pass MakePass(Guid satelliteId, Guid tleId, DateTime aos) => new()
     {
         Id = Guid.NewGuid(),
         SatelliteId = satelliteId,
         TleId = tleId,
+        OrbitNumber = _nextOrbitNumber++,
         Aos = aos,
         Los = aos.AddMinutes(10),
         MaxElevation = 45,
@@ -262,7 +266,7 @@ public class PassRepositoryTests : IDisposable
         var (sat, tle) = Seed();
         // Matches orbitNumberFrom but not aosTo — must be excluded when both filters apply.
         var orbitMatchOnly = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-1));
-        orbitMatchOnly.OrbitNumber = 200;
+        orbitMatchOnly.OrbitNumber = 201;
         // Matches aosTo but not orbitNumberFrom — must be excluded when both filters apply.
         var aosMatchOnly = MakePass(sat.Id, tle.Id, DateTime.UtcNow.AddDays(-9));
         aosMatchOnly.OrbitNumber = 50;

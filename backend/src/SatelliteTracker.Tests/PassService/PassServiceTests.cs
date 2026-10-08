@@ -46,8 +46,17 @@ public class PassServiceTests
         FetchedAt = DateTime.UtcNow
     };
 
+    // Real EROS C3 TLE from the dev database, used where a test needs "now" pinned near its epoch.
+    private const string ErosLine1 = "1 54880U 22179A   26253.27827296  .00002487  00000-0  13073-3 0  9995";
+    private const string ErosLine2 = "2 54880 139.3347 131.0916 0008568 215.9148 144.1084 15.11381575205203";
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow, TimeSpan.Zero);
+    }
+
     private static (IPassService service, Mock<ISatelliteRepository> satRepo, Mock<ITleRepository> tleRepo,Mock<IPassRepository> passRepo)
-        CreateService()
+        CreateService(TimeProvider? timeProvider = null)
     {
         var satRepo = new Mock<ISatelliteRepository>();
         var tleRepo = new Mock<ITleRepository>();
@@ -61,7 +70,8 @@ public class PassServiceTests
             MinElevationDeg = 5.0
         });
         var service = new SatelliteTracker.PassService.Services.PassService(
-            satRepo.Object, tleRepo.Object, passRepo.Object, logger.Object, observerOptions);
+            satRepo.Object, tleRepo.Object, passRepo.Object, logger.Object, observerOptions,
+            timeProvider ?? TimeProvider.System);
         return (service, satRepo, tleRepo, passRepo);
     }
 
@@ -109,8 +119,8 @@ public class PassServiceTests
         tleRepo.Setup(r => r.GetLatestByNoradIdAsync(TestNoradId))
             .ReturnsAsync(Result<TleRecord>.Success(MakeTleRecord(IssLine2)));
 
-        passRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<Pass>>()))
-            .ReturnsAsync(Result<bool>.Success(true));
+        passRepo.Setup(r => r.UpsertUpcomingAsync(TestSatelliteId, It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<Pass>>()))
+            .ReturnsAsync(Result<PassUpsertResult>.Success(new PassUpsertResult(0, 0, 0, 0)));
 
         var result = await service.CalculateAndSavePassesAsync(TestSatelliteId);
 
@@ -121,7 +131,7 @@ public class PassServiceTests
     }
 
     [Fact]
-    public async Task CalculateAndSavePassesAsync_ComputesOrbitNumber_FromTleRevolutionAndElapsedOrbits()
+    public async Task CalculateAndSavePassesAsync_ComputesOrbitNumber_FromTleRevolutionAndAscendingNodes()
     {
         var (service, satRepo, tleRepo, passRepo) = CreateService();
 
@@ -132,9 +142,9 @@ public class PassServiceTests
             .ReturnsAsync(Result<TleRecord>.Success(MakeTleRecord(IssLine2)));
 
         List<Pass>? savedPasses = null;
-        passRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<Pass>>()))
-            .Callback<IEnumerable<Pass>>(p => savedPasses = p.ToList())
-            .ReturnsAsync(Result<bool>.Success(true));
+        passRepo.Setup(r => r.UpsertUpcomingAsync(TestSatelliteId, It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<Pass>>()))
+            .Callback<Guid, DateTime, IReadOnlyList<Pass>>((_, _, p) => savedPasses = p.ToList())
+            .ReturnsAsync(Result<PassUpsertResult>.Success(new PassUpsertResult(0, 0, 0, 0)));
 
         var result = await service.CalculateAndSavePassesAsync(TestSatelliteId);
 
@@ -144,15 +154,13 @@ public class PassServiceTests
 
         // Independently derive the expected orbit number from the same TLE, parsed fresh here
         // (TleParser itself is covered by TleParserTests.cs), to verify PassService actually
-        // wires the parsed epoch/mean-motion/revolution-number into the calculation rather than
-        // hardcoding a placeholder.
+        // wires the parsed TLE into OrbitNumberCalculator (covered by OrbitNumberCalculatorTests.cs)
+        // rather than hardcoding a placeholder.
         var tle = TleParser.Parse(IssLine1, IssLine2);
-        double orbitalPeriodMinutes = 1440.0 / tle.MeanMotion;
 
         foreach (var pass in savedPasses!)
         {
-            int expectedOrbitNumber = tle.RevolutionNumber +
-                (int)Math.Floor((pass.Aos - tle.Epoch).TotalMinutes / orbitalPeriodMinutes);
+            int expectedOrbitNumber = OrbitNumberCalculator.ComputeRevolutionNumber(tle, pass.Aos);
 
             Assert.Equal(expectedOrbitNumber, pass.OrbitNumber);
             Assert.NotEqual(0, pass.OrbitNumber);
@@ -160,7 +168,7 @@ public class PassServiceTests
     }
 
     [Fact]
-    public async Task CalculateAndSavePassesAsync_OrbitNumbers_AreNonDecreasing_AcrossPassesOrderedByAos()
+    public async Task CalculateAndSavePassesAsync_OrbitNumbers_AreStrictlyIncreasing_AcrossPassesOrderedByAos()
     {
         var (service, satRepo, tleRepo, passRepo) = CreateService();
 
@@ -171,9 +179,9 @@ public class PassServiceTests
             .ReturnsAsync(Result<TleRecord>.Success(MakeTleRecord(IssLine2)));
 
         List<Pass>? savedPasses = null;
-        passRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<Pass>>()))
-            .Callback<IEnumerable<Pass>>(p => savedPasses = p.ToList())
-            .ReturnsAsync(Result<bool>.Success(true));
+        passRepo.Setup(r => r.UpsertUpcomingAsync(TestSatelliteId, It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<Pass>>()))
+            .Callback<Guid, DateTime, IReadOnlyList<Pass>>((_, _, p) => savedPasses = p.ToList())
+            .ReturnsAsync(Result<PassUpsertResult>.Success(new PassUpsertResult(0, 0, 0, 0)));
 
         await service.CalculateAndSavePassesAsync(TestSatelliteId);
 
@@ -182,13 +190,13 @@ public class PassServiceTests
 
         for (int i = 1; i < orderedByAos.Count; i++)
         {
-            Assert.True(orderedByAos[i].OrbitNumber >= orderedByAos[i - 1].OrbitNumber,
-                "Orbit number must not decrease for a pass with a later AOS.");
+            Assert.True(orderedByAos[i].OrbitNumber > orderedByAos[i - 1].OrbitNumber,
+                "Each later pass must have a higher orbit number — two passes never share one.");
         }
     }
 
     [Fact]
-    public async Task CalculateAndSavePassesAsync_LowInclinationTle_ReturnsEmptyListWithoutSaving()
+    public async Task CalculateAndSavePassesAsync_LowInclinationTle_ReturnsEmptyList_AndUpsertsEmptySet()
     {
         var (service, satRepo, tleRepo, passRepo) = CreateService();
 
@@ -199,11 +207,71 @@ public class PassServiceTests
         tleRepo.Setup(r => r.GetLatestByNoradIdAsync(TestNoradId))
             .ReturnsAsync(Result<TleRecord>.Success(MakeTleRecord(LowIncLine2)));
 
+        passRepo.Setup(r => r.UpsertUpcomingAsync(TestSatelliteId, It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<Pass>>()))
+            .ReturnsAsync(Result<PassUpsertResult>.Success(new PassUpsertResult(0, 0, 0, 0)));
+
         var result = await service.CalculateAndSavePassesAsync(TestSatelliteId);
 
         Assert.True(result.IsSuccess);
         Assert.Empty(result.Value!);
-        passRepo.Verify(r => r.AddRangeAsync(It.IsAny<IEnumerable<Pass>>()), Times.Never);
+        // Still upserted, so upcoming passes that are no longer predicted get deleted.
+        passRepo.Verify(r => r.UpsertUpcomingAsync(TestSatelliteId, It.IsAny<DateTime>(),
+            It.Is<IReadOnlyList<Pass>>(p => p.Count == 0)), Times.Once);
+    }
+
+    [Fact]
+    public async Task CalculateAndSavePassesAsync_UpsertFails_ReturnsFailure()
+    {
+        var (service, satRepo, tleRepo, passRepo) = CreateService();
+
+        satRepo.Setup(r => r.GetByIdAsync(TestSatelliteId))
+            .ReturnsAsync(Result<Satellite>.Success(TestSatellite));
+        tleRepo.Setup(r => r.GetLatestByNoradIdAsync(TestNoradId))
+            .ReturnsAsync(Result<TleRecord>.Success(MakeTleRecord(IssLine2)));
+        passRepo.Setup(r => r.UpsertUpcomingAsync(TestSatelliteId, It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<Pass>>()))
+            .ReturnsAsync(Result<PassUpsertResult>.Failure("unique constraint violated"));
+
+        var result = await service.CalculateAndSavePassesAsync(TestSatelliteId);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("unique constraint violated", result.Error);
+    }
+
+    [Fact]
+    public async Task CalculateAndSavePassesAsync_PassInProgressAtNow_IsNotSaved()
+    {
+        // Pin "now" two minutes into a real pass, so the predictor sees the satellite already up.
+        var tle = TleParser.Parse(ErosLine1, ErosLine2);
+        var inProgress = PassPredictor.PredictPasses(tle, TestSatelliteId, 32.0055, 34.8854, 135.0,
+            tle.Epoch, tle.Epoch.AddDays(1)).First(p => p.DurationSeconds > 300);
+        var now = inProgress.AOS.AddMinutes(2);
+
+        var (service, satRepo, tleRepo, passRepo) = CreateService(new FixedTimeProvider(now));
+
+        satRepo.Setup(r => r.GetByIdAsync(TestSatelliteId))
+            .ReturnsAsync(Result<Satellite>.Success(TestSatellite));
+        tleRepo.Setup(r => r.GetLatestByNoradIdAsync(TestNoradId))
+            .ReturnsAsync(Result<TleRecord>.Success(new TleRecord
+            {
+                Id = TestTleId, SatelliteId = TestSatelliteId, Line1 = ErosLine1, Line2 = ErosLine2,
+                Epoch = tle.Epoch, FetchedAt = tle.Epoch
+            }));
+
+        List<Pass>? savedPasses = null;
+        passRepo.Setup(r => r.UpsertUpcomingAsync(TestSatelliteId, It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<Pass>>()))
+            .Callback<Guid, DateTime, IReadOnlyList<Pass>>((_, _, p) => savedPasses = p.ToList())
+            .ReturnsAsync(Result<PassUpsertResult>.Success(new PassUpsertResult(0, 0, 0, 0)));
+
+        var result = await service.CalculateAndSavePassesAsync(TestSatelliteId);
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(savedPasses);
+        Assert.NotEmpty(savedPasses!);
+        // Without the filter the predictor returns this pass with its AOS clamped to "now".
+        Assert.All(savedPasses!, p => Assert.True(p.Aos > now));
+        Assert.All(result.Value!, p => Assert.True(p.AOS > now));
+        Assert.DoesNotContain(savedPasses!,
+            p => p.OrbitNumber == OrbitNumberCalculator.ComputeRevolutionNumber(tle, inProgress.AOS));
     }
 
     // ── GetUpcomingPassesAsync ───────────────────────────────────────────────

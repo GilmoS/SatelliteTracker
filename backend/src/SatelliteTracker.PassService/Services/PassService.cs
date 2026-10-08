@@ -19,16 +19,18 @@ public class PassService : IPassService
     private readonly IPassRepository _passRepo; // Repository for accessing and storing satellite pass data
     private readonly ILogger<PassService> _logger; // Logger for logging information and errors
     private readonly ObserverSettings _observer;
+    private readonly TimeProvider _timeProvider; // Clock for the calculation window, injectable for tests
 
 
     // Constructor that initializes the repositories and logger through dependency injection.
-    public PassService(ISatelliteRepository satelliteRepo,ITleRepository tleRepo,IPassRepository passRepo,ILogger<PassService> logger , IOptions<ObserverSettings> observer)
+    public PassService(ISatelliteRepository satelliteRepo,ITleRepository tleRepo,IPassRepository passRepo,ILogger<PassService> logger , IOptions<ObserverSettings> observer, TimeProvider timeProvider)
     {
         _satelliteRepo = satelliteRepo;
         _tleRepo = tleRepo;
         _passRepo = passRepo;
         _logger = logger;
         _observer = observer.Value;
+        _timeProvider = timeProvider;
     }
 
     // This method calculates the upcoming passes of a satellite and saves them to the database.
@@ -60,6 +62,10 @@ public class PassService : IPassService
             return Result<IEnumerable<PassResult>>.Failure($"TLE parse error: {ex.Message}");
         }
 
+        // One "now" for the whole calculation: it is both the prediction window start and the
+        // boundary between upcoming passes (this job's to manage) and past/in-progress ones.
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+
         // Use the PassPredictor to calculate the upcoming passes of the satellite based on the TLE data and observer's location
         var passResults = PassPredictor.PredictPasses(
             tleData,
@@ -67,20 +73,28 @@ public class PassService : IPassService
             _observer.Lat,
             _observer.Lng,
             _observer.AltMeters,
-            DateTime.UtcNow,
-            DateTime.UtcNow.AddDays(7),
-            _observer.MinElevationDeg).ToList();
+            now,
+            now.AddDays(7),
+            _observer.MinElevationDeg)
+            // A pass already in progress at "now" comes back with its AOS clamped to the window
+            // start, so its times are wrong. It isn't upcoming either, so it is left alone.
+            .Where(pr => pr.AOS > now)
+            .ToList();
 
-        if (passResults.Count == 0) // If no passes are predicted, return an empty result
-            return Result<IEnumerable<PassResult>>.Success(passResults);
+        // No early return for an empty result: the upsert below still has to delete upcoming passes
+        // that are no longer predicted.
+
+        // Orbit number = TLE revolution number + ascending nodes up to AOS (see OrbitNumberCalculator)
+        var orbitNumbers = OrbitNumberCalculator.ComputeRevolutionNumbers(
+            tleData, passResults.Select(pr => pr.AOS).ToList());
 
         // Map the predicted pass results to Pass entities for saving to the database
-        var passes = passResults.Select(pr => new Pass
+        var passes = passResults.Select((pr, i) => new Pass
         {
             Id = Guid.NewGuid(),
             SatelliteId = satelliteId,
             TleId = tleRecord.Id,
-            OrbitNumber = ComputeOrbitNumber(tleData, pr.AOS),
+            OrbitNumber = orbitNumbers[i],
             Aos = pr.AOS,
             Los = pr.LOS,
             MaxElevation = (decimal)pr.MaxElevation,
@@ -88,20 +102,20 @@ public class PassService : IPassService
             LosAzimuth = (decimal)pr.LosAzimuth,
             DurationSec = pr.DurationSeconds,
             OutlookSynced = false,
-            CalculatedAt = DateTime.UtcNow
+            CalculatedAt = now
         }).ToList();
 
-        //Remove previosly predicted passes 
-        await _passRepo.DeleteUpcomingAsync(satelliteId, DateTime.UtcNow);
-
-        // Save the predicted passes to the database using the pass repository
-        var saveResult = await _passRepo.AddRangeAsync(passes);
+        // Upsert by (SatelliteId, OrbitNumber): existing upcoming passes keep their Id (and their
+        // notes/subscriptions/notification logs), so recalculation no longer churns pass IDs.
+        var saveResult = await _passRepo.UpsertUpcomingAsync(satelliteId, now, passes);
 
         if (!saveResult.IsSuccess)
             return Result<IEnumerable<PassResult>>.Failure(saveResult.Error!);
 
-        // Log the number of passes saved for the satellite
-        _logger.LogInformation("Saved {Count} passes for satellite {SatelliteId}", passes.Count, satelliteId);
+        var upsert = saveResult.Value!;
+        _logger.LogInformation(
+            "Upserted passes for satellite {SatelliteId}: {Inserted} inserted, {Updated} updated, {Deleted} deleted, {SkippedPast} skipped (orbit already past)",
+            satelliteId, upsert.Inserted, upsert.Updated, upsert.Deleted, upsert.SkippedPast);
 
         return Result<IEnumerable<PassResult>>.Success(passResults); // Return the predicted pass results as a successful result
     }
@@ -179,17 +193,5 @@ public class PassService : IPassService
         var points = GroundTrackCalculator.ComputeGroundTrack(
             tleData, nowUtc - period, nowUtc + period + extraAhead, OrbitTrackStepSeconds);
         return Result<OrbitTrack>.Success(new OrbitTrack(satResult.Value!.NoradId, periodMinutes, points));
-    }
-
-    // Computes the revolution number at a given pass time by advancing the TLE's Revolution
-    // Number at Epoch by however many full orbits elapse between the TLE epoch and the pass AOS.
-    // MeanMotion is in revs/day, so 1440 / MeanMotion gives the orbital period in minutes.
-    private static int ComputeOrbitNumber(TleData tle, DateTime passAosUtc)
-    {
-        double orbitalPeriodMinutes = 1440.0 / tle.MeanMotion;
-        double elapsedMinutes = (passAosUtc - tle.Epoch).TotalMinutes;
-        int elapsedOrbits = (int)Math.Floor(elapsedMinutes / orbitalPeriodMinutes);
-
-        return tle.RevolutionNumber + elapsedOrbits;
     }
 }
