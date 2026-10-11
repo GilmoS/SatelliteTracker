@@ -143,4 +143,23 @@ public class UserSettingsRepository : IUserSettingsRepository
             return Result<UserSettings>.Failure(ex.Message);
         }
     }
+
+    public async Task<Result<bool>> ClearFcmTokenAsync(Guid apiKeyId, string expectedToken)
+    {
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var cleared = await _context.UserSettings
+                .Where(s => s.ApiKeyId == apiKeyId && s.FcmToken == expectedToken)
+                .ExecuteUpdateAsync(u => u
+                    .SetProperty(s => s.FcmToken, (string?)null)
+                    .SetProperty(s => s.UpdatedAt, now));
+
+            return Result<bool>.Success(cleared == 1);
+        }
+        catch (Exception ex)
+        {
+            return Result<bool>.Failure(ex.Message);
+        }
+    }
 }

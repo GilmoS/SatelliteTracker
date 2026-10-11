@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Data.Sqlite;
 using SatelliteTracker.Database;
 using SatelliteTracker.Database.Entities;
@@ -132,5 +133,49 @@ public class UserSettingsRepositoryTests : IDisposable
         Assert.True(result.IsSuccess);
         Assert.Single(result.Value!);
         Assert.Equal("active-token", result.Value!.First().FcmToken);
+    }
+
+    private async Task<ApiKey> SeedSettings(string? fcmToken)
+    {
+        var apiKey = MakeApiKey();
+        _context.ApiKeys.Add(apiKey);
+        _context.UserSettings.Add(new UserSettings
+        {
+            Id = Guid.NewGuid(),
+            ApiKeyId = apiKey.Id,
+            FcmToken = fcmToken,
+            AlertMinutes = [5, 10],
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        await _context.SaveChangesAsync();
+        return apiKey;
+    }
+
+    [Fact]
+    public async Task ClearFcmTokenAsync_MatchingToken_ClearsItAndKeepsAlertMinutes()
+    {
+        var apiKey = await SeedSettings("dead-token");
+
+        var result = await _repo.ClearFcmTokenAsync(apiKey.Id, "dead-token");
+
+        Assert.True(result.IsSuccess);
+        Assert.True(result.Value);
+        var row = await _context.UserSettings.AsNoTracking().SingleAsync(s => s.ApiKeyId == apiKey.Id);
+        Assert.Null(row.FcmToken);
+        Assert.Equal(new[] { 5, 10 }, row.AlertMinutes);
+    }
+
+    // The app may have synced a fresh token between the failed send and the clear.
+    [Fact]
+    public async Task ClearFcmTokenAsync_TokenAlreadyReplaced_LeavesNewTokenAlone()
+    {
+        var apiKey = await SeedSettings("fresh-token");
+
+        var result = await _repo.ClearFcmTokenAsync(apiKey.Id, "dead-token");
+
+        Assert.True(result.IsSuccess);
+        Assert.False(result.Value);
+        var row = await _context.UserSettings.AsNoTracking().SingleAsync(s => s.ApiKeyId == apiKey.Id);
+        Assert.Equal("fresh-token", row.FcmToken);
     }
 }

@@ -136,7 +136,9 @@ private static void ConfigureEntities(ModelBuilder modelBuilder)
          .WithMany(a => a.PassNotificationLogs)
          .HasForeignKey(l => l.ApiKeyId)
          .OnDelete(DeleteBehavior.Cascade);
-        // Append-only ledger: one row per (pass, tester, threshold) that actually fired.
+        e.Property(l => l.Status).HasConversion<string>().HasMaxLength(20);
+        e.Property(l => l.LastError).HasMaxLength(1000);
+        // One attempt record per (pass, tester, threshold); the insert is the claim before sending.
         e.HasIndex(l => new { l.PassId, l.ApiKeyId, l.AlertMinutes }).IsUnique();
     });
     modelBuilder.Entity<AllowlistedEmail>(e =>

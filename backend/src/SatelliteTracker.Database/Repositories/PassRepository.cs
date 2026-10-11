@@ -274,4 +274,20 @@ public class PassRepository : IPassRepository
             return Result<PassUpsertResult>.Failure(ex.Message);
         }
     }
+
+    public async Task<Result<int>> DeleteAosBeforeAsync(DateTime cutoff)
+    {
+        try
+        {
+            var deleted = await _context.Passes
+                .Where(p => p.Aos < cutoff)
+                .ExecuteDeleteAsync();
+
+            return Result<int>.Success(deleted);
+        }
+        catch (Exception ex)
+        {
+            return Result<int>.Failure(ex.Message);
+        }
+    }
 }

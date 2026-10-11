@@ -13,6 +13,9 @@ public class PassNotificationJob : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(60);
 
+    // Total sends per (pass, tester, threshold): the first attempt plus up to two retries, one per tick.
+    public const int MaxAttempts = 3;
+
     public PassNotificationJob(ILogger<PassNotificationJob> logger, IServiceScopeFactory scopeFactory)
     {
         _logger = logger;
@@ -115,11 +118,13 @@ public class PassNotificationJob : BackgroundService
             return;
         }
 
-        var alreadySent = sentLogResult.Value!
-            .Select(l => (l.PassId, l.ApiKeyId, l.AlertMinutes))
-            .ToHashSet();
+        var attempts = sentLogResult.Value!
+            .ToDictionary(l => (l.PassId, l.ApiKeyId, l.AlertMinutes));
 
         var now = DateTime.UtcNow;
+
+        // Testers whose token FCM rejected during this tick — skip their remaining sends.
+        var deadTokenTesters = new HashSet<Guid>();
 
         foreach (var pass in passes)
         {
@@ -127,6 +132,9 @@ public class PassNotificationJob : BackgroundService
 
             foreach (var settings in testerSettings)
             {
+                if (deadTokenTesters.Contains(settings.ApiKeyId))
+                    continue;
+
                 var notify = notifyOverrides.TryGetValue((pass.Id, settings.ApiKeyId), out var explicitNotify)
                     ? explicitNotify
                     : false;
@@ -135,31 +143,93 @@ public class PassNotificationJob : BackgroundService
 
                 foreach (var minutesBefore in settings.AlertMinutes)
                 {
-                    if (Math.Abs(minutesUntilAos - minutesBefore) > 1.0)
-                        continue;
-
                     var key = (pass.Id, settings.ApiKeyId, minutesBefore);
-                    if (alreadySent.Contains(key))
-                        continue;
+                    int attemptNumber;
+                    int minutesInMessage;
+                    Guid logId;
 
-                    await firebaseService.SendPassNotificationAsync(
+                    if (attempts.TryGetValue(key, out var existing))
+                    {
+                        // Retry a failed send while attempts remain and the pass hasn't started.
+                        // The original threshold time has passed by now, so the message states
+                        // the real minutes remaining instead of the threshold value.
+                        if (existing.Status != PassNotificationStatus.Failed || existing.AttemptCount >= MaxAttempts)
+                            continue;
+
+                        minutesInMessage = (int)Math.Round(minutesUntilAos);
+                        if (minutesInMessage < 1)
+                            continue;
+
+                        var claim = await notificationLogRepo.TryClaimRetryAsync(
+                            existing.Id, existing.AttemptCount, now);
+                        if (!claim.IsSuccess || !claim.Value)
+                            continue;
+
+                        attemptNumber = existing.AttemptCount + 1;
+                        logId = existing.Id;
+                    }
+                    else
+                    {
+                        if (Math.Abs(minutesUntilAos - minutesBefore) > 1.0)
+                            continue;
+
+                        // Claim the threshold before sending, so a concurrent tick can't send it
+                        // too; the row is updated with the real outcome below.
+                        var log = new PassNotificationLog
+                        {
+                            Id = Guid.NewGuid(),
+                            PassId = pass.Id,
+                            ApiKeyId = settings.ApiKeyId,
+                            AlertMinutes = minutesBefore,
+                            Status = PassNotificationStatus.Pending,
+                            AttemptCount = 1,
+                            LastAttemptAt = now
+                        };
+                        var claim = await notificationLogRepo.TryInsertAsync(log);
+                        if (!claim.IsSuccess)
+                        {
+                            _logger.LogWarning("Failed to claim notification for pass {PassId}: {Error}",
+                                pass.Id, claim.Error);
+                            continue;
+                        }
+                        if (!claim.Value)
+                            continue;
+
+                        attempts[key] = log;
+                        attemptNumber = 1;
+                        minutesInMessage = minutesBefore;
+                        logId = log.Id;
+                    }
+
+                    var sendResult = await firebaseService.SendPassNotificationAsync(
                         settings.FcmToken!,
                         pass.Satellite.Name,
                         pass.Aos,
-                        minutesBefore,
+                        minutesInMessage,
                         pass.Id);
 
-                    // TryInsertAsync tolerates a concurrent job tick already having logged this
-                    // key — either way, this threshold is now accounted for.
-                    await notificationLogRepo.TryInsertAsync(new PassNotificationLog
+                    var status = sendResult.Outcome switch
                     {
-                        Id = Guid.NewGuid(),
-                        PassId = pass.Id,
-                        ApiKeyId = settings.ApiKeyId,
-                        AlertMinutes = minutesBefore,
-                        SentAt = now
-                    });
-                    alreadySent.Add(key);
+                        FcmSendOutcome.Sent => PassNotificationStatus.Sent,
+                        FcmSendOutcome.Failed when attemptNumber < MaxAttempts => PassNotificationStatus.Failed,
+                        _ => PassNotificationStatus.Abandoned
+                    };
+
+                    var recorded = await notificationLogRepo.RecordOutcomeAsync(
+                        logId, status, sendResult.Error, DateTimeOffset.UtcNow);
+                    if (!recorded.IsSuccess)
+                        _logger.LogWarning("Failed to record notification outcome {Status} for pass {PassId}: {Error}",
+                            status, pass.Id, recorded.Error);
+
+                    if (sendResult.Outcome == FcmSendOutcome.TokenInvalid)
+                    {
+                        deadTokenTesters.Add(settings.ApiKeyId);
+                        var cleared = await userSettingsRepo.ClearFcmTokenAsync(settings.ApiKeyId, settings.FcmToken!);
+                        if (!cleared.IsSuccess)
+                            _logger.LogWarning("Failed to clear dead FCM token for tester {ApiKeyId}: {Error}",
+                                settings.ApiKeyId, cleared.Error);
+                        break;
+                    }
                 }
             }
         }
