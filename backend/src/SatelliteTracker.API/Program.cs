@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi;
 using SatelliteTracker.API.Authentication;
+using SatelliteTracker.API.Http;
 using SatelliteTracker.API.Jobs;
 using SatelliteTracker.API.Services;
 using SatelliteTracker.Database;
@@ -36,8 +37,9 @@ builder.Services.AddScoped<ITleService, TleService>();
 builder.Services.AddScoped<IPassService, PassService>();
 builder.Services.AddSingleton(TimeProvider.System);
 
-// N2YO HTTP client (reads N2YO:ApiKey from configuration)
-builder.Services.AddHttpClient<IN2YOClient, N2YOClient>();
+// N2YO HTTP client (reads N2YO:ApiKey from configuration). Its request logging redacts the
+// API key from URLs — see N2YOHttpClientLogger.
+builder.Services.AddN2YOClient();
 
 // Firebase
 builder.Services.AddSingleton<IFirebaseService, FirebaseService>();
