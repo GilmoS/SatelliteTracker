@@ -21,4 +21,11 @@ public interface IUserSettingsRepository
     /// Never touches AlertMinutes on an existing row — see CLAUDE.md's lazy-creation note.
     /// </summary>
     Task<Result<UserSettings>> UpsertFcmTokenAsync(Guid apiKeyId, string fcmToken);
+
+    /// <summary>
+    /// Clears a dead FcmToken (FCM reported it unregistered/invalid), but only if the row still
+    /// holds <paramref name="expectedToken"/> — a fresh token the app synced in the meantime is
+    /// never wiped. Returns <c>true</c> if the token was cleared.
+    /// </summary>
+    Task<Result<bool>> ClearFcmTokenAsync(Guid apiKeyId, string expectedToken);
 }

@@ -213,7 +213,7 @@ Ten tables. All PKs are UUID (Guid in C#). All relationships via Fluent API in O
 | api_keys               | One row per registered beta tester. See below.                    |
 | user_settings          | Per-tester notification prefs, 1:1 with api_keys. See below.      |
 | pass_subscriptions     | Per-tester notify opt-in per pass. Sparse. See below.             |
-| pass_notification_logs | Per-tester, per-threshold sent-notification ledger. See below.    |
+| pass_notification_logs | Per-tester, per-threshold notification attempts + outcome. See below. |
 | allowlisted_emails     | Admin-managed beta signup allowlist. See below.                   |
 
 ### Pass identity — natural key (SatelliteId, OrbitNumber) and upsert
@@ -306,13 +306,13 @@ migration) — not deprecated, not kept-but-unused. That state is now split into
   data migration, and no change to any *existing* row's stored `Notify` value — it changed only
   how a *missing* row is interpreted. A row explicitly storing `Notify = true` or `Notify = false`
   means exactly what it always meant.
-- **`PassNotificationLog`** — append-only ledger of notifications actually sent, one row per
-  `(PassId, ApiKeyId, AlertMinutes)` threshold that fired, never a flag that gets flipped back. A
-  single tester can have multiple rows for the same pass — one per `AlertMinutes` threshold (e.g.
-  `[5, 10, 30]` can produce up to 3 rows for one pass, one per job tick that matches a threshold).
-  Unique index on `(PassId, ApiKeyId, AlertMinutes)`. `IPassNotificationLogRepository
-  .TryInsertAsync` catches the unique-constraint violation from a concurrent job tick and returns
-  `false` ("already logged") instead of throwing — do not let that exception propagate.
+- **`PassNotificationLog`** — one attempt record per `(PassId, ApiKeyId, AlertMinutes)` threshold.
+  A single tester can have multiple rows for the same pass — one per `AlertMinutes` threshold (e.g.
+  `[5, 10, 30]` can produce up to 3 rows for one pass). Unique index on
+  `(PassId, ApiKeyId, AlertMinutes)`. `IPassNotificationLogRepository.TryInsertAsync` catches the
+  unique-constraint violation from a concurrent job tick and returns `false` ("already claimed")
+  instead of throwing — do not let that exception propagate. See "Push retry" below for the
+  `Status`/`AttemptCount` lifecycle.
 - `PassNotificationJob` fetches all future passes, then for each (pass, active tester) pair checks
   `PassSubscription` (sparse opt-in) before checking `PassNotificationLog` per `AlertMinutes`
   threshold. This fixes the previous bug where a single global `NotificationSent` flag meant that
@@ -322,15 +322,45 @@ migration) — not deprecated, not kept-but-unused. That state is now split into
   deleted (mirrors `Note`'s cascade pattern). Recalculation updates upcoming passes in place, so
   this only fires for a pass that genuinely vanished from the prediction (see "Pass identity"
   below), never for an ordinary hourly recalculation.
-- **Unresolved tension, flagged for a decision, not resolved here**: there is no existing job that
-  deletes `Pass` rows once they're in the past (LOS in the past) — the 6-month history requirement
-  means historical `Pass` rows are kept, only filtered out by `GetHistoryAsync`'s date range, never
-  deleted. So cascade delete never fires for "pass has passed." `IPassSubscriptionRepository
-  .DeleteByPassIdAsync` and `IPassNotificationLogRepository.DeleteByPassIdAsync` exist as
-  standalone primitives (delete the subscription/log rows without deleting the `Pass` row) for a
-  future expiry job, but nothing calls them yet. Deciding whether/when to clean up
-  `PassSubscription`/`PassNotificationLog` rows for expired-but-retained passes is a product
-  decision, not made here.
+- **Retention — `PassRetentionJob`** (`SatelliteTracker.PassService.Services`, decided 2026-10-11):
+  deletes every pass whose AOS is more than **6 months + 1 day** in the past
+  (`PassRetentionJob.CutoffFor`), via one `ExecuteDeleteAsync` in
+  `IPassRepository.DeleteAosBeforeAsync`. The DB cascade removes its notes, subscriptions and
+  notification logs with it — notes included, by product decision, matching the 6-month history
+  rule. Runs once at startup (so a server that was down at 03:00 catches up), then daily at
+  **03:00 Asia/Jerusalem** (DST-aware; `DelayUntilNextRun`). Subscription/log rows of past passes
+  inside the window are kept until their pass ages out. TLEs left without passes are then removed
+  by `TleUpdateJob`'s existing `DeleteOlderThanAsync(6 months, no passes)` cleanup.
+  `IPassSubscriptionRepository.DeleteByPassIdAsync` and `IPassNotificationLogRepository
+  .DeleteByPassIdAsync` remain as unused standalone primitives.
+  The Android-side equivalent (pruning old passes from Room) is a separate, not-yet-built follow-up.
+
+### Push retry — PassNotificationLog lifecycle (decided 2026-10-11)
+
+A failed FCM send used to be logged as sent and never retried. Now each log row records the real
+outcome:
+
+- **Claim before send.** For a threshold within its ±1 min window, the job inserts the row as
+  `Pending` (`AttemptCount = 1`) *before* calling FCM; losing that insert to a concurrent tick
+  means "don't send." After the send, `RecordOutcomeAsync` sets `Sent` (with `SentAt`), `Failed`
+  (with `LastError`), or `Abandoned`.
+- **`Status`**: `Pending` (in flight) → `Sent` (final) / `Failed` (retryable) / `Abandoned`
+  (final: attempts exhausted or dead token). Stored as a string.
+- **Retry**: a `Failed` row is retried on the next job tick (60 s), up to
+  `PassNotificationJob.MaxAttempts` = 3 sends in total, as long as AOS is still ≥ 1 minute away and
+  the tester is still opted in with that threshold in `AlertMinutes`. `TryClaimRetryAsync` moves
+  it back to `Pending` atomically (conditional `ExecuteUpdate` on `Status = Failed` and the expected
+  `AttemptCount`), so two ticks can't both retry. The threshold time has passed by then, so the
+  **retry message states the real minutes remaining** (rounded), not the threshold value.
+- **Dead tokens**: `FirebaseService` returns an `FcmSendResult` instead of swallowing errors.
+  `Unregistered`, `SenderIdMismatch` and `InvalidArgument` are `TokenInvalid`: the row is
+  `Abandoned`, the tester is skipped for the rest of that tick, and
+  `IUserSettingsRepository.ClearFcmTokenAsync` nulls `UserSettings.FcmToken` — only if it still
+  holds the failed token, so a fresh token synced in the meantime survives. The app re-sends a token
+  via `onNewToken`/re-registration. Any other error (outage, Firebase not configured) is `Failed`.
+- **At-most-once on crash**: a row left `Pending` by a crash mid-send is never retried — re-sending
+  it could duplicate a notification that actually went out.
+- Migration `PassNotificationRetry` backfills pre-existing rows as `Sent` with one attempt.
 
 `PATCH /api/passes/{id}/notify` is fully implemented (Milestone E, Step 1.3) —
 `PassesController.PatchNotify` resolves the caller's `ApiKeyId` from the authenticated principal
@@ -569,11 +599,8 @@ findings from that run:
   → synced to `UserSettings.FcmToken` on registration (and to the *new* `ApiKey` on
   re-registration) → `PassNotificationJob` fired within its ±1 min threshold window → notification
   shown on device → tap opened Pass Details for the right `passId`.
-- **Open follow-up (pre-existing, not from the merges): a failed FCM send is logged as sent.**
-  `FirebaseService.SendPassNotificationAsync` catches and logs every send exception and returns
-  normally. `PassNotificationJob` then unconditionally writes the `PassNotificationLog` row, so a
-  send that failed (bad token, FCM outage) is recorded as delivered and never retried for that
-  threshold. Whether to retry, and how, is a decision. Not changed here.
+- **Resolved 2026-10-11: a failed FCM send was logged as sent.** Failed sends are now recorded
+  honestly and retried; dead tokens are cleared. See "Push retry" under Database.
 - **Open follow-up: CartoDB basemap tiles now require an API key.** As of 2026-09-24, every keyless
   `basemaps.cartocdn.com/dark_all` tile comes back watermarked "API KEY REQUIRED", whatever the
   request headers. This affects both the Android Map and the web frontend (`SatelliteMap.tsx`).

@@ -54,6 +54,7 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
             RemoveHostedService<TleUpdateJob>(services);
             RemoveHostedService<PassCalculationJob>(services);
             RemoveHostedService<PassNotificationJob>(services);
+            RemoveHostedService<PassRetentionJob>(services);
 
             using var scope = services.BuildServiceProvider().CreateScope();
             var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();

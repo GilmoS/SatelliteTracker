@@ -60,6 +60,7 @@ builder.Services.AddOutlookServiceModule();
 builder.Services.AddHostedService<TleUpdateJob>();
 builder.Services.AddHostedService<PassCalculationJob>();
 builder.Services.AddHostedService<PassNotificationJob>();
+builder.Services.AddHostedService<PassRetentionJob>();
 
 // Caching
 builder.Services.AddMemoryCache();

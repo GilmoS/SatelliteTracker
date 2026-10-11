@@ -59,4 +59,11 @@ public interface IPassRepository
     /// programmatic way to confirm the user actually imported the event.
     /// </summary>
     Task<Result> MarkOutlookSyncedAsync(IEnumerable<Guid> passIds);
+
+    /// <summary>
+    /// Retention: deletes every pass whose AOS is before <paramref name="cutoff"/>, in one
+    /// statement. The database cascades the delete to the pass's notes, subscriptions and
+    /// notification logs. Returns the number of passes deleted.
+    /// </summary>
+    Task<Result<int>> DeleteAosBeforeAsync(DateTime cutoff);
 }

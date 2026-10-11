@@ -37,8 +37,8 @@ public class PassNotificationLogRepository : IPassNotificationLogRepository
         }
         catch (DbUpdateException)
         {
-            // Unique (PassId, ApiKeyId, AlertMinutes) violation — another tick already logged
-            // this send. Detach so the context stays usable, and treat this as "already sent".
+            // Unique (PassId, ApiKeyId, AlertMinutes) violation — another tick already claimed
+            // this threshold. Detach so the context stays usable, and treat this as "already claimed".
             _context.Entry(log).State = EntityState.Detached;
             return Result<bool>.Success(false);
         }
@@ -47,6 +47,54 @@ public class PassNotificationLogRepository : IPassNotificationLogRepository
             return Result<bool>.Failure(ex.Message);
         }
     }
+
+    public async Task<Result<bool>> TryClaimRetryAsync(Guid logId, int expectedAttemptCount, DateTimeOffset attemptAt)
+    {
+        try
+        {
+            var claimed = await _context.PassNotificationLogs
+                .Where(l => l.Id == logId
+                            && l.Status == PassNotificationStatus.Failed
+                            && l.AttemptCount == expectedAttemptCount)
+                .ExecuteUpdateAsync(u => u
+                    .SetProperty(l => l.Status, PassNotificationStatus.Pending)
+                    .SetProperty(l => l.AttemptCount, expectedAttemptCount + 1)
+                    .SetProperty(l => l.LastAttemptAt, attemptAt));
+
+            return Result<bool>.Success(claimed == 1);
+        }
+        catch (Exception ex)
+        {
+            return Result<bool>.Failure(ex.Message);
+        }
+    }
+
+    public async Task<Result> RecordOutcomeAsync(Guid logId, PassNotificationStatus status, string? error, DateTimeOffset at)
+    {
+        try
+        {
+            var sentAt = status == PassNotificationStatus.Sent ? at : (DateTimeOffset?)null;
+            var lastError = status == PassNotificationStatus.Sent ? null : Truncate(error, MaxErrorLength);
+
+            await _context.PassNotificationLogs
+                .Where(l => l.Id == logId)
+                .ExecuteUpdateAsync(u => u
+                    .SetProperty(l => l.Status, status)
+                    .SetProperty(l => l.SentAt, sentAt)
+                    .SetProperty(l => l.LastError, lastError));
+
+            return Result.Success();
+        }
+        catch (Exception ex)
+        {
+            return Result.Failure(ex.Message);
+        }
+    }
+
+    private const int MaxErrorLength = 1000; // Matches the LastError column length in AppDbContext
+
+    private static string? Truncate(string? value, int maxLength) =>
+        value is null || value.Length <= maxLength ? value : value[..maxLength];
 
     public async Task<Result> DeleteByPassIdAsync(Guid passId)
     {

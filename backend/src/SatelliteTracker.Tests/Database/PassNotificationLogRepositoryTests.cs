@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Data.Sqlite;
 using SatelliteTracker.Database;
 using SatelliteTracker.Database.Entities;
@@ -180,5 +181,100 @@ public class PassNotificationLogRepositoryTests : IDisposable
         Assert.True(result.IsSuccess);
         Assert.Empty(_context.PassNotificationLogs.Where(l => l.PassId == pass1.Id));
         Assert.Single(_context.PassNotificationLogs.Where(l => l.PassId == pass2.Id));
+    }
+
+    private async Task<PassNotificationLog> SeedLog(PassNotificationStatus status, int attemptCount)
+    {
+        var (sat, tle, apiKey) = Seed();
+        var pass = MakePass(sat.Id, tle.Id);
+        _context.Passes.Add(pass);
+        var log = new PassNotificationLog
+        {
+            Id = Guid.NewGuid(),
+            PassId = pass.Id,
+            ApiKeyId = apiKey.Id,
+            AlertMinutes = 10,
+            Status = status,
+            AttemptCount = attemptCount,
+            LastAttemptAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+            LastError = status == PassNotificationStatus.Failed ? "UNAVAILABLE" : null
+        };
+        _context.PassNotificationLogs.Add(log);
+        await _context.SaveChangesAsync();
+        return log;
+    }
+
+    // ExecuteUpdate bypasses the change tracker, so read the row back untracked.
+    private Task<PassNotificationLog> Reload(Guid id) =>
+        _context.PassNotificationLogs.AsNoTracking().SingleAsync(l => l.Id == id);
+
+    [Fact]
+    public async Task TryClaimRetryAsync_FailedRow_MovesToPendingAndCountsAttempt()
+    {
+        var log = await SeedLog(PassNotificationStatus.Failed, attemptCount: 1);
+        var at = DateTimeOffset.UtcNow;
+
+        var result = await _repo.TryClaimRetryAsync(log.Id, expectedAttemptCount: 1, at);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(result.Value);
+        var row = await Reload(log.Id);
+        Assert.Equal(PassNotificationStatus.Pending, row.Status);
+        Assert.Equal(2, row.AttemptCount);
+    }
+
+    [Fact]
+    public async Task TryClaimRetryAsync_SecondClaimWithSameAttemptCount_Loses()
+    {
+        var log = await SeedLog(PassNotificationStatus.Failed, attemptCount: 1);
+
+        var first = await _repo.TryClaimRetryAsync(log.Id, 1, DateTimeOffset.UtcNow);
+        var second = await _repo.TryClaimRetryAsync(log.Id, 1, DateTimeOffset.UtcNow);
+
+        Assert.True(first.Value);
+        Assert.False(second.Value);
+        Assert.Equal(2, (await Reload(log.Id)).AttemptCount);
+    }
+
+    [Theory]
+    [InlineData(PassNotificationStatus.Sent)]
+    [InlineData(PassNotificationStatus.Pending)]
+    [InlineData(PassNotificationStatus.Abandoned)]
+    public async Task TryClaimRetryAsync_RowNotFailed_IsNotClaimed(PassNotificationStatus status)
+    {
+        var log = await SeedLog(status, attemptCount: 1);
+
+        var result = await _repo.TryClaimRetryAsync(log.Id, 1, DateTimeOffset.UtcNow);
+
+        Assert.True(result.IsSuccess);
+        Assert.False(result.Value);
+        Assert.Equal(status, (await Reload(log.Id)).Status);
+    }
+
+    [Fact]
+    public async Task RecordOutcomeAsync_Sent_SetsSentAtAndClearsError()
+    {
+        var log = await SeedLog(PassNotificationStatus.Failed, attemptCount: 2);
+
+        var result = await _repo.RecordOutcomeAsync(log.Id, PassNotificationStatus.Sent, "ignored", DateTimeOffset.UtcNow);
+
+        Assert.True(result.IsSuccess);
+        var row = await Reload(log.Id);
+        Assert.Equal(PassNotificationStatus.Sent, row.Status);
+        Assert.NotNull(row.SentAt);
+        Assert.Null(row.LastError);
+    }
+
+    [Fact]
+    public async Task RecordOutcomeAsync_Failed_StoresErrorWithoutSentAt()
+    {
+        var log = await SeedLog(PassNotificationStatus.Pending, attemptCount: 1);
+
+        await _repo.RecordOutcomeAsync(log.Id, PassNotificationStatus.Failed, new string('x', 1500), DateTimeOffset.UtcNow);
+
+        var row = await Reload(log.Id);
+        Assert.Equal(PassNotificationStatus.Failed, row.Status);
+        Assert.Null(row.SentAt);
+        Assert.Equal(1000, row.LastError!.Length);
     }
 }

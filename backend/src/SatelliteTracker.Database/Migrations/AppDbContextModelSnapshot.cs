@@ -166,11 +166,26 @@ namespace SatelliteTracker.Database.Migrations
                     b.Property<Guid>("ApiKeyId")
                         .HasColumnType("uuid");
 
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("LastAttemptAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
                     b.Property<Guid>("PassId")
                         .HasColumnType("uuid");
 
-                    b.Property<DateTimeOffset>("SentAt")
+                    b.Property<DateTimeOffset?>("SentAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
 
                     b.HasKey("Id");
 
