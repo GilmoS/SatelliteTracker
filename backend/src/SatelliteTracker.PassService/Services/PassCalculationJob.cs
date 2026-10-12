@@ -5,27 +5,62 @@ using SatelliteTracker.Database.Repositories;
 
 namespace SatelliteTracker.PassService.Services;
 
-//This class represents a background job that calculates satellite passes at regular intervals.
-public sealed class PassCalculationJob : IHostedService, IDisposable
+// Background job that recalculates passes for every active satellite: once at startup, then hourly.
+// Each run is wrapped in try/catch so one failed run is logged and the next tick still happens;
+// nothing here is async void, so an exception can never escape onto the thread pool and crash
+// the process.
+public sealed class PassCalculationJob : BackgroundService
 {
-    
-    private readonly ILogger<PassCalculationJob> _logger; // Logger for logging information and errors
-    private readonly IServiceScopeFactory _scopeFactory; 
-    private Timer? _timer; // Timer for scheduling the job
+    public static readonly TimeSpan Interval = TimeSpan.FromHours(1);
 
-    public PassCalculationJob(ILogger<PassCalculationJob> logger, IServiceScopeFactory scopeFactory)
+    private readonly ILogger<PassCalculationJob> _logger;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly TimeProvider _timeProvider;
+
+    public PassCalculationJob(ILogger<PassCalculationJob> logger, IServiceScopeFactory scopeFactory, TimeProvider timeProvider)
     {
         _logger = logger;
         _scopeFactory = scopeFactory;
+        _timeProvider = timeProvider;
     }
 
-    public Task StartAsync(CancellationToken cancellationToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _timer = new Timer(RunAsync, null, TimeSpan.Zero, TimeSpan.FromHours(1));
-        return Task.CompletedTask;
+        // PeriodicTimer never overlaps runs: a tick that arrives while a run is still going is
+        // delivered once that run finishes.
+        using var timer = new PeriodicTimer(Interval, _timeProvider);
+
+        do
+        {
+            try
+            {
+                await RunOnceAsync(stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break; // shutdown, not an error
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Pass calculation job encountered an unexpected error");
+            }
+        }
+        while (await WaitForNextTickAsync(timer, stoppingToken));
     }
 
-    private async void RunAsync(object? state)
+    private static async Task<bool> WaitForNextTickAsync(PeriodicTimer timer, CancellationToken stoppingToken)
+    {
+        try
+        {
+            return await timer.WaitForNextTickAsync(stoppingToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    public async Task RunOnceAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
 
@@ -41,7 +76,9 @@ public sealed class PassCalculationJob : IHostedService, IDisposable
 
         foreach (var satellite in result.Value!)
         {
-            var passResult = await passService.CalculateAndSavePassesAsync(satellite.Id);
+            ct.ThrowIfCancellationRequested();
+
+            var passResult = await passService.CalculateAndSavePassesAsync(satellite.Id, ct);
             if (passResult.IsSuccess)
                 _logger.LogInformation("Calculated passes for {Name} (NORAD {NoradId})",
                     satellite.Name, satellite.NoradId);
@@ -50,12 +87,4 @@ public sealed class PassCalculationJob : IHostedService, IDisposable
                     satellite.Name, satellite.NoradId, passResult.Error);
         }
     }
-
-    public Task StopAsync(CancellationToken cancellationToken)
-    {
-        _timer?.Change(Timeout.Infinite, 0);
-        return Task.CompletedTask;
-    }
-
-    public void Dispose() => _timer?.Dispose();
 }
