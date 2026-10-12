@@ -2684,7 +2684,8 @@ delivery) or a behavior/product decision, listed below as a follow-up rather tha
 
 1. ~~**Map basemap: CARTO keyless tiles are now watermarked.**~~ **Resolved for Android** by
    wiring in a CARTO key (see "CARTO basemap API key" below). The web frontend
-   (`SatelliteMap.tsx`) is still keyless and still watermarked.
+   (`SatelliteMap.tsx`) is still keyless and still watermarked. It's deprecated (2026-10-12), so
+   this won't be fixed.
 2. ~~**Drawer / `notify` default.**~~ **Resolved** (default flipped and the stale cache dropped;
    see "Notify default — Android followed the backend's opt-in flip late" at the end of this
    file). The time bound and hidden-satellite parts at the end of this item are still open.
