@@ -6,6 +6,11 @@ Tracks satellite passes over Israel, displays 2D/3D maps, integrates with calend
 Default satellites: EROS C3, RUNNER 1.
 TLE data source: N2YO.com API.
 
+**The React web frontend (`frontend/`) is deprecated** (decided 2026-10-12). No work is planned on
+it for the foreseeable future, and Android is the only active client. Don't fix, extend or keep
+it in sync with backend changes. Backend endpoints and contracts only need to serve Android. The
+code stays in the repo and isn't deleted.
+
 ---
 
 ## Commands
@@ -44,7 +49,7 @@ with "Unable to create a 'DbContext'" because it can't find the connection strin
 
 ## Architecture — Modular Monolith
 
-One .NET solution, five logical modules. Clients (Web + Android) talk ONLY to our backend.
+One .NET solution, five logical modules. Clients (Android, plus the deprecated web frontend) talk ONLY to our backend.
 The backend is the ONLY entity that communicates with N2YO and (in the future) Microsoft Graph API.
 
 ```
@@ -131,7 +136,7 @@ No Redis needed at this scale. IMemoryCache is built into .NET.
 not redundant:
 
 - **`/satellites/{id}/track`** is *live* — it calls N2YO for the satellite's recent actual
-  position history anchored to "right now." Used by the web frontend (`useTrack.ts`); the Android
+  position history anchored to "right now." Used only by the deprecated web frontend (`useTrack.ts`); the Android
   live map switched to `/orbit` below. Covers only 300 seconds (N2YO's per-request maximum), about
   2,300 km of flight, which is why it looked "cut off at the footprint." Cached 5 minutes, keyed by
   NORAD ID, because its answer changes as time passes.
@@ -601,11 +606,11 @@ findings from that run:
   shown on device → tap opened Pass Details for the right `passId`.
 - **Resolved 2026-10-11: a failed FCM send was logged as sent.** Failed sends are now recorded
   honestly and retried; dead tokens are cleared. See "Push retry" under Database.
-- **Open follow-up: CartoDB basemap tiles now require an API key.** As of 2026-09-24, every keyless
-  `basemaps.cartocdn.com/dark_all` tile comes back watermarked "API KEY REQUIRED", whatever the
-  request headers. This affects both the Android Map and the web frontend (`SatelliteMap.tsx`).
-  Needs a tile-provider or key decision. A basemap key would be client-side by nature, a
-  different concern from the backend-only N2YO key rule below.
+- **Resolved for Android 2026-09-27: CartoDB basemap tiles now require an API key.** Keyless
+  `basemaps.cartocdn.com/dark_all` tiles come back watermarked "API KEY REQUIRED". The Android Map
+  now sends a CARTO key (PR #44; see `android/CLAUDE.md`). The deprecated web frontend
+  (`SatelliteMap.tsx`) is still keyless, and that won't be fixed. A basemap key is client-side by
+  nature, a different concern from the backend-only N2YO key rule below.
 
 ---
 
@@ -628,7 +633,7 @@ see `android/CLAUDE.md` ("GitHub Actions CI").
 
 A → Infrastructure
 B → TLEService + PassService + SGP4
-C → React Web Frontend
+C → React Web Frontend (done; deprecated 2026-10-12)
 D → Calendar Sync (ICS MVP) + FCM Push Notifications (current)
 E → Android (Kotlin) basic
 F → Sky View / ARCore
