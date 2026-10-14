@@ -1,0 +1,29 @@
+# Docker build context is backend/ (SatelliteTracker.sln + src/).
+# .dockerignore patterns are anchored at the context root, so a bare "*.pem" would only
+# match backend/*.pem. The "**/" prefix makes each pattern match at any depth (including
+# the root itself).
+#
+# Test projects are deliberately NOT excluded: SatelliteTracker.sln references
+# SatelliteTracker.Tests, and `dotnet restore` on the solution fails if it is missing.
+
+# Build output and test results
+**/bin/
+**/obj/
+**/TestResults/
+
+# Secrets and local-only configuration
+**/appsettings.Development.json
+**/.env*
+**/*.pem
+**/*.key
+**/*.pfx
+**/*service-account*.json
+**/firebase-adminsdk*.json
+
+# VCS, IDE and user-specific files
+**/.git
+**/.github
+**/.vs
+**/.idea
+**/.vscode
+**/*.user
