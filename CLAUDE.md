@@ -41,9 +41,25 @@ dotnet ef migrations add <MigrationName> --project backend/src/SatelliteTracker.
 dotnet ef database update --project backend/src/SatelliteTracker.Database --startup-project backend/src/SatelliteTracker.API
 ```
 
-Connection string: `ConnectionStrings:DefaultConnection` in the API project's `appsettings.Development.json`
-(not committed). The `dotnet ef` commands need `--startup-project` pointing at the API, or EF fails
-with "Unable to create a 'DbContext'" because it can't find the connection string.
+### Local secrets — none in the repo
+
+No secrets live in tracked files, local dev credentials included.
+
+- `backend/src/SatelliteTracker.API/appsettings.Development.json` **is tracked** and holds only
+  non-secret settings (logging). Don't put a connection string or key back in it.
+- **Connection string** (`ConnectionStrings:DefaultConnection`) lives in the API project's
+  user-secrets (the project already has a `UserSecretsId`):
+
+  ```bash
+  dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Host=localhost;Port=5435;Database=satellite_tracker;Username=satellite_user;Password=<your-local-password>" --project backend/src/SatelliteTracker.API
+  ```
+
+- **Local Postgres password** lives in a git-ignored `.env` next to `docker-compose.yml`, which
+  reads it as `${POSTGRES_PASSWORD}`. Create it with `cp .env.example .env` and set the same
+  password you used in the connection string above.
+
+The `dotnet ef` commands need `--startup-project` pointing at the API, or EF fails with "Unable to
+create a 'DbContext'" because it can't find the connection string.
 
 ---
 
@@ -118,14 +134,21 @@ controller exists.
 
 ## Caching Strategy (IMemoryCache)
 
-| Endpoint                  | TTL        | Reason                              |
-|----------------------------|------------|--------------------------------------|
-| /satellites/{id}/position  | 30 seconds | Changes rapidly                     |
-| /satellites/{id}/track     | 5 minutes  | Live N2YO track, changes slowly     |
-| /satellites/{id}/orbit     | 5 minutes  | SGP4 full orbit, see below          |
-| /passes/{id}/track         | 1 hour     | Deterministic per passId, see below |
-| /passes                    | 1 hour     | Pre-calculated, stable              |
-| /tles                      | 2 hours    | N2YO updates infrequently           |
+These are the only endpoints with an `IMemoryCache` entry, taken from `RealTimeController` and
+`PassesController`:
+
+| Endpoint                       | TTL        | Source                     | Cache key             |
+|--------------------------------|------------|----------------------------|-----------------------|
+| GET /satellites/{id}/position  | 30 seconds | N2YO (live position)       | NORAD ID              |
+| GET /satellites/{id}/track     | 5 minutes  | N2YO (live 300 s track)    | NORAD ID              |
+| GET /satellites/{id}/orbit     | 5 minutes  | SGP4 from latest TLE in DB | satellite id          |
+| GET /passes/{id}/track         | 1 hour     | SGP4 from the pass's TLE   | pass id               |
+
+**Passes and TLEs are NOT cached in memory by design.** They are precomputed by background jobs
+and stored in the DB; the DB is the cache. `GET /passes/{satelliteId}`, `/passes/{satelliteId}/history`,
+`/passes/pass/{id}`, `/tles/{satelliteId}` and `/tles/{satelliteId}/history` read the DB directly
+on every request. Do not add caching to DB-backed
+endpoints.
 
 No Redis needed at this scale. IMemoryCache is built into .NET.
 
@@ -623,9 +646,23 @@ findings from that run:
 | feature/\*  | One feature per branch         |
 | fix/\*      | Bug fixes                      |
 
-CI runs on GitHub Actions: restore → build → test on every push/PR to main (`ci.yml`, backend).
-`android-ci.yml` runs the Android compile + JVM unit tests + debug build on the same triggers;
-see `android/CLAUDE.md` ("GitHub Actions CI").
+CI runs on GitHub Actions. Backend `ci.yml` (restore → build → test) runs on pushes to
+`develop`/`main` and on PRs targeting `develop`/`main`, **only when the change touches
+`backend/**` or `.github/workflows/ci.yml`**:
+
+```yaml
+on:
+  pull_request:
+    branches: [develop, main]
+    paths: ['backend/**', '.github/workflows/ci.yml']
+  push:
+    branches: [develop, main]
+    paths: ['backend/**', '.github/workflows/ci.yml']
+```
+
+Pushes to `feature/*`/`fix/*` branches no longer run it on their own; open a PR to `develop` to
+get a run. `android-ci.yml` has its own triggers (it still runs on every push); see
+`android/CLAUDE.md` ("GitHub Actions CI").
 
 ---
 
