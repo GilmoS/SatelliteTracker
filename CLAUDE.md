@@ -144,11 +144,11 @@ These are the only endpoints with an `IMemoryCache` entry, taken from `RealTimeC
 | GET /satellites/{id}/orbit     | 5 minutes  | SGP4 from latest TLE in DB | satellite id          |
 | GET /passes/{id}/track         | 1 hour     | SGP4 from the pass's TLE   | pass id               |
 
-**Passes and TLEs are NOT cached in memory by design.** They are precomputed by background jobs
-and stored in the DB; the DB is the cache. `GET /passes/{satelliteId}`, `/passes/{satelliteId}/history`,
-`/passes/pass/{id}`, `/tles/{satelliteId}` and `/tles/{satelliteId}/history` read the DB directly
-on every request. Do not add caching to DB-backed
-endpoints.
+**IMemoryCache is used only for endpoints that are expensive to compute (SGP4 propagation over many
+points) or that call N2YO (quota protection). Passes and TLEs read from the DB are NOT cached: they are
+precomputed by background jobs and the DB is the cache. Do not add caching to plain DB reads.**
+`GET /passes/{satelliteId}`, `/passes/{satelliteId}/history`, `/passes/pass/{id}`,
+`/tles/{satelliteId}` and `/tles/{satelliteId}/history` read the DB directly on every request.
 
 No Redis needed at this scale. IMemoryCache is built into .NET.
 
