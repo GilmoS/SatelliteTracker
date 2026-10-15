@@ -46,8 +46,10 @@ builder.Services.AddSingleton(TimeProvider.System);
 // API key from URLs — see N2YOHttpClientLogger.
 builder.Services.AddN2YOClient();
 
-// Firebase
+// Firebase. The initializer is registered before the background jobs so the app exists before
+// PassNotificationJob starts.
 builder.Services.AddSingleton<IFirebaseService, FirebaseService>();
+builder.Services.AddHostedService<FirebaseAppInitializer>();
 
 // Tester authentication (Milestone E, Step 1.3) — X-Api-Key header, see
 // SatelliteTracker.API.Authentication.ApiKeyAuthenticationHandler. Registered as the default
