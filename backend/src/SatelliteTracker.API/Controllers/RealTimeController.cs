@@ -80,7 +80,7 @@ public class RealTimeController : BaseController
             return Ok(cached);
 
         // Call the N2YO API to get the current position of the satellite. We request only 1 second of data since we only need the latest position.
-        var result = await _n2yo.GetPositionsAsync(noradId, _observer.Lat, _observer.Lng, _observer.AltMeters, seconds: 1, ct);
+        var result = await _n2yo.GetPositionsAsync(noradId, _observer.Lat!.Value, _observer.Lng!.Value, _observer.AltMeters!.Value, seconds: 1, ct);
         if (!result.IsSuccess)
             return ToError(result.Error!);
 
@@ -110,7 +110,7 @@ public class RealTimeController : BaseController
         if (_cache.TryGetValue(cacheKey, out TrackDto? cached))
             return Ok(cached);
 
-        var result = await _n2yo.GetPositionsAsync(noradId, _observer.Lat, _observer.Lng, _observer.AltMeters, seconds: 300, ct);
+        var result = await _n2yo.GetPositionsAsync(noradId, _observer.Lat!.Value, _observer.Lng!.Value, _observer.AltMeters!.Value, seconds: 300, ct);
         if (!result.IsSuccess)
             return ToError(result.Error!);
 

@@ -1,41 +1,17 @@
-using FirebaseAdmin;
 using FirebaseAdmin.Messaging;
-using Google.Apis.Auth.OAuth2;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using System.IO;
 
 namespace SatelliteTracker.API.Services;
 
+// Sends FCM messages through the default FirebaseApp, which FirebaseAppInitializer creates at
+// startup from the validated Firebase:ServiceAccountJson. The host does not start without it.
 public class FirebaseService : IFirebaseService
 {
     private readonly ILogger<FirebaseService> _logger;
 
-    public FirebaseService(IConfiguration configuration, ILogger<FirebaseService> logger)
+    public FirebaseService(ILogger<FirebaseService> logger)
     {
         _logger = logger;
-
-        if (FirebaseApp.DefaultInstance is not null) return;
-
-        var path = configuration["Firebase:ServiceAccountPath"];
-        if (string.IsNullOrEmpty(path))
-        {
-            _logger.LogWarning("Firebase:ServiceAccountPath not configured — push notifications disabled");
-            return;
-        }
-
-        try
-        {
-            using var stream = File.OpenRead(path);
-#pragma warning disable CS0618
-            var credential = GoogleCredential.FromStream(stream);
-#pragma warning restore CS0618
-            FirebaseApp.Create(new AppOptions { Credential = credential });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to initialize Firebase — push notifications disabled");
-        }
     }
 
     // FCM error codes that mean the token itself is unusable, so a retry can never succeed.
@@ -48,12 +24,6 @@ public class FirebaseService : IFirebaseService
 
     public async Task<FcmSendResult> SendPassNotificationAsync(string fcmToken, string satelliteName, DateTime aos, int minutesBefore, Guid passId)
     {
-        if (FirebaseApp.DefaultInstance is null)
-        {
-            _logger.LogWarning("Firebase not initialized — skipping notification for {Satellite}", satelliteName);
-            return FcmSendResult.Failed("Firebase not initialized");
-        }
-
         try
         {
             var message = new Message

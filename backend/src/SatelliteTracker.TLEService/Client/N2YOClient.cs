@@ -1,6 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using SatelliteTracker.Database.Common;
 using SatelliteTracker.TLEService.Client.DTOs;
 
@@ -21,11 +21,12 @@ public class N2YOClient : IN2YOClient
         PropertyNameCaseInsensitive = true
     };
 
-    // Constructor that initializes the HttpClient and retrieves the API key from the configuration.
-    public N2YOClient(HttpClient httpClient, IConfiguration configuration)
+    // Constructor that initializes the HttpClient and takes the API key from the N2YO options
+    // (validated at startup, so the guard below only fires if the client is built outside the host).
+    public N2YOClient(HttpClient httpClient, IOptions<N2YoOptions> options)
     {
         _httpClient = httpClient;
-        _apiKey = configuration["N2YO:ApiKey"] ?? throw new InvalidOperationException("N2YO:ApiKey is not configured."); // Retrieve the API key from configuration, throwing an exception if it's not set.
+        _apiKey = options.Value.ApiKey ?? throw new InvalidOperationException("N2YO:ApiKey is not configured.");
     }
 
     // This method retrieves the Two-Line Element (TLE) data for a satellite given its NORAD ID.

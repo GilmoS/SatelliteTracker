@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.Extensions.Options;
+using SatelliteTracker.API.Configuration;
 
 namespace SatelliteTracker.API.Filters;
 
@@ -7,16 +9,15 @@ namespace SatelliteTracker.API.Filters;
 // tester AuthenticationHandler (Step 1.3) — admin access and tester identity are
 // different concerns and must not share infrastructure. See CLAUDE.md.
 //
-// Checks the X-Admin-Key request header against the Admin:ApiKey configuration value
-// (set via `dotnet user-secrets`, same mechanism as Firebase:ServiceAccountPath).
+// Checks the X-Admin-Key request header against Admin:ApiKey (AdminOptions, validated at
+// startup; set locally via `dotnet user-secrets`).
 public class RequireAdminKeyAttribute : Attribute, IAsyncActionFilter
 {
     private const string HeaderName = "X-Admin-Key";
 
     public Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
-        var configuration = context.HttpContext.RequestServices.GetRequiredService<IConfiguration>();
-        var configuredKey = configuration["Admin:ApiKey"];
+        var configuredKey = context.HttpContext.RequestServices.GetRequiredService<IOptions<AdminOptions>>().Value.ApiKey;
 
         var providedKey = context.HttpContext.Request.Headers[HeaderName].ToString();
 

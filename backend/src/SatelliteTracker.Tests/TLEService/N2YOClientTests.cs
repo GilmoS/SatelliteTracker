@@ -1,5 +1,5 @@
 using System.Net;
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using Moq;
 using Moq.Protected;
 using SatelliteTracker.TLEService.Client;
@@ -24,11 +24,8 @@ public class N2YOClientTests
             });
 
         var httpClient = new HttpClient(handler.Object);
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["N2YO:ApiKey"] = "test-key" })
-            .Build();
 
-        return new N2YOClient(httpClient, config);
+        return new N2YOClient(httpClient, Options.Create(new N2YoOptions { ApiKey = "test-key" }));
     }
 
     // ── GetTleAsync ─────────────────────────────────────────────────────────
