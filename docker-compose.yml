@@ -5,9 +5,9 @@ services:
     environment:
       POSTGRES_DB: satellite_tracker
       POSTGRES_USER: satellite_user
-      POSTGRES_PASSWORD: satellite_pass_dev
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "5435:5432"
+      - "127.0.0.1:5435:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     deploy:

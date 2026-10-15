@@ -3,8 +3,15 @@
 ##
 ## Get latest from `dotnet new gitignore`
 
-# dotenv files
+# dotenv files (.env.example is the committed template)
 .env
+.env.*
+!.env.example
+
+# Private keys and service-account credentials
+*.pem
+*.key
+*service-account*.json
 
 # User-specific files
 *.rsuser

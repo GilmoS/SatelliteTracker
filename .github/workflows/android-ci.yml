@@ -1,7 +1,7 @@
 name: Android CI
 
-# Same triggers as the backend's ci.yml: every push to any branch (feature/*, fix/*, develop, and
-# merges into develop), plus PRs into main.
+# Every push to any branch (feature/*, fix/*, develop, and merges into develop), plus PRs into
+# main. The backend's ci.yml has its own, path-filtered triggers (develop/main only).
 on:
   push:
   pull_request:
