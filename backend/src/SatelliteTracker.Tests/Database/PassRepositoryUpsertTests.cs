@@ -299,7 +299,7 @@ public class PassRepositoryUpsertTests : IDisposable
     }
 
     [Fact]
-    public async Task UniqueIndex_AllowsSameOrbitNumberOnAnotherSatellite()
+    public void UniqueIndex_AllowsSameOrbitNumberOnAnotherSatellite()
     {
         var other = new Satellite { Id = Guid.NewGuid(), Name = "RUNNER-1", NoradId = 56953, IsActive = true, CreatedAt = Now };
         var otherTle = MakeTle(Now);
