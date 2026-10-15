@@ -45,21 +45,66 @@ dotnet ef database update --project backend/src/SatelliteTracker.Database --star
 
 No secrets live in tracked files, local dev credentials included.
 
-- `backend/src/SatelliteTracker.API/appsettings.Development.json` **is tracked** and holds only
-  non-secret settings (logging). Don't put a connection string or key back in it.
-- **Connection string** (`ConnectionStrings:DefaultConnection`) lives in the API project's
-  user-secrets (the project already has a `UserSecretsId`):
-
-  ```bash
-  dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Host=localhost;Port=5435;Database=satellite_tracker;Username=satellite_user;Password=<your-local-password>" --project backend/src/SatelliteTracker.API
-  ```
-
+- `backend/src/SatelliteTracker.API/appsettings.Development.json` and
+  `appsettings.Production.json` **are tracked** and hold only non-secret settings (logging). Don't
+  put a connection string or key in them.
+- **Secrets** live in the API project's user-secrets (the project already has a `UserSecretsId`);
+  see the commands under "Required configuration" below.
 - **Local Postgres password** lives in a git-ignored `.env` next to `docker-compose.yml`, which
   reads it as `${POSTGRES_PASSWORD}`. Create it with `cp .env.example .env` and set the same
-  password you used in the connection string above.
+  password you use in the connection string.
 
 The `dotnet ef` commands need `--startup-project` pointing at the API, or EF fails with "Unable to
 create a 'DbContext'" because it can't find the connection string.
+
+### Required configuration — the API refuses to start without it (I2.2, 2026-10-15)
+
+Every setting below is required in **every** environment (dev/prod parity, no relaxation). Each is
+bound to a typed options class and validated with `ValidateOnStart()` in
+`AddValidatedConfiguration()` (`SatelliteTracker.API.Configuration`). A missing or invalid value
+stops the host before it serves anything, with one error that lists **every** failure, naming the
+key and the broken rule, never the value.
+
+| Key | Purpose | Validation rule | Local source |
+|-----|---------|-----------------|--------------|
+| `ConnectionStrings:DefaultConnection` | Postgres (`DatabaseOptions`) | Required; parses with `NpgsqlConnectionStringBuilder` and has `Host`, `Database`, `Username` | user-secrets |
+| `N2YO:ApiKey` | N2YO API key (`N2YoOptions`) | Required, non-empty | user-secrets |
+| `Firebase:ServiceAccountJson` | FCM service-account key, as **JSON content**, not a path (`FirebaseOptions`) | Required; must parse into a service-account credential (`FirebaseOptionsValidator`) | user-secrets |
+| `Admin:ApiKey` | `X-Admin-Key` value for `api/admin/*` (`AdminOptions`) | Required, at least 32 characters | user-secrets |
+| `Observer:Lat` | Ground station latitude (`ObserverSettings`) | Required, −90 to 90 | `appsettings.json` |
+| `Observer:Lng` | Ground station longitude | Required, −180 to 180 | `appsettings.json` |
+| `Observer:AltMeters` | Ground station altitude | Required, −500 to 9000 | `appsettings.json` |
+| `Observer:MinElevationDeg` | Minimum pass elevation | Required, 0 to 90 | `appsettings.json` |
+
+Local setup (placeholders, never real values in docs or commits):
+
+```bash
+dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Host=localhost;Port=5435;Database=satellite_tracker;Username=satellite_user;Password=<your-local-password>" --project backend/src/SatelliteTracker.API
+dotnet user-secrets set "N2YO:ApiKey" "<your-n2yo-api-key>" --project backend/src/SatelliteTracker.API
+dotnet user-secrets set "Admin:ApiKey" "<random-string-of-at-least-32-chars>" --project backend/src/SatelliteTracker.API   # e.g. from: openssl rand -hex 32
+dotnet user-secrets set "Firebase:ServiceAccountJson" "$(cat <path-to-service-account.json>)" --project backend/src/SatelliteTracker.API
+# PowerShell equivalent of the last line:
+# dotnet user-secrets set "Firebase:ServiceAccountJson" (Get-Content <path-to-service-account.json> -Raw) --project backend/src/SatelliteTracker.API
+dotnet user-secrets list --project backend/src/SatelliteTracker.API   # check which keys are set
+```
+
+- **Startup validation checks shape only.** It never connects to Postgres, FCM or N2YO;
+  reachability belongs to readiness health checks (a later task).
+- **Read settings only through `IOptions<T>`**, never `IConfiguration["..."]`. Sections are bound
+  with `BindConfiguration`, so adding a provider later (Azure Key Vault) needs no code change.
+- **Firebase is initialized at startup** by `FirebaseAppInitializer` (an `IHostedService`
+  registered before the background jobs), not lazily on the first notification tick. It runs after
+  options validation, so the credential is already known to parse. `Firebase:ServiceAccountPath`
+  (the old file-path setting) is gone.
+- **`ObserverSettings` properties are nullable + `[Required]`** so a missing `Observer` section
+  fails startup instead of computing passes for lat/lng 0,0. Consumers read `.Value`.
+- **Logging:** base `appsettings.json` sets `System.Net.Http.HttpClient` to `Warning` in every
+  environment, on top of `N2YOHttpClientLogger`'s redaction, so N2YO request URLs (which carry the
+  key) are not logged.
+- **Tests:** `CustomWebApplicationFactory` runs as the `Testing` environment (so a developer's
+  user-secrets are never loaded) and supplies fake values (`TestSettings`). The Firebase service
+  account is built at runtime around a freshly generated RSA key (`TestServiceAccount`). Never
+  commit a private key, even a fake one. `ConfigurationValidationTests` covers the fail-fast cases.
 
 ---
 
@@ -385,7 +430,9 @@ outcome:
   `Abandoned`, the tester is skipped for the rest of that tick, and
   `IUserSettingsRepository.ClearFcmTokenAsync` nulls `UserSettings.FcmToken` — only if it still
   holds the failed token, so a fresh token synced in the meantime survives. The app re-sends a token
-  via `onNewToken`/re-registration. Any other error (outage, Firebase not configured) is `Failed`.
+  via `onNewToken`/re-registration. Any other error (e.g. an FCM outage) is `Failed`. Firebase can
+  no longer be unconfigured at send time: the host doesn't start without a valid
+  `Firebase:ServiceAccountJson` (see "Required configuration").
 - **At-most-once on crash**: a row left `Pending` by a crash mid-send is never retried — re-sending
   it could duplicate a notification that actually went out.
 - Migration `PassNotificationRetry` backfills pre-existing rows as `Sent` with one attempt.
@@ -433,8 +480,8 @@ or "productionize" the `X-Admin-Key` approach; a real redesign is expected befor
 - **Admin auth is a completely separate concern from tester `ApiKey` identity** — it does not
   reuse or extend the `ApiKey`/`AuthenticationHandler` concept in any way, and the future tester
   `AuthenticationHandler` (Step 1.3) must not be merged with it. Admin endpoints require a header
-  `X-Admin-Key` matching the `Admin:ApiKey` configuration value (set via `dotnet user-secrets`,
-  the same mechanism already used for `Firebase:ServiceAccountPath`). Enforced by
+  `X-Admin-Key` matching the `Admin:ApiKey` configuration value (`AdminOptions`, at least 32
+  characters, set via `dotnet user-secrets`; see "Required configuration"). Enforced by
   `RequireAdminKeyAttribute` (`SatelliteTracker.API.Filters`), a standalone action filter with no
   shared code with tester auth. Missing/invalid key → `401`.
 - **Admin endpoints** (all under `api/admin`, all `[RequireAdminKey]`, all
@@ -550,9 +597,11 @@ deliberately standalone and not meant to be extended.
 (`Program.cs`, full middleware pipeline) in-memory via `Microsoft.AspNetCore.Mvc.Testing`, backed
 by a SQLite in-memory `TestAppDbContext` (the same subclass/pattern `TestDbContextFactory` already
 uses for repository-level tests — the int[]-as-CSV conversion for `UserSettings.AlertMinutes` and
-the no-op `SeedData()` override). It also removes the three background `IHostedService`
-registrations (`TleUpdateJob`, `PassCalculationJob`, `PassNotificationJob`) so tests don't race
-real-world timers against N2YO/Firebase on an in-memory connection. Use this — not hand-built
+the no-op `SeedData()` override). It also removes the background job registrations
+(`TleUpdateJob`, `PassCalculationJob`, `PassNotificationJob`, `PassRetentionJob`) so tests don't
+race real-world timers against N2YO/Firebase on an in-memory connection. It supplies a valid fake
+configuration (see "Required configuration"); pass an overrides dictionary to its constructor to
+break one setting, with `null` removing a key. Use this — not hand-built
 `ActionExecutingContext`/filter-context objects like `RequireAdminKeyAttributeTests` uses — for any
 test that needs to verify behavior of the actual HTTP pipeline (header parsing, DI wiring,
 middleware ordering), since that's something a direct controller-method call can't exercise.
