@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using SatelliteTracker.Database;
@@ -25,17 +26,47 @@ namespace SatelliteTracker.Tests.API.Infrastructure;
 // overload wires TContextImplementation's constructor to DbContextOptions<TContextImplementation>,
 // but TestAppDbContext's constructor (matching TestDbContextFactory's usage) takes
 // DbContextOptions<AppDbContext>, so the generic overload can't resolve it.
+//
+// Configuration: the host refuses to start without every required setting (see
+// AddValidatedConfiguration), so the factory supplies a valid, fake set (TestSettings) on top of
+// appsettings.json. It runs as the "Testing" environment, so a developer's user-secrets (loaded
+// only in Development) never leak into tests. Pass overrides to replace or remove settings; a
+// null value removes the key, which is how the startup-validation tests break one setting.
 public class CustomWebApplicationFactory : WebApplicationFactory<Program>
 {
     private readonly SqliteConnection _connection = new("DataSource=:memory:");
+    private readonly IReadOnlyDictionary<string, string?>? _overrides;
 
-    public CustomWebApplicationFactory()
+    public CustomWebApplicationFactory() : this(null)
     {
+    }
+
+    public CustomWebApplicationFactory(IReadOnlyDictionary<string, string?>? overrides)
+    {
+        _overrides = overrides;
         _connection.Open();
     }
 
+    // A valid configuration. None of these are real credentials; the Firebase service account is
+    // built at runtime around a freshly generated RSA key, so no private key is ever committed.
+    public static IReadOnlyDictionary<string, string?> TestSettings { get; } = new Dictionary<string, string?>
+    {
+        ["N2YO:ApiKey"] = "test-n2yo-key-not-real",
+        ["Admin:ApiKey"] = "test-admin-key-not-real-0123456789abcdef",
+        ["Firebase:ServiceAccountJson"] = TestServiceAccount.CreateJson(),
+        ["ConnectionStrings:DefaultConnection"] = "Host=localhost;Database=sattrakk_test;Username=sattrakk_test"
+    };
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        builder.UseEnvironment("Testing");
+
+        builder.ConfigureAppConfiguration((_, config) =>
+        {
+            config.AddInMemoryCollection(TestSettings);
+            if (_overrides is not null) config.AddInMemoryCollection(_overrides);
+        });
+
         builder.ConfigureServices(services =>
         {
             RemoveService<DbContextOptions<AppDbContext>>(services);

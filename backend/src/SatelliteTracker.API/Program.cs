@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
 using SatelliteTracker.API.Authentication;
+using SatelliteTracker.API.Configuration;
 using SatelliteTracker.API.Http;
 using SatelliteTracker.API.Jobs;
 using SatelliteTracker.API.Services;
@@ -15,10 +17,13 @@ using SatelliteTracker.TLEService.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.Configure<ObserverSettings>(builder.Configuration.GetSection("Observer"));
+// Typed, validated settings (N2YO, Firebase, Admin, Observer, connection string). The host
+// refuses to start if any is missing or invalid — see AddValidatedConfiguration.
+builder.Services.AddValidatedConfiguration();
 
 // Database context
-builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+builder.Services.AddDbContext<AppDbContext>((sp, options) =>
+    options.UseNpgsql(sp.GetRequiredService<IOptions<DatabaseOptions>>().Value.DefaultConnection));
 
 // Repositories
 builder.Services.AddScoped<ISatelliteRepository, SatelliteRepository>();
@@ -37,7 +42,7 @@ builder.Services.AddScoped<ITleService, TleService>();
 builder.Services.AddScoped<IPassService, PassService>();
 builder.Services.AddSingleton(TimeProvider.System);
 
-// N2YO HTTP client (reads N2YO:ApiKey from configuration). Its request logging redacts the
+// N2YO HTTP client (takes N2YO:ApiKey from N2YoOptions). Its request logging redacts the
 // API key from URLs — see N2YOHttpClientLogger.
 builder.Services.AddN2YOClient();
 
