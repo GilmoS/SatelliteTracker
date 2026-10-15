@@ -1,3 +1,4 @@
+using SatelliteTracker.PassService.SGP4;
 using SatelliteTracker.TLEService.Client.DTOs;
 
 namespace SatelliteTracker.API.DTOs;
@@ -46,5 +47,13 @@ public class TrackPointDto
         Longitude = p.SatLongitude,
         Altitude = p.SatAltitude,
         Timestamp = p.Timestamp
+    };
+
+    public static TrackPointDto From(GroundTrackPoint p) => new()
+    {
+        Latitude = p.Latitude,
+        Longitude = p.Longitude,
+        Altitude = p.Altitude,
+        Timestamp = new DateTimeOffset(DateTime.SpecifyKind(p.TimestampUtc, DateTimeKind.Utc)).ToUnixTimeSeconds()
     };
 }

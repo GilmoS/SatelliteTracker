@@ -38,12 +38,20 @@ public class FirebaseService : IFirebaseService
         }
     }
 
-    public async Task SendPassNotificationAsync(string fcmToken, string satelliteName, DateTime aos, int minutesBefore)
+    // FCM error codes that mean the token itself is unusable, so a retry can never succeed.
+    private static readonly HashSet<MessagingErrorCode> DeadTokenCodes =
+    [
+        MessagingErrorCode.Unregistered,
+        MessagingErrorCode.SenderIdMismatch,
+        MessagingErrorCode.InvalidArgument
+    ];
+
+    public async Task<FcmSendResult> SendPassNotificationAsync(string fcmToken, string satelliteName, DateTime aos, int minutesBefore, Guid passId)
     {
         if (FirebaseApp.DefaultInstance is null)
         {
             _logger.LogWarning("Firebase not initialized — skipping notification for {Satellite}", satelliteName);
-            return;
+            return FcmSendResult.Failed("Firebase not initialized");
         }
 
         try
@@ -53,16 +61,28 @@ public class FirebaseService : IFirebaseService
                 Token = fcmToken,
                 Notification = new Notification
                 {
-                    Title = $"חליפה מתקרבת — {satelliteName}",
-                    Body = $"חליפה תתחיל בעוד {minutesBefore} דקות ({aos:HH:mm} UTC)"
+                    Title = $"Upcoming pass for {satelliteName}",
+                    Body = $"The pass will start in {minutesBefore} minutes ({aos:HH:mm} UTC)"
+                },
+                Data = new Dictionary<string, string>
+                {
+                    { "passId", passId.ToString() },
+                    { "type", "pass_reminder" }
                 }
             };
 
             await FirebaseMessaging.DefaultInstance.SendAsync(message);
+            return FcmSendResult.Sent;
+        }
+        catch (FirebaseMessagingException ex) when (ex.MessagingErrorCode is { } code && DeadTokenCodes.Contains(code))
+        {
+            _logger.LogWarning(ex, "FCM rejected the device token ({Code}) for satellite {Satellite}", code, satelliteName);
+            return FcmSendResult.TokenInvalid($"{code}: {ex.Message}");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send FCM notification for satellite {Satellite}", satelliteName);
+            return FcmSendResult.Failed(ex.Message);
         }
     }
 }

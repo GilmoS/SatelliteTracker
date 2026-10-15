@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using SatelliteTracker.API.Authentication;
 using SatelliteTracker.API.DTOs;
 using SatelliteTracker.Database.Common;
 using SatelliteTracker.Database.Repositories;
@@ -28,6 +30,9 @@ public class TlesController : BaseController
     
 
     [HttpGet("{satelliteId:guid}")]
+    [ProducesResponseType(typeof(TleDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> GetLatest(Guid satelliteId)
     {
         var satResult = await _satelliteRepo.GetByIdAsync(satelliteId); 
@@ -39,6 +44,9 @@ public class TlesController : BaseController
     }
 
     [HttpGet("{satelliteId:guid}/history")]
+    [ProducesResponseType(typeof(IEnumerable<TleDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> GetHistory(Guid satelliteId)
     {
         var satResult = await _satelliteRepo.GetByIdAsync(satelliteId);
@@ -50,7 +58,12 @@ public class TlesController : BaseController
         return Ok(result.Value!.Select(TleDto.From));
     }
 
+    [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPost("{satelliteId:guid}/fetch")]
+    [ProducesResponseType(typeof(TleDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> Fetch(Guid satelliteId, CancellationToken ct)
     {
         var satResult = await _satelliteRepo.GetByIdAsync(satelliteId);

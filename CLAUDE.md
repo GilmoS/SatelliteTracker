@@ -1,11 +1,15 @@
-cat << 'EOF'
 # CLAUDE.md — Satellite Pass Tracker
 
 ## Project Context
 Satellite pass tracking system for Israel Aerospace Industries (IAI).
-Tracks satellite passes over Israel, displays 2D/3D maps, integrates with Microsoft Outlook 365, and includes an Android app with AR Sky View mode.
+Tracks satellite passes over Israel, displays 2D/3D maps, integrates with calendar sync, and includes an Android app with AR Sky View mode.
 Default satellites: EROS C3, RUNNER 1.
 TLE data source: N2YO.com API.
+
+**The React web frontend (`frontend/`) is deprecated** (decided 2026-10-12). No work is planned on
+it for the foreseeable future, and Android is the only active client. Don't fix, extend or keep
+it in sync with backend changes. Backend endpoints and contracts only need to serve Android. The
+code stays in the repo and isn't deleted.
 
 ---
 
@@ -31,60 +35,529 @@ dotnet test backend/src/<TestProject>/<TestProject>.csproj
 dotnet test --filter "FullyQualifiedName~TestMethodName"
 
 # Add a new EF Core migration
-dotnet ef migrations add <MigrationName> --project backend/src/SatelliteTracker.Database
+dotnet ef migrations add <MigrationName> --project backend/src/SatelliteTracker.Database --startup-project backend/src/SatelliteTracker.API
 
 # Apply migrations
-dotnet ef database update --project backend/src/SatelliteTracker.Database
+dotnet ef database update --project backend/src/SatelliteTracker.Database --startup-project backend/src/SatelliteTracker.API
 ```
 
-Connection string: `ConnectionStrings:DefaultConnection` in `appsettings.Development.json` (not committed).
+### Local secrets — none in the repo
+
+No secrets live in tracked files, local dev credentials included.
+
+- `backend/src/SatelliteTracker.API/appsettings.Development.json` **is tracked** and holds only
+  non-secret settings (logging). Don't put a connection string or key back in it.
+- **Connection string** (`ConnectionStrings:DefaultConnection`) lives in the API project's
+  user-secrets (the project already has a `UserSecretsId`):
+
+  ```bash
+  dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Host=localhost;Port=5435;Database=satellite_tracker;Username=satellite_user;Password=<your-local-password>" --project backend/src/SatelliteTracker.API
+  ```
+
+- **Local Postgres password** lives in a git-ignored `.env` next to `docker-compose.yml`, which
+  reads it as `${POSTGRES_PASSWORD}`. Create it with `cp .env.example .env` and set the same
+  password you used in the connection string above.
+
+The `dotnet ef` commands need `--startup-project` pointing at the API, or EF fails with "Unable to
+create a 'DbContext'" because it can't find the connection string.
 
 ---
 
 ## Architecture — Modular Monolith
 
-One .NET solution, five logical modules. Clients (Web + Android) talk ONLY to our backend.
-The backend is the ONLY entity that communicates with N2YO and Microsoft Graph API.
+One .NET solution, five logical modules. Clients (Android, plus the deprecated web frontend) talk ONLY to our backend.
+The backend is the ONLY entity that communicates with N2YO and (in the future) Microsoft Graph API.
 
 ```
 SatelliteTracker.API            → Controllers, Routing, Validation (thin layer)
 SatelliteTracker.TLEService     → N2YO client, TLE parsing, scheduled fetch job
 SatelliteTracker.PassService    → SGP4 pass calculation logic
-SatelliteTracker.OutlookService → Microsoft Graph API, calendar event creation
+SatelliteTracker.OutlookService → Calendar sync abstraction (ICS MVP; Graph stub for later)
 SatelliteTracker.Database       → EF Core, Migrations, Repositories
 ```
 
 ### Single Source of Truth Rules
 - Web and Android clients NEVER call N2YO or Microsoft Graph directly
 - The N2YO API key lives ONLY on the backend — never exposed to clients
+- …and never in logs. N2YO takes the key as a URL parameter, and IHttpClientFactory's default
+  loggers write full request URLs at Information. So `AddN2YOClient()`
+  (`SatelliteTracker.API.Http`) removes those loggers and uses `N2YOHttpClientLogger`, which logs
+  the same events with `apiKey=REDACTED`. Don't register the N2YO client with a plain
+  `AddHttpClient` again. `N2YOHttpClientLoggerTests` catches a regression.
 - All data flows through one point: our API
+
+---
+
+## Calendar Sync — ICS MVP (SatelliteTracker.OutlookService)
+
+Microsoft Graph API calendar sync was replaced with an ICS-based MVP: no admin consent is
+available for org calendar access on this unofficial project. `ICalendarSyncService` is the
+abstraction boundary — swapping calendar backends is a single DI change with zero changes to
+API/PassService/Controllers.
+
+**Final flow:** the user selects one or more specific upcoming passes from the passes table
+already shown in the app, chooses alert minute(s) for the request, and
+`POST /api/calendar/schedule` (`CalendarController`, the real production entry point) returns a
+single combined `.ics` for exactly those passes. The Android app opens it via `ACTION_VIEW` to
+add it to the user's own calendar, and can `ACTION_SEND` it to share with a team lead — there is
+no backend email-sending, no Microsoft Graph, and no push notification involved in this flow.
+This replaced the originally planned Graph-based bulk date-range sync. The earlier
+`DevCalendarTestController` manual-verification endpoint has been removed now that the real
+controller exists.
+
+- **`IcsCalendarSyncService`** is the active implementation, registered in
+  `OutlookServiceCollectionExtensions.AddOutlookServiceModule()`. It builds one combined RFC 5545
+  `.ics` document (one `VEVENT` per pass, `TZID=Asia/Jerusalem`). `CancelSyncedPassesAsync` throws
+  `NotSupportedException` by design — the ICS model has no programmatic access to the user's
+  calendar (events are added manually), and there is no product requirement to cancel a
+  scheduled event from the app. This is a deliberate, permanent boundary, not a pending TODO.
+- **`GraphCalendarSyncService`** is a stub (`NotImplementedException` on both methods) for future
+  use if IT admin consent for Microsoft Graph is obtained. Swap it in by changing the single
+  registration line in `OutlookServiceCollectionExtensions`.
+- **UID formula:** `CalendarEventMapper` builds each event's `Uid` as
+  `{norad_id}-{orbit_number}@sattrakk.com`. It was chosen over alternatives (e.g. a rounded-AOS
+  timestamp) because it's stable and monotonic per satellite and unique per physical pass, so a
+  re-sync updates the existing calendar event instead of creating a duplicate. `orbit_number` is
+  the ascending-node revolution number (see "Pass identity" under Database), which doesn't shift
+  between TLEs. Switching to that definition on 2026-10-04 changed the orbit numbers, and so the
+  UIDs, of every pass once; that was accepted because no beta tester had imported events yet.
+- **`TeamEmail`** on `CalendarSyncSettings` is intentional dead code / future-Graph
+  infrastructure. `CalendarController` always passes `TeamEmail: null` — the ICS model has no
+  programmatic way to notify a third party, so sharing happens on-device via `ACTION_SEND` after
+  the user receives the `.ics`. Not wired to any current behavior.
+- **`OutlookSynced`** semantics are weakened in the ICS MVP: it means "an `.ics` was generated and
+  offered to the user," not "confirmed added to a calendar" (the ICS model has no way to confirm
+  that). The field/name is kept as-is for forward compatibility with a future Graph
+  implementation, where it would regain its original "confirmed synced" meaning.
 
 ---
 
 ## Caching Strategy (IMemoryCache)
 
-| Endpoint         | TTL        | Reason                          |
-|------------------|------------|---------------------------------|
-| /position        | 30 seconds | Changes rapidly                 |
-| /track           | 5 minutes  | Changes slowly                  |
-| /passes          | 1 hour     | Pre-calculated, stable          |
-| /tles            | 2 hours    | N2YO updates infrequently       |
+These are the only endpoints with an `IMemoryCache` entry, taken from `RealTimeController` and
+`PassesController`:
+
+| Endpoint                       | TTL        | Source                     | Cache key             |
+|--------------------------------|------------|----------------------------|-----------------------|
+| GET /satellites/{id}/position  | 30 seconds | N2YO (live position)       | NORAD ID              |
+| GET /satellites/{id}/track     | 5 minutes  | N2YO (live 300 s track)    | NORAD ID              |
+| GET /satellites/{id}/orbit     | 5 minutes  | SGP4 from latest TLE in DB | satellite id          |
+| GET /passes/{id}/track         | 1 hour     | SGP4 from the pass's TLE   | pass id               |
+
+**IMemoryCache is used only for endpoints that are expensive to compute (SGP4 propagation over many
+points) or that call N2YO (quota protection). Passes and TLEs read from the DB are NOT cached: they are
+precomputed by background jobs and the DB is the cache. Do not add caching to plain DB reads.**
+`GET /passes/{satelliteId}`, `/passes/{satelliteId}/history`, `/passes/pass/{id}`,
+`/tles/{satelliteId}` and `/tles/{satelliteId}/history` read the DB directly on every request.
 
 No Redis needed at this scale. IMemoryCache is built into .NET.
+
+### Two different `/track` endpoints — not a duplicate
+
+`GET /api/satellites/{id}/track` (`RealTimeController`) and `GET /api/passes/{id}/track`
+(`PassesController`) both return a list of lat/lng points but answer different questions and are
+not redundant:
+
+- **`/satellites/{id}/track`** is *live* — it calls N2YO for the satellite's recent actual
+  position history anchored to "right now." Used only by the deprecated web frontend (`useTrack.ts`); the Android
+  live map switched to `/orbit` below. Covers only 300 seconds (N2YO's per-request maximum), about
+  2,300 km of flight, which is why it looked "cut off at the footprint." Cached 5 minutes, keyed by
+  NORAD ID, because its answer changes as time passes.
+- **`/passes/{id}/track`** is *fixed* — it's the SGP4-computed ground track for one specific,
+  already-calculated `Pass`, over its stored `[Aos, Los]` window, propagated from the TLE that was
+  in effect when that pass was calculated (`Pass.TleId`) — deliberately **not** the satellite's
+  currently-latest TLE, so the track stays consistent with the AOS/LOS/max-elevation figures
+  already shown to the user for that pass. Works identically for future and historical passes; no
+  "is this pass in the past" flag or branch exists in the endpoint or its response — the client
+  already has AOS/LOS from the passes list and can compare against current time itself. Reuses the
+  existing SGP4 propagation logic (`Sgp4Calculator`) via a new `GroundTrackCalculator`, distinct
+  from `PassPredictor` (which searches for AOS/LOS windows in the first place, not given ones).
+  Because the inputs (`TleId`, `Aos`, `Los`) never change once a pass is calculated, its output is
+  fully deterministic per `passId` and cached for 1 hour, keyed by `passId` alone — no TLE
+  version/id needed in the key. **The computed track points are never persisted to the
+  database** — they're cache-only, recomputed on demand (rare, given the 1-hour cache); this is
+  derived/display data, not something the system needs to function.
+
+### Full-orbit ground track — `GET /api/satellites/{id}/orbit`
+
+The Android live map's track: the satellite's full ground track from **one orbital period before
+"now" to one period plus 5 minutes after it** (about 95 + 100 minutes for EROS C3), computed with
+SGP4 (`GroundTrackCalculator`, 30 s steps, about 400 points) from the satellite's **latest** TLE.
+It lives in `RealTimeController` next to `/position` and `/track`, but never calls N2YO.
+
+- `IPassService.GetOrbitTrackAsync(satelliteId, nowUtc, extraAhead)` owns the window. The
+  controller passes its 5-minute cache TTL as `extraAhead`, so a cached response still covers a
+  full orbit ahead of the current time until it expires. Cached keyed by satellite id.
+- The response (`OrbitTrackDto`) carries `periodMinutes` and the same `TrackPointDto` points
+  (Unix seconds) as `/track`.
+- Unlike `/passes/{id}/track`, this is a "now" view, so it deliberately uses the latest TLE, not a
+  stored `TleId`. Output is never persisted.
+- It matched N2YO's live position to within about 2.5 km when checked on 2026-09-27.
+- **Longitude fix that came with it:** `Sgp4Calculator.ToGeodetic` returned longitudes in
+  `[0°, 360°)`, so anything west of Greenwich came out as e.g. 350° instead of −10°. Map clients read
+  that as an antimeridian crossing at 0°. It now returns `[−180°, 180°)`. This also corrects
+  `/passes/{id}/track` for western-hemisphere points. It had gone unnoticed because passes seen from
+  Israel sit around 10–60° E.
+
+### Paginated + filterable pass history — `GET /api/passes/{satelliteId}/history`
+
+Built for the Android full-history screen (6 months of passes per satellite, scrollable with a
+filter panel). `GET /api/passes/{satelliteId}` (upcoming passes) is untouched — it stays
+unpaginated; Android's history screen sources upcoming/future passes from that endpoint
+separately, not from this one.
+
+- **Response is a paginated envelope, not a bare array** — `{ items, page, pageSize, hasMore }` —
+  a deliberate, documented exception to the bare-array convention every other list endpoint in
+  this API follows (see `PagedResultDto<T>`). Pagination needs metadata (page/pageSize/hasMore)
+  that a bare array has no way to carry.
+- **`hasMore` is computed by querying `pageSize + 1` rows** and checking whether the extra row
+  came back, rather than a separate `COUNT` query — cheaper, and avoids a second round-trip.
+- **Filters**: `orbitNumberFrom`/`orbitNumberTo` (int), `maxElevationFrom`/`maxElevationTo`
+  (decimal), `aosFrom`/`aosTo` and `losFrom`/`losTo` (ISO 8601 datetime) — all optional, inclusive
+  range filters, independently applicable and **AND-combined** when more than one is present (e.g.
+  `orbitNumberFrom` + `aosTo` together narrow the result, neither is ignored). Applied server-side
+  via conditional EF Core `Where` composition in `PassRepository.GetHistoryAsync` — never fetched
+  in full and filtered in memory. `pageSize` is capped (200) and rejected with `400` above the cap
+  (and below 1); `page` below 1 is also rejected with `400`.
+- **Sort order is fixed**: Aos descending (most recent first). Configurable/explicit sort-order
+  selection is an intentional future enhancement, not an oversight — don't build it speculatively.
+- Still reads only from the `passes` table — no schema changes. `PassHistoryQuery` and
+  `PagedResult<T>` (`SatelliteTracker.Database.Common`) carry the filter/pagination inputs and
+  output shape across the repository/service/API layers.
 
 ---
 
 ## Database — PostgreSQL
 
-Five tables. All PKs are UUID (Guid in C#). All relationships via Fluent API in OnModelCreating.
+Ten tables. All PKs are UUID (Guid in C#). All relationships via Fluent API in OnModelCreating.
 
-| Table      | Purpose                                              |
-|------------|------------------------------------------------------|
-| satellites | Satellite catalog. NoradId is unique.                |
-| tles       | TLE history per satellite. Up to 6 months back.      |
-| passes     | Calculated passes. 1 week forward + 6 months history.|
-| notes      | Free-text per pass. CASCADE delete with pass.        |
-| settings   | Single settings row. AlertMinutes is int[].          |
+| Table                  | Purpose                                                          |
+|------------------------|-------------------------------------------------------------------|
+| satellites             | Satellite catalog. NoradId is unique.                             |
+| tles                   | TLE history per satellite. Up to 6 months back.                   |
+| passes                 | Calculated passes. 1 week forward + 6 months history. Unique on (SatelliteId, OrbitNumber). |
+| notes                  | Free-text per pass. CASCADE delete with pass.                     |
+| settings               | Single global row: MinElevation, OutlookDays, TeamEmail.          |
+| api_keys               | One row per registered beta tester. See below.                    |
+| user_settings          | Per-tester notification prefs, 1:1 with api_keys. See below.      |
+| pass_subscriptions     | Per-tester notify opt-in per pass. Sparse. See below.             |
+| pass_notification_logs | Per-tester, per-threshold notification attempts + outcome. See below. |
+| allowlisted_emails     | Admin-managed beta signup allowlist. See below.                   |
+
+### Pass identity — natural key (SatelliteId, OrbitNumber) and upsert
+
+A pass's identity is **(SatelliteId, OrbitNumber)**: one physical pass per satellite per orbit.
+`Pass.Id` is only an internal surrogate key. It stays the same across recalculations, so notes,
+subscriptions, notification logs, Android deep links and cached pass IDs stay valid. A unique
+index (`IX_Passes_SatelliteId_OrbitNumber`, migration `AddPassNaturalKeyIndex`) enforces the key.
+
+- **Orbit number = ascending-node revolution number.** `OrbitNumberCalculator` takes the TLE's
+  revolution number at epoch (Line 2) and adds the northbound equator crossings (ECI Z going from
+  negative to non-negative, found by SGP4) between the TLE epoch and the pass AOS. All of one
+  calculation's AOS times share a single forward sweep from the epoch.
+  - **This replaced `rev + floor((AOS − epoch) / period)`**, which started each orbit at the TLE
+    epoch's arbitrary phase. Consecutive passes over Israel are about 93 min apart against a
+    period of about 95 min, so two different passes regularly got the same number.
+  - **Why ascending nodes work:** passes over Israel (~31° N) never have their AOS near the
+    equator, so each pass falls clearly inside one revolution and every TLE agrees which one.
+  - **Validated against the stored TLE history** (17 EROS C3 + 12 RUNNER-1 sets): 27/27
+    consecutive TLE pairs agree on the revolution number, and 459/459 passes keep their number
+    across consecutive TLEs.
+  - **Epoch-node tolerance:** our TLEs have their epoch exactly on an ascending node. A node
+    within ±60 s of the epoch is treated as the start of the TLE's own revolution and is never
+    counted again. Without this, float noise at the epoch could add 1 to every pass.
+- **Recalculation is an upsert, not delete-and-recreate.**
+  `PassService.CalculateAndSavePassesAsync` (run hourly by `PassCalculationJob`) calls
+  `IPassRepository.UpsertUpcomingAsync`, which handles one satellite in one transaction:
+  - **Match:** a computed pass whose key matches an existing upcoming pass (`Aos >= now`) updates
+    it in place: `Aos`, `Los`, `MaxElevation`, `AosAzimuth`, `LosAzimuth`, `DurationSec`, `TleId`
+    and `CalculatedAt`. Its `Id` and `OutlookSynced` are kept.
+  - **No match:** the computed pass is inserted.
+  - **Vanished:** an existing upcoming pass missing from the computed set is deleted. Its notes,
+    subscriptions and notification logs cascade with it, which is intentional because that pass
+    will no longer happen. This also runs when the computed set is empty.
+  - **Atomic:** if anything fails, nothing is committed.
+- **Scope boundary: `Aos < now` is never touched.** Past and in-progress passes are never modified
+  or deleted by the calculation.
+  - A pass already in progress at the window start comes back from `PassPredictor` with its AOS
+    clamped to "now", so its times are wrong. `PassService` drops any computed pass with
+    `AOS <= now`.
+  - The upsert also skips any computed pass whose orbit already belongs to a row with `Aos < now`.
+  - `now` comes from an injected `TimeProvider` and is read once per calculation. It is used for
+    the prediction window, the scope boundary and `CalculatedAt`.
+
+### Beta multi-tester model — ApiKey and UserSettings
+
+The app moved from a single global settings row to per-tester API keys for the beta:
+
+- **`ApiKey`** — one row per registered tester (`Email`, `DisplayName`, `KeyHash`, `IsActive`,
+  `CreatedAt`, `LastUsedAt`). The raw key is a random 256-bit value
+  (`RandomNumberGenerator.GetBytes(32)`) shown to the tester exactly once at registration and
+  never stored — only `KeyHash` (its SHA-256 hash, via `ApiKeyHasher` in
+  `SatelliteTracker.Database.Security`) is persisted. `DisplayName` exists separately from
+  `Email` so testers can be identified in logs/manual testing without exposing email everywhere.
+  **SHA-256, not bcrypt/PBKDF2/Argon2, is intentional**: slow hashes exist to slow down
+  brute-forcing low-entropy, human-chosen secrets (passwords). The raw key here is fully random
+  at 256 bits, so guessing it is computationally infeasible even against a fast hash — a slow
+  hash would only add cost to every request with no security benefit. Do not "fix" this later.
+- **`UserSettings`** — per-tester `FcmToken` and `AlertMinutes` (the fields that used to live on
+  the global `Settings` row), 1:1 with `ApiKey` via a required `ApiKeyId` FK. The 1:1 is enforced
+  with `HasIndex(x => x.ApiKeyId).IsUnique()` in `OnModelCreating` — the navigation property alone
+  does not enforce it.
+- **`Settings.OutlookDays` and `Settings.TeamEmail`** remain in the schema but are **not read from
+  anywhere in the logic yet** — they're prep for a future Microsoft Graph integration pending IT
+  admin consent, not dead code to clean up. See the Calendar Sync section above for the current
+  ICS-based flow that replaced the Graph-based design these fields were originally meant for.
+- `PassNotificationJob` reads all active testers' `UserSettings` via
+  `IUserSettingsRepository.GetAllActiveAsync()` (filtered to `ApiKey.IsActive`) and notifies each
+  independently rather than reading one global FCM token/alert-minutes pair.
+
+### Per-tester notification state — PassSubscription and PassNotificationLog
+
+`Pass` used to carry `Notify`, `NotificationSent`, and `NotificationSentAt` — all three assumed a
+single global recipient, which doesn't work once there are multiple independent testers. **These
+three fields were removed from `Pass` entirely** (dropped in the `SplitPassNotificationState`
+migration) — not deprecated, not kept-but-unused. That state is now split into two tables:
+
+- **`PassSubscription`** — per-tester notify opt-in for a specific pass. **Sparse/opt-in
+  model**: a row exists ONLY once a tester has actively toggled notifications on for that pass —
+  there is no row created by default when a pass is calculated or when a tester registers.
+  Absence of a row means `Notify = false`. Every read of this table (including in
+  `PassNotificationJob`) must treat a missing row as `Notify = false` — `IPassSubscriptionRepository
+  .GetEffectiveNotifyStatusAsync(passId, apiKeyId)` encodes this LEFT JOIN + COALESCE explicitly
+  rather than exposing a generic `GetAsync` that could be misread as "null means unsubscribed."
+  Unique index on `(PassId, ApiKeyId)`.
+  **This was originally an opt-out model** (absence of a row meant `Notify = true`) and was
+  flipped to opt-in once Dashboard/Full Pass List started surfacing large numbers of passes —
+  opt-out meant every tester got notified about passes they never actively looked at, which
+  generated unwanted notification noise. The flip was **behavior-only**: no schema change, no
+  data migration, and no change to any *existing* row's stored `Notify` value — it changed only
+  how a *missing* row is interpreted. A row explicitly storing `Notify = true` or `Notify = false`
+  means exactly what it always meant.
+- **`PassNotificationLog`** — one attempt record per `(PassId, ApiKeyId, AlertMinutes)` threshold.
+  A single tester can have multiple rows for the same pass — one per `AlertMinutes` threshold (e.g.
+  `[5, 10, 30]` can produce up to 3 rows for one pass). Unique index on
+  `(PassId, ApiKeyId, AlertMinutes)`. `IPassNotificationLogRepository.TryInsertAsync` catches the
+  unique-constraint violation from a concurrent job tick and returns `false` ("already claimed")
+  instead of throwing — do not let that exception propagate. See "Push retry" below for the
+  `Status`/`AttemptCount` lifecycle.
+- `PassNotificationJob` fetches all future passes, then for each (pass, active tester) pair checks
+  `PassSubscription` (sparse opt-in) before checking `PassNotificationLog` per `AlertMinutes`
+  threshold. This fixes the previous bug where a single global `NotificationSent` flag meant that
+  once any tester's earliest threshold fired, the pass was marked done and no other tester —
+  including one who registered afterward — could ever be notified about it.
+- Both `PassSubscription` and `PassNotificationLog` rows CASCADE-delete when their `Pass` row is
+  deleted (mirrors `Note`'s cascade pattern). Recalculation updates upcoming passes in place, so
+  this only fires for a pass that genuinely vanished from the prediction (see "Pass identity"
+  below), never for an ordinary hourly recalculation.
+- **Retention — `PassRetentionJob`** (`SatelliteTracker.PassService.Services`, decided 2026-10-11):
+  deletes every pass whose AOS is more than **6 months + 1 day** in the past
+  (`PassRetentionJob.CutoffFor`), via one `ExecuteDeleteAsync` in
+  `IPassRepository.DeleteAosBeforeAsync`. The DB cascade removes its notes, subscriptions and
+  notification logs with it — notes included, by product decision, matching the 6-month history
+  rule. Runs once at startup (so a server that was down at 03:00 catches up), then daily at
+  **03:00 Asia/Jerusalem** (DST-aware; `DelayUntilNextRun`). Subscription/log rows of past passes
+  inside the window are kept until their pass ages out. TLEs left without passes are then removed
+  by `TleUpdateJob`'s existing `DeleteOlderThanAsync(6 months, no passes)` cleanup.
+  `IPassSubscriptionRepository.DeleteByPassIdAsync` and `IPassNotificationLogRepository
+  .DeleteByPassIdAsync` remain as unused standalone primitives.
+  The Android-side equivalent (pruning old passes from Room) is a separate, not-yet-built follow-up.
+
+### Push retry — PassNotificationLog lifecycle (decided 2026-10-11)
+
+A failed FCM send used to be logged as sent and never retried. Now each log row records the real
+outcome:
+
+- **Claim before send.** For a threshold within its ±1 min window, the job inserts the row as
+  `Pending` (`AttemptCount = 1`) *before* calling FCM; losing that insert to a concurrent tick
+  means "don't send." After the send, `RecordOutcomeAsync` sets `Sent` (with `SentAt`), `Failed`
+  (with `LastError`), or `Abandoned`.
+- **`Status`**: `Pending` (in flight) → `Sent` (final) / `Failed` (retryable) / `Abandoned`
+  (final: attempts exhausted or dead token). Stored as a string.
+- **Retry**: a `Failed` row is retried on the next job tick (60 s), up to
+  `PassNotificationJob.MaxAttempts` = 3 sends in total, as long as AOS is still ≥ 1 minute away and
+  the tester is still opted in with that threshold in `AlertMinutes`. `TryClaimRetryAsync` moves
+  it back to `Pending` atomically (conditional `ExecuteUpdate` on `Status = Failed` and the expected
+  `AttemptCount`), so two ticks can't both retry. The threshold time has passed by then, so the
+  **retry message states the real minutes remaining** (rounded), not the threshold value.
+- **Dead tokens**: `FirebaseService` returns an `FcmSendResult` instead of swallowing errors.
+  `Unregistered`, `SenderIdMismatch` and `InvalidArgument` are `TokenInvalid`: the row is
+  `Abandoned`, the tester is skipped for the rest of that tick, and
+  `IUserSettingsRepository.ClearFcmTokenAsync` nulls `UserSettings.FcmToken` — only if it still
+  holds the failed token, so a fresh token synced in the meantime survives. The app re-sends a token
+  via `onNewToken`/re-registration. Any other error (outage, Firebase not configured) is `Failed`.
+- **At-most-once on crash**: a row left `Pending` by a crash mid-send is never retried — re-sending
+  it could duplicate a notification that actually went out.
+- Migration `PassNotificationRetry` backfills pre-existing rows as `Sent` with one attempt.
+
+`PATCH /api/passes/{id}/notify` is fully implemented (Milestone E, Step 1.3) —
+`PassesController.PatchNotify` resolves the caller's `ApiKeyId` from the authenticated principal
+(see Tester Authentication below) and upserts the tester's `PassSubscription` row via
+`IPassSubscriptionRepository`. `Notify = false` is the sparse default, so setting it back to false
+*deletes* any existing override row (via `DeleteOverrideAsync`) rather than writing a redundant
+"false" row — `Notify = true` goes through `SetNotifyAsync` to persist the explicit opt-in. The
+endpoint requires `[Authorize]` under the `ApiKey` scheme and returns the pass's effective notify
+status.
+
+### FCM push notification payload — Notification + Data
+
+`FirebaseService.SendPassNotificationAsync` sends each FCM `Message` as a notification+data
+hybrid, not a bare `Notification`:
+
+- **`Notification`** (`Title`/`Body`) — human-readable text shown in the system tray. Unchanged
+  by the Data payload addition below.
+- **`Data`** — a `Dictionary<string, string>` carrying `passId` (the `Pass.Id` guid, as a string)
+  and `type` (currently always `"pass_reminder"`, a discriminator so the Android handler can
+  branch on notification type as more are added later, rather than assuming every push is a pass
+  reminder). This is what lets the Android app deep-link to the tapped pass's Pass Details screen.
+  `passId` is threaded through from `PassNotificationJob`, which already has the `Pass` entity in
+  scope at the point it calls `SendPassNotificationAsync`.
+- The `Data` dictionary can't be unit-tested by inspecting the actual `Message` object —
+  `FirebaseService` calls the FirebaseAdmin SDK's static `FirebaseMessaging.DefaultInstance`
+  directly, with no injected wrapper/interface around it. Test coverage instead verifies, at the
+  `IFirebaseService` mock boundary in `PassNotificationJobTests`, that each pass's own `Id` is
+  threaded through correctly rather than stale/hardcoded/swapped.
+
+### Beta allowlist and self-registration — AllowlistedEmail, admin tooling, /api/auth/register
+
+**⚠️ This entire mechanism is temporary beta infrastructure (Milestone E, Step 1.2). It is not a
+foundation to build on** — production will eventually use proper org SSO, and if the allowlist
+outgrows manual admin entry it may move to a Google Sheets/Excel-backed integration. Do not extend
+or "productionize" the `X-Admin-Key` approach; a real redesign is expected before production use.
+
+- **`AllowlistedEmail`** (`Id`, `Email`, `AddedAt`) — one row per email an admin has approved for
+  beta signup. `Email` is always stored trimmed + lowercased before insert. Uniqueness is enforced
+  by a unique index on `Email` *plus* strict normalization in code before every write/read
+  comparison — the index alone is not case-insensitive, so a caller that skips normalization can
+  still create a logical duplicate.
+- **Admin auth is a completely separate concern from tester `ApiKey` identity** — it does not
+  reuse or extend the `ApiKey`/`AuthenticationHandler` concept in any way, and the future tester
+  `AuthenticationHandler` (Step 1.3) must not be merged with it. Admin endpoints require a header
+  `X-Admin-Key` matching the `Admin:ApiKey` configuration value (set via `dotnet user-secrets`,
+  the same mechanism already used for `Firebase:ServiceAccountPath`). Enforced by
+  `RequireAdminKeyAttribute` (`SatelliteTracker.API.Filters`), a standalone action filter with no
+  shared code with tester auth. Missing/invalid key → `401`.
+- **Admin endpoints** (all under `api/admin`, all `[RequireAdminKey]`, all
+  `[ApiExplorerSettings(IgnoreApi = true)]` so they never appear in the generated
+  `openapi/sattrakk-api.json` Android consumes):
+  - `POST /api/admin/allowlist` — adds an email (normalized) to the allowlist. Idempotent: adding
+    an already-present email is a no-op success, not a conflict — this is an admin convenience
+    tool, not a strict API contract.
+  - `GET /api/admin/allowlist` — lists all allowlisted emails. No pagination (small beta group).
+  - `POST /api/admin/reissue` — **stub, returns `501`**. Real key re-issuance (revoke the old key
+    and issue a new one in one step, for a tester who lost their device) is not implemented yet.
+    For now: an admin manually sets the old `ApiKey.IsActive = false` in the DB, and the tester
+    re-runs `POST /api/auth/register`. Still gated by `X-Admin-Key` even though stubbed, so the
+    real implementation doesn't need auth bolted on later.
+- **`POST /api/auth/register`** (`AuthController`) — the self-service entry point, **not** behind
+  `X-Admin-Key` or any tester auth, gated only by the allowlist check inside it. Flow: normalize
+  the submitted email → reject with `403` if not on the allowlist → reject with `409` if an active
+  `ApiKey` already exists for that email (message points at admin-assisted re-issuance, since
+  `/api/admin/reissue` isn't functional yet) → otherwise generate a random 256-bit raw key, hash
+  it with the existing `ApiKeyHasher`, persist a new `ApiKey` row, and return the **raw** key in
+  the response body — the only time it is ever visible; it is never logged. Does **not** create a
+  `UserSettings` row — that happens later, lazily, on the tester's first write to either
+  `AlertMinutes` or `FcmToken` via `/api/settings/me` (Step 1.4; see below — it is **not**
+  exclusively tied to FCM token registration, whichever of the two fields is written first is
+  what triggers the row's creation).
+
+### Tester authentication — the "ApiKey" scheme (Milestone E, Step 1.3)
+
+Testers now authenticate as a real ASP.NET Core authentication scheme, not a one-off action
+filter — this scheme is meant to be reused by every future tester-facing endpoint (starting with
+`/api/settings/me` in Step 1.4), unlike the admin `X-Admin-Key` mechanism above which is
+deliberately standalone and not meant to be extended.
+
+- **`ApiKeyAuthenticationHandler`** (`SatelliteTracker.API.Authentication`, an
+  `AuthenticationHandler<ApiKeyAuthenticationOptions>`) reads the `X-Api-Key` header, hashes it
+  with the existing `ApiKeyHasher` (never reimplemented), and looks up the hash via the new
+  `IApiKeyRepository.GetByHashAsync`. Registered as the **default** authentication scheme
+  (`ApiKeyAuthenticationOptions.SchemeName = "ApiKey"`) in `Program.cs`, so `[Authorize]` works
+  without per-action scheme configuration — endpoints still specify
+  `[Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]` explicitly for
+  clarity, matching the intent that more schemes could exist later.
+- **Missing header → `NoResult()`, not `Fail()`** — this is what lets anonymous GET endpoints
+  keep working normally even though the handler runs on every request; only an `[Authorize]`d
+  action actually triggers a challenge for a missing/invalid key.
+- **Uniform failure message, by design**: a missing header, a well-formed-but-unknown key, and a
+  found-but-inactive key all produce the exact same `401` response (`HandleChallengeAsync` writes
+  one fixed JSON body) — distinguishing them in the response would let a caller enumerate which
+  keys exist or are active. `IApiKeyRepository.GetByHashAsync` deliberately does *not* filter on
+  `IsActive` (unlike `GetActiveByEmailAsync`) so the handler can look up the row and check
+  `IsActive` itself, collapsing both cases into the same generic failure.
+- **`LastUsedAt` tracking**: every successful authentication calls the new
+  `IApiKeyRepository.UpdateLastUsedAtAsync`, persisted immediately (not just set on the in-memory
+  entity) so it reflects real API usage, not just registration/login events.
+- On success, the handler builds a `ClaimsPrincipal` carrying the tester's `ApiKeyId`, `Email`,
+  and `DisplayName`. Controllers read the ApiKeyId via `HttpContext.User.GetApiKeyId()` (or just
+  `User.GetApiKeyId()` from within a controller) — an extension method in
+  `SatelliteTracker.API.Authentication.ClaimsPrincipalExtensions` — rather than re-parsing the
+  claim by hand in every action.
+- **Endpoints requiring `[Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]`**:
+  `POST`/`PUT /api/satellites`, `POST /api/tles/{satelliteId}/fetch`,
+  `POST`/`PUT`/`DELETE` on notes, `PATCH /api/passes/{id}/notify`,
+  `POST /api/calendar/schedule` (even though it's not itself a DB write — an anonymous
+  calendar-generation endpoint is an abuse/DoS surface), `PUT /api/settings` (a mutating
+  endpoint found during the Step 1.3 audit that wasn't in the original planned list), and all
+  three `/api/settings/me*` actions from Step 1.4 below — **including its GET**, which is the
+  first exception to "all GETs are anonymous" (see that section for why).
+- Deliberately **not** touched: `POST /api/auth/register` (self-service, gated only by the
+  allowlist check — see above) and every `api/admin/*` endpoint (gated by the separate
+  `X-Admin-Key`/`RequireAdminKeyAttribute` mechanism, which must not be merged with tester auth).
+
+### Per-tester settings lifecycle — /api/settings/me (Milestone E, Step 1.4)
+
+`SettingsMeController` (`api/settings/me`) is where Android reads and writes a tester's own
+`AlertMinutes`/`FcmToken`. All three actions — `GET`, `PUT`, and `PUT /fcm-token` — require
+`[Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]`.
+
+- **`GET /api/settings/me` is the first inherently-tester-specific GET in the API**, and thus the
+  first exception to the "all GETs are anonymous" rule from Step 1.3 above — its response depends
+  on which tester is asking, unlike every other GET endpoint, which is why it needs `[Authorize]`
+  when no other GET does. Keep this in mind for future endpoints: a GET only needs auth when its
+  *response*, not just mutating siblings on the same controller, is tester-specific.
+- **The GET is strictly read-only.** If no `UserSettings` row exists yet for the caller's
+  `ApiKeyId`, it returns a *computed* default (`AlertMinutes: []`, `FcmToken: null`) without ever
+  inserting a row — `IUserSettingsRepository.GetByApiKeyIdAsync` returning a "not found" `Result`
+  failure is treated as "use the default," the same pattern `SettingsController.GetOrDefault`
+  already uses for the global `Settings` row.
+- **Lazy creation, on first write to *either* field** — a `UserSettings` row is created on
+  whichever of `PUT /api/settings/me` (`AlertMinutes`) or `PUT /api/settings/me/fcm-token`
+  (`FcmToken`) is called first for that tester, not exclusively by FCM token registration. Both
+  orderings are valid product flows (e.g. Android's settings screen may let a tester choose alert
+  timing before the push-permission soft-ask/hard-ask flow ever completes, or vice versa).
+- **Each PUT touches only its own field**, both on creation and on update — this is the reason
+  `IUserSettingsRepository` gained two dedicated methods instead of reusing the existing
+  `UpsertAsync(UserSettings)`, which overwrites both fields unconditionally and is unsafe for this
+  use case:
+  - `UpsertAlertMinutesAsync(apiKeyId, alertMinutes)` — on insert, sets `FcmToken = null`; on
+    update, changes only `AlertMinutes` and `UpdatedAt`, leaving any existing `FcmToken` alone.
+  - `UpsertFcmTokenAsync(apiKeyId, fcmToken)` — on insert, sets `AlertMinutes = []` (**not** the
+    `UserSettings` entity's `[5, 10, 30]` default value, which only applies to
+    directly-constructed entities elsewhere, e.g. tests); on update, changes only `FcmToken` and
+    `UpdatedAt`, leaving any existing `AlertMinutes` alone.
+  - Calling one endpoint must never null out or reset the field owned by the other — this was the
+    critical regression risk this design guards against, and is covered explicitly by
+    `SettingsMeEndpointTests`.
+- **`AlertMinutes` valid value set is `{5, 10, 15, 30, 60}`**, validated in `SettingsMeController`
+  (`ValidAlertMinutes`) — any value outside that set is rejected with `400` before the repository
+  is touched. An empty array is valid and means "no alerts."
+- `PUT /api/settings/me/fcm-token` rejects an empty or whitespace-only token with `400`.
+
+### WebApplicationFactory test infrastructure
+
+`SatelliteTracker.Tests.API.Infrastructure.CustomWebApplicationFactory` boots the real API host
+(`Program.cs`, full middleware pipeline) in-memory via `Microsoft.AspNetCore.Mvc.Testing`, backed
+by a SQLite in-memory `TestAppDbContext` (the same subclass/pattern `TestDbContextFactory` already
+uses for repository-level tests — the int[]-as-CSV conversion for `UserSettings.AlertMinutes` and
+the no-op `SeedData()` override). It also removes the three background `IHostedService`
+registrations (`TleUpdateJob`, `PassCalculationJob`, `PassNotificationJob`) so tests don't race
+real-world timers against N2YO/Firebase on an in-memory connection. Use this — not hand-built
+`ActionExecutingContext`/filter-context objects like `RequireAdminKeyAttributeTests` uses — for any
+test that needs to verify behavior of the actual HTTP pipeline (header parsing, DI wiring,
+middleware ordering), since that's something a direct controller-method call can't exercise.
+Controller-level unit tests (real SQLite-backed repositories, mocked services) remain the right
+tool for testing business logic that doesn't depend on the pipeline itself.
 
 ---
 
@@ -93,11 +566,11 @@ Five tables. All PKs are UUID (Guid in C#). All relationships via Fluent API in 
 ### Patterns
 - **Repository pattern** for all DB access — never call DbContext from controllers
 - **Interface-first** — always define interface before implementation (IPassRepository, ITLEService)
-- **Result<T> pattern** — services return Result<T>, never throw exceptions to controllers
+- **Result<T> pattern** — services return Result<T> (or Result for no-value operations), never throw exceptions to controllers
 - **Async/await everywhere** — no sync DB or HTTP calls
 
 ### Naming
-- Entities: PascalCase singular (Satellite, TleRecord, Pass, Note, Settings)
+- Entities: PascalCase singular (Satellite, TleRecord, Pass, Note, Settings, ApiKey, UserSettings)
 - Repositories: I{Entity}Repository interface + {Entity}Repository implementation
 - Services: I{Name}Service interface + {Name}Service implementation
 - Tests: {Class}Tests.cs with xUnit
@@ -132,8 +605,35 @@ Modules/{ModuleName}/
 - All endpoints prefixed with `/api`
 - All times in UTC (display conversion on client)
 - Response format: JSON
-- Real-time endpoints (/position, /track) do NOT hit DB — go through Cache → N2YO
+- Real-time endpoints (/satellites/{id}/position, /satellites/{id}/track) do NOT hit DB — go
+  through Cache → N2YO
+- /passes/{id}/track works from DB (Pass + its stored TleRecord) + SGP4, not N2YO — see the
+  caching table above for how it differs from /satellites/{id}/track
+- /satellites/{id}/orbit works from DB (the latest TleRecord) + SGP4, not N2YO, even though it
+  sits in RealTimeController — see "Full-orbit ground track" above
 - All other endpoints work from DB only
+
+---
+
+## Android client status — FCM (Milestone E Step 5) and Map (Step 6) complete
+
+Both are merged into `develop` (PRs #41, #42, #43) and passed a post-merge, end-to-end integration
+QA on 2026-09-24 against this backend: real API + Postgres, an emulator with Play Services, real
+FCM sends from `PassNotificationJob`. The per-item results, the manual-only items, and the open
+follow-ups are in `android/CLAUDE.md` ("Post-merge integration QA — FCM + Map"). Backend-relevant
+findings from that run:
+
+- **Push pipeline verified end to end, foreground delivery included.** Pending token before login
+  → synced to `UserSettings.FcmToken` on registration (and to the *new* `ApiKey` on
+  re-registration) → `PassNotificationJob` fired within its ±1 min threshold window → notification
+  shown on device → tap opened Pass Details for the right `passId`.
+- **Resolved 2026-10-11: a failed FCM send was logged as sent.** Failed sends are now recorded
+  honestly and retried; dead tokens are cleared. See "Push retry" under Database.
+- **Resolved for Android 2026-09-27: CartoDB basemap tiles now require an API key.** Keyless
+  `basemaps.cartocdn.com/dark_all` tiles come back watermarked "API KEY REQUIRED". The Android Map
+  now sends a CARTO key (PR #44; see `android/CLAUDE.md`). The deprecated web frontend
+  (`SatelliteMap.tsx`) is still keyless, and that won't be fixed. A basemap key is client-side by
+  nature, a different concern from the backend-only N2YO key rule below.
 
 ---
 
@@ -146,16 +646,32 @@ Modules/{ModuleName}/
 | feature/\*  | One feature per branch         |
 | fix/\*      | Bug fixes                      |
 
-CI runs on GitHub Actions: restore → build → test on every push/PR to main.
+CI runs on GitHub Actions. Backend `ci.yml` (restore → build → test) runs on pushes to
+`develop`/`main` and on PRs targeting `develop`/`main`, **only when the change touches
+`backend/**` or `.github/workflows/ci.yml`**:
+
+```yaml
+on:
+  pull_request:
+    branches: [develop, main]
+    paths: ['backend/**', '.github/workflows/ci.yml']
+  push:
+    branches: [develop, main]
+    paths: ['backend/**', '.github/workflows/ci.yml']
+```
+
+Pushes to `feature/*`/`fix/*` branches no longer run it on their own; open a PR to `develop` to
+get a run. `android-ci.yml` has its own triggers (it still runs on every push); see
+`android/CLAUDE.md` ("GitHub Actions CI").
 
 ---
 
 ## Build Order (Milestones)
 
-A → Infrastructure 
+A → Infrastructure
 B → TLEService + PassService + SGP4
-C → React Web Frontend (current)
-D → Outlook + FCM Push Notifications
+C → React Web Frontend (done; deprecated 2026-10-12)
+D → Calendar Sync (ICS MVP) + FCM Push Notifications (current)
 E → Android (Kotlin) basic
 F → Sky View / ARCore
 G → Testing + Production Deploy
@@ -169,176 +685,4 @@ G → Testing + Production Deploy
 - Never add Redis — IMemoryCache is sufficient for current scale
 - Never use Login/Auth — this is a personal/team app, no auth needed
 - Never add map layers beyond standard (no topo, no satellite imagery)
-EOF
-Output
-
-# CLAUDE.md — Satellite Pass Tracker
-
-## Project Context
-Satellite pass tracking system for Israel Aerospace Industries (IAI).
-Tracks satellite passes over Israel, displays 2D/3D maps, integrates with Microsoft Outlook 365, and includes an Android app with AR Sky View mode.
-Default satellites: EROS C3, RUNNER 1.
-TLE data source: N2YO.com API.
-
----
-
-## Commands
-
-```bash
-# Restore dependencies
-dotnet restore
-
-# Build
-dotnet build
-
-# Run the API
-dotnet run --project backend/src/SatelliteTracker.API
-
-# Run all tests
-dotnet test
-
-# Run a single test project
-dotnet test backend/src/<TestProject>/<TestProject>.csproj
-
-# Run a single test by name
-dotnet test --filter "FullyQualifiedName~TestMethodName"
-
-# Add a new EF Core migration
-dotnet ef migrations add <MigrationName> --project backend/src/SatelliteTracker.Database
-
-# Apply migrations
-dotnet ef database update --project backend/src/SatelliteTracker.Database
-```
-
-Connection string: `ConnectionStrings:DefaultConnection` in `appsettings.Development.json` (not committed).
-
----
-
-## Architecture — Modular Monolith
-
-One .NET solution, five logical modules. Clients (Web + Android) talk ONLY to our backend.
-The backend is the ONLY entity that communicates with N2YO and Microsoft Graph API.
-
-```
-SatelliteTracker.API            → Controllers, Routing, Validation (thin layer)
-SatelliteTracker.TLEService     → N2YO client, TLE parsing, scheduled fetch job
-SatelliteTracker.PassService    → SGP4 pass calculation logic
-SatelliteTracker.OutlookService → Microsoft Graph API, calendar event creation
-SatelliteTracker.Database       → EF Core, Migrations, Repositories
-```
-
-### Single Source of Truth Rules
-- Web and Android clients NEVER call N2YO or Microsoft Graph directly
-- The N2YO API key lives ONLY on the backend — never exposed to clients
-- All data flows through one point: our API
-
----
-
-## Caching Strategy (IMemoryCache)
-
-| Endpoint         | TTL        | Reason                          |
-|------------------|------------|---------------------------------|
-| /position        | 30 seconds | Changes rapidly                 |
-| /track           | 5 minutes  | Changes slowly                  |
-| /passes          | 1 hour     | Pre-calculated, stable          |
-| /tles            | 2 hours    | N2YO updates infrequently       |
-
-No Redis needed at this scale. IMemoryCache is built into .NET.
-
----
-
-## Database — PostgreSQL
-
-Five tables. All PKs are UUID (Guid in C#). All relationships via Fluent API in OnModelCreating.
-
-| Table      | Purpose                                              |
-|------------|------------------------------------------------------|
-| satellites | Satellite catalog. NoradId is unique.                |
-| tles       | TLE history per satellite. Up to 6 months back.      |
-| passes     | Calculated passes. 1 week forward + 6 months history.|
-| notes      | Free-text per pass. CASCADE delete with pass.        |
-| settings   | Single settings row. AlertMinutes is int[].          |
-
----
-
-## Code Conventions
-
-### Patterns
-- **Repository pattern** for all DB access — never call DbContext from controllers
-- **Interface-first** — always define interface before implementation (IPassRepository, ITLEService)
-- **Result<T> pattern** — services return Result<T>, never throw exceptions to controllers
-- **Async/await everywhere** — no sync DB or HTTP calls
-
-### Naming
-- Entities: PascalCase singular (Satellite, TleRecord, Pass, Note, Settings)
-- Repositories: I{Entity}Repository interface + {Entity}Repository implementation
-- Services: I{Name}Service interface + {Name}Service implementation
-- Tests: {Class}Tests.cs with xUnit
-
-### Structure per Module
-```
-Modules/{ModuleName}/
-    Entities/
-    Repositories/
-        I{Entity}Repository.cs
-        {Entity}Repository.cs
-    Services/
-        I{Name}Service.cs
-        {Name}Service.cs
-    DTOs/
-```
-
----
-
-## Testing
-
-- Framework: **xUnit**
-- DB tests: **in-memory SQLite** (not mocks for repositories)
-- Unit tests: standard mocks (Moq) for services
-- File naming: `{Class}Tests.cs`
-- Location: `SatelliteTracker.Tests/`
-
----
-
-## API Conventions
-
-- All endpoints prefixed with `/api`
-- All times in UTC (display conversion on client)
-- Response format: JSON
-- Real-time endpoints (/position, /track) do NOT hit DB — go through Cache → N2YO
-- All other endpoints work from DB only
-
----
-
-## Git Strategy
-
-| Branch      | Purpose                        |
-|-------------|--------------------------------|
-| main        | Stable — Production only       |
-| develop     | Active development integration |
-| feature/\*  | One feature per branch         |
-| fix/\*      | Bug fixes                      |
-
-CI runs on GitHub Actions: restore → build → test on every push/PR to main.
-
----
-
-## Build Order (Milestones)
-
-A → Infrastructure 
-B → TLEService + PassService + SGP4
-C → React Web Frontend (current)
-D → Outlook + FCM Push Notifications
-E → Android (Kotlin) basic
-F → Sky View / ARCore
-G → Testing + Production Deploy
-
----
-
-## What NOT to do
-
-- Never call N2YO API from controllers or frontend
-- Never store real-time position data in DB
-- Never add Redis — IMemoryCache is sufficient for current scale
-- Never use Login/Auth — this is a personal/team app, no auth needed
-- Never add map layers beyond standard (no topo, no satellite imagery)
+- Never implement calendar event cancellation in the ICS model — out of scope by design, not a gap

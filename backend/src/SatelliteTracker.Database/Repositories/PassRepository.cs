@@ -29,21 +29,48 @@ public class PassRepository : IPassRepository
         }
     }
 
-    // Retrieves historical satellite passes for a specific satellite that occurred after a specified date.
-    public async Task<Result<IEnumerable<Pass>>> GetHistoryAsync(Guid satelliteId, DateTime from)
+    // Retrieves historical satellite passes for a specific satellite that occurred after a
+    // specified date, applying query's optional per-field filters (AND-combined) server-side via
+    // EF Core query composition, ordered by Aos descending, and paged. HasMore is determined by
+    // fetching PageSize+1 rows rather than a separate COUNT query.
+    public async Task<Result<PagedResult<Pass>>> GetHistoryAsync(Guid satelliteId, DateTime from, PassHistoryQuery query)
     {
         try
         {
-            var passes = await _context.Passes
-                .Where(p => p.SatelliteId == satelliteId && p.Los < DateTime.UtcNow && p.Aos >= from)
+            var passesQuery = _context.Passes
+                .Where(p => p.SatelliteId == satelliteId && p.Los < DateTime.UtcNow && p.Aos >= from);
+
+            if (query.OrbitNumberFrom.HasValue)
+                passesQuery = passesQuery.Where(p => p.OrbitNumber >= query.OrbitNumberFrom.Value);
+            if (query.OrbitNumberTo.HasValue)
+                passesQuery = passesQuery.Where(p => p.OrbitNumber <= query.OrbitNumberTo.Value);
+            if (query.MaxElevationFrom.HasValue)
+                passesQuery = passesQuery.Where(p => p.MaxElevation >= query.MaxElevationFrom.Value);
+            if (query.MaxElevationTo.HasValue)
+                passesQuery = passesQuery.Where(p => p.MaxElevation <= query.MaxElevationTo.Value);
+            if (query.AosFrom.HasValue)
+                passesQuery = passesQuery.Where(p => p.Aos >= query.AosFrom.Value);
+            if (query.AosTo.HasValue)
+                passesQuery = passesQuery.Where(p => p.Aos <= query.AosTo.Value);
+            if (query.LosFrom.HasValue)
+                passesQuery = passesQuery.Where(p => p.Los >= query.LosFrom.Value);
+            if (query.LosTo.HasValue)
+                passesQuery = passesQuery.Where(p => p.Los <= query.LosTo.Value);
+
+            var passes = await passesQuery
                 .OrderByDescending(p => p.Aos)
+                .Skip((query.Page - 1) * query.PageSize)
+                .Take(query.PageSize + 1)
                 .ToListAsync();
 
-            return Result<IEnumerable<Pass>>.Success(passes);
+            var hasMore = passes.Count > query.PageSize;
+            var items = hasMore ? passes.Take(query.PageSize).ToList() : passes;
+
+            return Result<PagedResult<Pass>>.Success(new PagedResult<Pass>(items, query.Page, query.PageSize, hasMore));
         }
         catch (Exception ex)
         {
-            return Result<IEnumerable<Pass>>.Failure(ex.Message);
+            return Result<PagedResult<Pass>>.Failure(ex.Message);
         }
     }
 
@@ -107,33 +134,15 @@ public class PassRepository : IPassRepository
         }
     }
 
-    // Updates the Notify flag for a specific pass by its unique identifier.
-    public async Task<Result<Pass>> UpdateNotifyAsync(Guid id, bool notify)
-    {
-        try
-        {
-            var pass = await _context.Passes.FindAsync(id);
-            if (pass is null)
-                return Result<Pass>.Failure("Pass not found");
-
-            pass.Notify = notify;
-            await _context.SaveChangesAsync();
-            return Result<Pass>.Success(pass);
-        }
-        catch (Exception ex)
-        {
-            return Result<Pass>.Failure(ex.Message);
-        }
-    }
-
-    // Returns all future passes with notify=true that have not yet had a notification sent.
+    // Returns all future passes; per-tester opt-out/already-sent filtering now happens in
+    // PassNotificationJob against PassSubscription and PassNotificationLog.
     public async Task<Result<IEnumerable<Pass>>> GetPendingNotificationsAsync()
     {
         try
         {
             var passes = await _context.Passes
                 .Include(p => p.Satellite)
-                .Where(p => p.Notify && !p.NotificationSent && p.Aos > DateTime.UtcNow)
+                .Where(p => p.Aos > DateTime.UtcNow)
                 .OrderBy(p => p.Aos)
                 .ToListAsync();
 
@@ -145,25 +154,140 @@ public class PassRepository : IPassRepository
         }
     }
 
-    // Deletes upcoming predicted passes for a satellite (passes with AOS >= from)
-    public async Task<Result<bool>> DeleteUpcomingAsync(Guid satelliteId, DateTime from)
+    // Retrieves passes by ID with Satellite eager-loaded; fails clearly if any ID is missing.
+    public async Task<Result<IReadOnlyList<Pass>>> GetByIdsAsync(IEnumerable<Guid> passIds)
     {
         try
         {
-            var upcoming = await _context.Passes
-                .Where(p => p.SatelliteId == satelliteId && p.Aos >= from)
+            var ids = passIds.ToList();
+
+            var passes = await _context.Passes
+                .Include(p => p.Satellite)
+                .Where(p => ids.Contains(p.Id))
                 .ToListAsync();
 
-            if (!upcoming.Any())
-                return Result<bool>.Success(true);
+            var foundIds = passes.Select(p => p.Id).ToHashSet();
+            var missingIds = ids.Where(id => !foundIds.Contains(id)).ToList();
+            if (missingIds.Count > 0)
+            {
+                return Result<IReadOnlyList<Pass>>.Failure(
+                    $"Pass(es) not found: {string.Join(", ", missingIds)}.");
+            }
 
-            _context.Passes.RemoveRange(upcoming);
-            await _context.SaveChangesAsync();
-            return Result<bool>.Success(true);
+            return Result<IReadOnlyList<Pass>>.Success(passes);
         }
         catch (Exception ex)
         {
-            return Result<bool>.Failure(ex.Message);
+            return Result<IReadOnlyList<Pass>>.Failure(ex.Message);
+        }
+    }
+
+    // Bulk-marks the given passes as synced. See IPassRepository.MarkOutlookSyncedAsync for the
+    // ICS-MVP semantics of the OutlookSynced flag.
+    public async Task<Result> MarkOutlookSyncedAsync(IEnumerable<Guid> passIds)
+    {
+        try
+        {
+            var ids = passIds.ToList();
+
+            var passes = await _context.Passes
+                .Where(p => ids.Contains(p.Id))
+                .ToListAsync();
+
+            foreach (var pass in passes)
+                pass.OutlookSynced = true;
+
+            await _context.SaveChangesAsync();
+            return Result.Success();
+        }
+        catch (Exception ex)
+        {
+            return Result.Failure(ex.Message);
+        }
+    }
+
+    // Upserts a satellite's upcoming passes by (SatelliteId, OrbitNumber) in one transaction —
+    // see IPassRepository.UpsertUpcomingAsync for the full semantics.
+    public async Task<Result<PassUpsertResult>> UpsertUpcomingAsync(Guid satelliteId, DateTime now, IReadOnlyList<Pass> computed)
+    {
+        try
+        {
+            await using var transaction = await _context.Database.BeginTransactionAsync();
+
+            var upcoming = await _context.Passes
+                .Where(p => p.SatelliteId == satelliteId && p.Aos >= now)
+                .ToDictionaryAsync(p => p.OrbitNumber);
+
+            // Orbits already owned by a past/in-progress row: out of this job's scope.
+            var computedOrbits = computed.Select(p => p.OrbitNumber).ToList();
+            var pastOrbits = (await _context.Passes
+                .Where(p => p.SatelliteId == satelliteId && p.Aos < now && computedOrbits.Contains(p.OrbitNumber))
+                .Select(p => p.OrbitNumber)
+                .ToListAsync()).ToHashSet();
+
+            int inserted = 0, updated = 0, skippedPast = 0;
+            var kept = new HashSet<int>();
+
+            foreach (var pass in computed)
+            {
+                if (pastOrbits.Contains(pass.OrbitNumber))
+                {
+                    skippedPast++;
+                    continue;
+                }
+
+                if (upcoming.TryGetValue(pass.OrbitNumber, out var existing))
+                {
+                    existing.Aos = pass.Aos;
+                    existing.Los = pass.Los;
+                    existing.MaxElevation = pass.MaxElevation;
+                    existing.AosAzimuth = pass.AosAzimuth;
+                    existing.LosAzimuth = pass.LosAzimuth;
+                    existing.DurationSec = pass.DurationSec;
+                    existing.TleId = pass.TleId;
+                    existing.CalculatedAt = pass.CalculatedAt;
+                    kept.Add(pass.OrbitNumber);
+                    updated++;
+                }
+                else
+                {
+                    _context.Passes.Add(pass);
+                    inserted++;
+                }
+            }
+
+            // Upcoming passes the new computation no longer predicts won't happen; deleting them
+            // cascades their notes, subscriptions and notification logs, which is intended.
+            var vanished = upcoming.Values.Where(p => !kept.Contains(p.OrbitNumber)).ToList();
+            _context.Passes.RemoveRange(vanished);
+
+            await _context.SaveChangesAsync();
+            await transaction.CommitAsync();
+
+            return Result<PassUpsertResult>.Success(new PassUpsertResult(inserted, updated, vanished.Count, skippedPast));
+        }
+        catch (Exception ex)
+        {
+            // The transaction rolled back; drop the half-applied tracked changes too, so a later
+            // SaveChanges on this context can't commit them.
+            _context.ChangeTracker.Clear();
+            return Result<PassUpsertResult>.Failure(ex.Message);
+        }
+    }
+
+    public async Task<Result<int>> DeleteAosBeforeAsync(DateTime cutoff)
+    {
+        try
+        {
+            var deleted = await _context.Passes
+                .Where(p => p.Aos < cutoff)
+                .ExecuteDeleteAsync();
+
+            return Result<int>.Success(deleted);
+        }
+        catch (Exception ex)
+        {
+            return Result<int>.Failure(ex.Message);
         }
     }
 }

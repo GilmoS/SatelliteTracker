@@ -1,9 +1,12 @@
 name: CI
 
 on:
-  push:
   pull_request:
-    branches: [ main ]
+    branches: [develop, main]
+    paths: ['backend/**', '.github/workflows/ci.yml']
+  push:
+    branches: [develop, main]
+    paths: ['backend/**', '.github/workflows/ci.yml']
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true

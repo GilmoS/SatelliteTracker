@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Required: the app talks only to the SatTrakk backend, never N2YO/Graph directly. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Runtime-requested on API 33+ only (see NotificationPermissionManager); below 33 it's
+         granted at install time and this declaration has no runtime-prompt effect. Needed for FCM
+         push notifications (Milestone D) to actually surface to the user on 33+. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Declared ahead of Milestone F (Sky View / ARCore camera overlay). CAMERA is NOT
+         requested at runtime anywhere yet: Sky View's current compatibility check
+         (ArCoreApk.checkAvailabilityAsync + a TYPE_ROTATION_VECTOR lookup) needs no runtime
+         permission at all. HIGH_SAMPLING_RATE_SENSORS is a normal (install-time) permission. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.ar" android:required="false" />
+    <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
+    <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false" />
+    <uses-feature android:name="android.hardware.sensor.compass" android:required="false" />
+
+    <application
+        android:name=".SatTrakkApplication"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.SatTrakk">
+
+        <!-- singleTop: a pass-reminder tap while the app is already running is delivered to the
+             existing instance via onNewIntent (see MainActivity) instead of stacking a second one. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.SatTrakk">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".data.push.SatTrakkMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Used by FCM itself for notifications it displays while the app is backgrounded, so they
+             match the ones SatTrakkMessagingService builds in the foreground. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="pass_reminders" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_pass_reminder" />
+
+        <!-- "AR Optional": AR is one feature, not the app's purpose, so Play must not filter out
+             devices without ARCore, and ARCore must not be auto-installed with the app. Sky View
+             checks support at runtime instead (SkyViewViewModel). -->
+        <meta-data
+            android:name="com.google.ar.core"
+            android:value="optional" />
+    </application>
+
+</manifest>

@@ -9,6 +9,27 @@ public interface IPassService
 {
     Task<Result<IEnumerable<PassResult>>> CalculateAndSavePassesAsync(Guid satelliteId, CancellationToken ct = default);
     Task<Result<IEnumerable<Pass>>> GetUpcomingPassesAsync(Guid satelliteId);
-    Task<Result<IEnumerable<Pass>>> GetPassHistoryAsync(Guid satelliteId);
+
+    /// <summary>
+    /// Retrieves the satellite's pass history (up to 6 months back), applying <paramref name="query"/>'s
+    /// optional per-field filters and pagination. See <see cref="IPassRepository.GetHistoryAsync"/>.
+    /// </summary>
+    Task<Result<PagedResult<Pass>>> GetPassHistoryAsync(Guid satelliteId, PassHistoryQuery query);
+
     Task<Result<Pass>> GetPassByIdAsync(Guid passId);
+
+    /// <summary>
+    /// Computes the ground track for a specific, already-calculated pass across its stored
+    /// [Aos, Los] window, using the TLE that was in effect when the pass was calculated
+    /// (<see cref="Pass.TleId"/>) — not the satellite's currently-latest TLE.
+    /// </summary>
+    Task<Result<IEnumerable<GroundTrackPoint>>> GetPassTrackAsync(Guid passId);
+
+    /// <summary>
+    /// Computes the satellite's full ground track from its latest TLE: one orbital period before
+    /// <paramref name="nowUtc"/> through one period plus <paramref name="extraAhead"/> after it.
+    /// <paramref name="extraAhead"/> lets a caller that caches the result for that long still
+    /// have a full period ahead of "now" for the whole cache lifetime.
+    /// </summary>
+    Task<Result<OrbitTrack>> GetOrbitTrackAsync(Guid satelliteId, DateTime nowUtc, TimeSpan extraAhead);
 }

@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using SatelliteTracker.API.Authentication;
 using SatelliteTracker.API.DTOs;
 using SatelliteTracker.Database.Common;
 using SatelliteTracker.Database.Entities;
@@ -26,6 +28,8 @@ public class SatellitesController : BaseController
     // It retrieves the data from the repository and maps it to a list of SatelliteDto objects before returning an OK response.
     // If the repository operation fails, it returns an appropriate error response.
     [HttpGet]
+    [ProducesResponseType(typeof(IEnumerable<SatelliteDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> GetAll()
     {
         var result = await _repo.GetAllAsync();
@@ -35,15 +39,22 @@ public class SatellitesController : BaseController
     // GET: api/satellites/{id}
     // retrieves a satellite by its unique identifier (GUID).
     [HttpGet("{id:guid}")]
+    [ProducesResponseType(typeof(SatelliteDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await _repo.GetByIdAsync(id);
         return Respond(result, SatelliteDto.From);
     }
 
-    // POST: api/satellites 
+    // POST: api/satellites
     // accepts a CreateSatelliteRequest object in the request body, creates a new Satellite entity, and adds it to the database using the repository.
+    [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPost]
+    [ProducesResponseType(typeof(SatelliteDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> Add([FromBody] CreateSatelliteRequest request)
     {
         var satellite = new Satellite
@@ -64,7 +75,12 @@ public class SatellitesController : BaseController
 
     // PUT: api/satellites/{id}
     // updates an existing satellite by its unique identifier (GUID) using the data provided in the request body.
+    [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPut("{id:guid}")]
+    [ProducesResponseType(typeof(SatelliteDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateSatelliteRequest request)
     {
         var getResult = await _repo.GetByIdAsync(id);

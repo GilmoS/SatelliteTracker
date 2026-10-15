@@ -13,12 +13,14 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\SatelliteTracker.Database\SatelliteTracker.Database.csproj" />
     <ProjectReference Include="..\SatelliteTracker.TLEService\SatelliteTracker.TLEService.csproj" />
     <ProjectReference Include="..\SatelliteTracker.PassService\SatelliteTracker.PassService.csproj" />
+    <ProjectReference Include="..\SatelliteTracker.OutlookService\SatelliteTracker.OutlookService.csproj" />
   </ItemGroup>
 
 </Project>

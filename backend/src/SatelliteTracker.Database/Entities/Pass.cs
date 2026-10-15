@@ -15,13 +15,12 @@ public class Pass
     public decimal AosAzimuth { get; set; }
     public decimal LosAzimuth { get; set; }
     public int DurationSec { get; set; }
-    public bool NotificationSent { get; set; }
-    public DateTime? NotificationSentAt { get; set; } // Nullable to indicate that it may not have been sent yet
     public bool OutlookSynced { get; set; } // Indicates whether the pass has been synced with Outlook calendar
-    public bool Notify { get; set; } = false;
     public DateTime CalculatedAt { get; set; }
 
     public Satellite Satellite { get; set; } = null!; // Navigation property to the Satellite entity
     public TleRecord TleRecord { get; set; } = null!;// Navigation property to the TleRecord entity
     public ICollection<Note> Notes { get; set; } = [];// Navigation property to the collection of associated Note entities
+    public ICollection<PassSubscription> PassSubscriptions { get; set; } = [];// Per-tester notify opt-outs (sparse — see PassSubscription)
+    public ICollection<PassNotificationLog> PassNotificationLogs { get; set; } = [];// Per-tester, per-threshold sent-notification ledger
 }

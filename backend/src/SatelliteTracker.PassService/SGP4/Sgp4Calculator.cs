@@ -32,7 +32,11 @@ public static class Sgp4Calculator
 
         double x = pv.X, y = pv.Y, z = pv.Z;
         double lon = Math.Atan2(y, x) - thetaGst;
+        // Geographic longitude in [-180°, 180°): NormalizeAngle gives [0, 2π), so the western
+        // hemisphere is shifted down by 2π. Without this, a track west of Greenwich came out as
+        // e.g. 350° instead of -10°, which map clients treat as an antimeridian crossing at 0°.
         lon = NormalizeAngle(lon);
+        if (lon >= Math.PI) lon -= TwoPi;
 
         double r = Math.Sqrt(x * x + y * y);
         double lat = Math.Atan2(z, r);

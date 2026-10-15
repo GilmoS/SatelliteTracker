@@ -8,12 +8,62 @@ namespace SatelliteTracker.Database.Repositories;
 public interface IPassRepository
 {
     Task<Result<IEnumerable<Pass>>> GetUpcomingAsync(Guid satelliteId, DateTime from, DateTime to);
-    Task<Result<IEnumerable<Pass>>> GetHistoryAsync(Guid satelliteId, DateTime from);
+
+    /// <summary>
+    /// Returns completed passes (Los in the past, Aos on/after <paramref name="from"/>) for a
+    /// satellite, further narrowed by <paramref name="query"/>'s optional per-field filters
+    /// (AND-combined), ordered by Aos descending (most recent first — fixed, not configurable),
+    /// and paged. <see cref="PagedResult{T}.HasMore"/> is computed by fetching PageSize+1 rows.
+    /// </summary>
+    Task<Result<PagedResult<Pass>>> GetHistoryAsync(Guid satelliteId, DateTime from, PassHistoryQuery query);
+
     Task<Result<Pass>> GetByIdAsync(Guid id);
     Task<Result<Pass>> AddAsync(Pass pass);
     Task<Result<bool>> AddRangeAsync(IEnumerable<Pass> passes);
     Task<Result<Pass>> UpdateAsync(Pass pass);
-    Task<Result<bool>> DeleteUpcomingAsync(Guid satelliteId, DateTime from);
-    Task<Result<Pass>> UpdateNotifyAsync(Guid id, bool notify);
+
+    /// <summary>
+    /// Reconciles a satellite's upcoming passes (Aos &gt;= <paramref name="now"/>) with a freshly
+    /// computed set, matching on the natural key (SatelliteId, OrbitNumber), in one transaction:
+    /// a computed pass matching an existing upcoming pass updates it in place, keeping its Id
+    /// (and so its notes, subscriptions and notification logs); an unmatched one is inserted; an
+    /// existing upcoming pass missing from the computed set is deleted, cascading its dependents.
+    /// Passes with Aos &lt; now are never modified or deleted, and a computed pass whose orbit
+    /// already belongs to one of them is skipped. On failure nothing is committed.
+    /// </summary>
+    Task<Result<PassUpsertResult>> UpsertUpcomingAsync(Guid satelliteId, DateTime now, IReadOnlyList<Pass> computed);
+
+    /// <summary>
+    /// Returns all future passes (Aos in the future), Satellite eager-loaded, ordered by Aos.
+    /// These are the candidates PassNotificationJob evaluates per-tester against
+    /// PassSubscription (opt-out) and PassNotificationLog (already-sent) — there is no
+    /// pass-level "pending" flag any more since completion is tracked per (pass, tester, threshold).
+    /// </summary>
     Task<Result<IEnumerable<Pass>>> GetPendingNotificationsAsync();
+
+    /// <summary>
+    /// Retrieves passes by ID, with <c>Satellite</c> eager-loaded. Used by the calendar schedule
+    /// flow to map straight to <see cref="OutlookService.Abstractions.CalendarEventData"/>
+    /// without a second round-trip.
+    /// </summary>
+    /// <returns>
+    /// A failure listing every ID that doesn't exist if any are missing — never a partial list.
+    /// </returns>
+    Task<Result<IReadOnlyList<Pass>>> GetByIdsAsync(IEnumerable<Guid> passIds);
+
+    /// <summary>
+    /// Bulk-sets <see cref="Pass.OutlookSynced"/> to <c>true</c> for the given passes.
+    /// The field name is retained for forward-compatibility with a possible future Microsoft
+    /// Graph implementation. In the current ICS MVP it means "an .ics was generated and offered
+    /// to the user" — not "confirmed added to a calendar" — since the ICS model has no
+    /// programmatic way to confirm the user actually imported the event.
+    /// </summary>
+    Task<Result> MarkOutlookSyncedAsync(IEnumerable<Guid> passIds);
+
+    /// <summary>
+    /// Retention: deletes every pass whose AOS is before <paramref name="cutoff"/>, in one
+    /// statement. The database cascades the delete to the pass's notes, subscriptions and
+    /// notification logs. Returns the number of passes deleted.
+    /// </summary>
+    Task<Result<int>> DeleteAosBeforeAsync(DateTime cutoff);
 }

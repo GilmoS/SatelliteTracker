@@ -1,12 +1,16 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using SatelliteTracker.API.Authentication;
 using SatelliteTracker.API.DTOs;
 using SatelliteTracker.Database.Entities;
 using SatelliteTracker.Database.Repositories;
 
 namespace SatelliteTracker.API.Controllers;
 
-// This controller manages application settings,
-// allowing clients to retrieve and update settings such as alert minutes, outlook days, team email, minimum elevation, and FCM token.
+// This controller manages the single global application settings row:
+// outlook days, team email, and minimum elevation.
+// Per-tester FCM token and alert minutes now live on UserSettings and are updated
+// through the authenticated per-tester settings endpoint added in a later step.
 [ApiController]
 [Route("api/settings")]
 public class SettingsController : BaseController
@@ -18,10 +22,13 @@ public class SettingsController : BaseController
     // GET: api/settings
     // Retrieves the current application settings.
     [HttpGet]
+    [ProducesResponseType(typeof(SettingsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> Get()
     {
         var result = await _repo.GetAsync();
-        if (!result.IsSuccess) 
+        if (!result.IsSuccess)
             return ToError(result.Error!);
 
         return Ok(SettingsDto.From(result.Value!));
@@ -30,13 +37,17 @@ public class SettingsController : BaseController
     // PUT: api/settings
     // Updates the application settings.
     // This method performs an upsert operation, meaning it will create new settings if they don't exist or update existing settings if they do.
+    // Mutating endpoint found during the Step 1.3 audit that wasn't in the originally listed set
+    // — gated the same way as the other mutating endpoints rather than left anonymous.
+    [Authorize(AuthenticationSchemes = ApiKeyAuthenticationOptions.SchemeName)]
     [HttpPut]
+    [ProducesResponseType(typeof(SettingsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> Upsert([FromBody] UpdateSettingsRequest request)
     {
         var existing = await GetOrDefault(); // Retrieve existing settings or create default settings if none exist
 
-        if (request.AlertMinutes is not null)
-            existing.AlertMinutes = request.AlertMinutes;
         if (request.OutlookDays.HasValue)
             existing.OutlookDays = request.OutlookDays.Value;
         if (request.TeamEmail is not null)
@@ -53,25 +64,6 @@ public class SettingsController : BaseController
         return Ok(SettingsDto.From(result.Value!));
     }
 
-    // PUT: api/settings/fcm-token
-    // Updates the FCM token in the application settings.
-    // This method is separate from the general settings update to allow for more focused updates to the FCM token,
-    // which may be updated more frequently than other settings.
-    [HttpPut("fcm-token")]
-    public async Task<IActionResult> UpdateFcmToken([FromBody] UpdateFcmTokenRequest request)
-    {
-        var existing = await GetOrDefault(); // Retrieve existing settings or create default settings if none exist
-        existing.FcmToken = request.FcmToken; // Update the FCM token with the new value from the request
-        existing.UpdatedAt = DateTime.UtcNow; 
-
-        var result = await _repo.UpsertAsync(existing);
-        if (!result.IsSuccess)
-            return ToError(result.Error!);
-
-        return Ok(SettingsDto.From(result.Value!));
-    }
-
-
     // This helper method retrieves the current settings from the repository.
     // If no settings are found, it returns a default settings object with predefined values.
     private async Task<Settings> GetOrDefault()
@@ -81,13 +73,9 @@ public class SettingsController : BaseController
             : new Settings
             {
                 Id = Guid.Empty,
-                AlertMinutes = [5, 10, 30],
                 OutlookDays = 7,
                 MinElevation = 5,
                 UpdatedAt = DateTime.UtcNow
             };
     }
-
-    
-    
 }

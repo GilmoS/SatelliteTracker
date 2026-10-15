@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- XML shell theme only — it exists so the system has something to draw
+         before Compose takes over in MainActivity#setContent. All real theming
+         (Mission Control colors/typography) lives in ui/theme/Theme.kt. -->
+    <style name="Theme.SatTrakk" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/mission_control_background</item>
+        <item name="android:statusBarColor">@color/mission_control_background</item>
+        <item name="android:navigationBarColor">@color/mission_control_background</item>
+    </style>
+</resources>

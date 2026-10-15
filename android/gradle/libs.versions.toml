@@ -1,0 +1,115 @@
+[versions]
+# Pinned Aug 2026. A real Gradle build against these exact versions got through
+# dependency resolution, resource processing, and KSP (Hilt + Room annotation
+# processing) cleanly, then hit an unresolved "internal compiler error" in the
+# final compileDebugKotlin step — see PR description for details and the
+# recommended next step (first build from a clean Android Studio daemon).
+# Re-verify all versions via Android Studio's Upgrade Assistant regardless.
+#
+# AGP was deliberately kept on the 8.x line rather than 9.2.0: AGP 9's new
+# "built-in Kotlin" support conflicts with the standalone
+# org.jetbrains.kotlin.android plugin used here and forces a migration (see
+# developer.android.com/build/migrate-to-built-in-kotlin) that's out of scope
+# for a brand-new skeleton. Revisit when adopting AGP 9.
+# Compose BOM is likewise held one step back (2026.06.01, not the newest
+# 2026.08.00) — the newest BOM pulls Compose 1.12.x, which requires
+# compileSdk 37 and AGP >= 9.1, i.e. the same AGP-9 jump.
+agp = "8.13.1"
+kotlin = "2.1.20"
+ksp = "2.1.20-2.0.1"
+coreKtx = "1.15.0"
+lifecycleRuntimeKtx = "2.9.0"
+activityCompose = "1.10.0"
+composeBom = "2026.06.01"
+navigationCompose = "2.9.7"
+hilt = "2.57.1"
+hiltNavigationCompose = "1.2.0"
+retrofit = "3.0.0"
+okhttp = "4.12.0"
+# Pinned below the newest release (1.11.0) deliberately: 1.11.0's kotlin-stdlib dependency
+# resolves to 2.3.20, which the project's Kotlin compiler (2.1.20, see the AGP-8/Kotlin-2.1
+# pin note above) can't read ("Module was compiled with an incompatible version of Kotlin" /
+# internal compiler error in compileDebugKotlin). 1.8.1 matches what
+# retrofit2:converter-kotlinx-serialization:3.0.0 itself requests, which stays on 2.1.x-compatible
+# kotlin-stdlib. Bump together with the `kotlin` version above, not independently.
+kotlinxSerializationJson = "1.8.1"
+kotlinxCoroutines = "1.10.2"
+room = "2.8.1"
+securityCrypto = "1.1.0"
+datastorePreferences = "1.1.1"
+openapiGenerator = "7.11.0"
+# Firebase: the BoM aligns every firebase-* artifact version. google-services stays on the 4.4.x
+# line (not 4.5.0) to match the AGP 8.x pin above.
+firebaseBom = "34.19.0"
+googleServices = "4.4.4"
+# MapLibre Compose: pinned to 0.12.1, NOT the newest (0.17.0). 0.13.0+ are built against
+# kotlin-stdlib 2.3.x/2.4.x and Compose 1.10+/1.12, which the Kotlin 2.1.20 compiler pin above
+# can't read (same failure mode as the kotlinxSerializationJson pin). 0.12.1 is the newest release
+# on kotlin-stdlib 2.2.x (readable one version ahead) and Compose 1.9.x. Bump with `kotlin`.
+maplibreCompose = "0.12.1"
+# ARCore: a plain Java AAR (its only dependency is androidx.annotation), so unlike MapLibre and
+# kotlinx.serialization it isn't bound by the Kotlin 2.1.20 pin. Used only for Sky View's
+# compatibility check (ArCoreApk.checkAvailabilityAsync) so far; no AR session is created.
+arcore = "1.56.0"
+junit = "4.13.2"
+mockk = "1.13.13"
+androidxTestExtJunit = "1.2.1"
+espressoCore = "3.6.1"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycleRuntimeKtx" }
+androidx-lifecycle-viewmodel-ktx = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-ktx", version.ref = "lifecycleRuntimeKtx" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
+androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
+
+androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" }
+
+hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
+hilt-android-compiler = { group = "com.google.dagger", name = "hilt-android-compiler", version.ref = "hilt" }
+hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hiltNavigationCompose" }
+androidx-hilt-compiler = { group = "androidx.hilt", name = "hilt-compiler", version.ref = "hiltNavigationCompose" }
+
+retrofit-core = { group = "com.squareup.retrofit2", name = "retrofit", version.ref = "retrofit" }
+retrofit-kotlinx-serialization-converter = { group = "com.squareup.retrofit2", name = "converter-kotlinx-serialization", version.ref = "retrofit" }
+okhttp-core = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
+kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
+
+androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+
+androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
+firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
+firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
+maplibre-compose = { group = "org.maplibre.compose", name = "maplibre-compose", version.ref = "maplibreCompose" }
+arcore = { group = "com.google.ar", name = "core", version.ref = "arcore" }
+
+androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastorePreferences" }
+
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
+androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
+androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
+google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
+openapi-generator = { id = "org.openapi.generator", version.ref = "openapiGenerator" }

@@ -85,6 +85,18 @@ public class Sgp4CalculatorTests
     }
 
     [Fact]
+    public void ToGeodetic_FullOrbit_LongitudesStayInSignedRangeIncludingWesternHemisphere()
+    {
+        // One full orbit crosses every longitude, so this also covers the western hemisphere,
+        // which the single-instant test above never reaches.
+        var tle = IssTle;
+        var track = GroundTrackCalculator.ComputeGroundTrack(tle, tle.Epoch, tle.Epoch.AddMinutes(95), 30);
+
+        Assert.All(track, p => Assert.True(p.Longitude >= -180.0 && p.Longitude < 180.0, $"longitude {p.Longitude}"));
+        Assert.Contains(track, p => p.Longitude < 0);
+    }
+
+    [Fact]
     public void CalculateObserverPosition_BenGurion_EcefRadiusCorrect()
     {
         // Ben Gurion Airport: 32.0055°N, 34.8854°E, 135m alt

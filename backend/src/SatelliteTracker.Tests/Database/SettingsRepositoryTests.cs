@@ -28,11 +28,9 @@ public class SettingsRepositoryTests : IDisposable
     private static Settings MakeSettings() => new()
     {
         Id = Guid.NewGuid(),
-        AlertMinutes = [5, 10, 30],
         OutlookDays = 7,
         TeamEmail = "team@iai.co.il",
         MinElevation = 10,
-        FcmToken = null,
         UpdatedAt = DateTime.UtcNow
     };
 
@@ -76,7 +74,6 @@ public class SettingsRepositoryTests : IDisposable
 
         var updated = new Settings
         {
-            AlertMinutes = [15, 60],
             OutlookDays = 14,
             TeamEmail = "new@iai.co.il",
             MinElevation = 20,
@@ -89,24 +86,6 @@ public class SettingsRepositoryTests : IDisposable
         Assert.Equal(1, _context.Settings.Count());
         Assert.Equal(14, result.Value!.OutlookDays);
         Assert.Equal("new@iai.co.il", result.Value!.TeamEmail);
-    }
-
-    [Fact]
-    public async Task UpsertAsync_AlertMinutes_Persisted()
-    {
-        var settings = new Settings
-        {
-            AlertMinutes = [5, 15, 30],
-            OutlookDays = 3,
-            MinElevation = 5,
-            UpdatedAt = DateTime.UtcNow
-        };
-
-        await _repo.UpsertAsync(settings);
-
-        var fetched = await _repo.GetAsync();
-        Assert.True(fetched.IsSuccess);
-        Assert.True(new[] { 5, 15, 30 }.SequenceEqual(fetched.Value!.AlertMinutes));
     }
 
     [Fact]

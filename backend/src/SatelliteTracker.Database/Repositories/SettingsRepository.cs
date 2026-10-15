@@ -41,11 +41,9 @@ public class SettingsRepository : ISettingsRepository
             }
             else // If an existing settings record is found, update its properties with the new values.
             {
-                existing.AlertMinutes = settings.AlertMinutes;
                 existing.OutlookDays = settings.OutlookDays;
                 existing.TeamEmail = settings.TeamEmail;
                 existing.MinElevation = settings.MinElevation;
-                existing.FcmToken = settings.FcmToken;
                 existing.UpdatedAt = settings.UpdatedAt;
                 settings = existing;
             }
