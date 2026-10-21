@@ -4,7 +4,8 @@ namespace SatelliteTracker.API.Http;
 
 public static class N2YOClientServiceCollectionExtensions
 {
-    // Registers the typed N2YO HTTP client (reads N2YO:ApiKey from configuration).
+    // Registers the typed N2YO HTTP client (takes N2YO:ApiKey from N2YoOptions, which
+    // AddValidatedConfiguration binds and validates).
     // The default HttpClient loggers are removed because they log the full request URL, which
     // contains the API key; N2YOHttpClientLogger logs the same events with the key redacted.
     public static IHttpClientBuilder AddN2YOClient(this IServiceCollection services)

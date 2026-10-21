@@ -4,8 +4,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Abstractions;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using SatelliteTracker.API.Configuration;
 using SatelliteTracker.API.Controllers;
 using SatelliteTracker.API.Filters;
 using Xunit;
@@ -17,10 +18,7 @@ public class RequireAdminKeyAttributeTests
     private static ActionExecutingContext BuildContext(string? configuredKey, string? providedKey)
     {
         var services = new ServiceCollection();
-        var configBuilder = new ConfigurationBuilder();
-        if (configuredKey is not null)
-            configBuilder.AddInMemoryCollection(new Dictionary<string, string?> { ["Admin:ApiKey"] = configuredKey });
-        services.AddSingleton<IConfiguration>(configBuilder.Build());
+        services.AddSingleton(Options.Create(new AdminOptions { ApiKey = configuredKey }));
 
         var httpContext = new DefaultHttpContext { RequestServices = services.BuildServiceProvider() };
         if (providedKey is not null)

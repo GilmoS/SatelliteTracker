@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
 using System.Net;
-using Microsoft.Extensions.Configuration;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SatelliteTracker.API.Http;
+using SatelliteTracker.Tests.API.Infrastructure;
 using SatelliteTracker.TLEService.Client;
 using Xunit;
 
@@ -53,15 +55,36 @@ public class N2YOHttpClientLoggerTests
         Assert.DoesNotContain(logs, l => l.Contains(SecretKey));
     }
 
+    // Same check through the real host: Program.cs registration, the validated N2YoOptions and the
+    // logging levels from appsettings.json (System.Net.Http.HttpClient at Warning), with only the
+    // primary HTTP handler faked so nothing reaches N2YO.
+    [Fact]
+    public async Task N2YOClient_InRealHost_LogsNothingContainingApiKey()
+    {
+        var logs = new ConcurrentQueue<string>();
+        using var factory = new CustomWebApplicationFactory(new Dictionary<string, string?> { ["N2YO:ApiKey"] = SecretKey })
+            .WithWebHostBuilder(builder =>
+            {
+                builder.ConfigureLogging(l => l.AddProvider(new CapturingLoggerProvider(logs)));
+                builder.ConfigureTestServices(services =>
+                    services.AddHttpClient<IN2YOClient, N2YOClient>().ConfigurePrimaryHttpMessageHandler(() =>
+                        new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") })));
+            });
+
+        using var scope = factory.Services.CreateScope();
+        await scope.ServiceProvider.GetRequiredService<IN2YOClient>().GetTleAsync(25544);
+
+        Assert.Contains(logs, l => l.Contains("apiKey=REDACTED"));
+        Assert.DoesNotContain(logs, l => l.Contains(SecretKey));
+    }
+
     // Builds the client through the same registration Program.cs uses, with a capturing logger
     // at Trace so any default HttpClient logger that slipped back in would be caught.
     private static (IN2YOClient Client, ConcurrentQueue<string> Logs) BuildClient(HttpMessageHandler handler)
     {
         var logs = new ConcurrentQueue<string>();
         var services = new ServiceCollection();
-        services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["N2YO:ApiKey"] = SecretKey })
-            .Build());
+        services.AddOptions<N2YoOptions>().Configure(o => o.ApiKey = SecretKey);
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Trace).AddProvider(new CapturingLoggerProvider(logs)));
         services.AddN2YOClient().ConfigurePrimaryHttpMessageHandler(() => handler);
 

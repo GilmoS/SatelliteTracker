@@ -70,12 +70,12 @@ public class PassService : IPassService
         var passResults = PassPredictor.PredictPasses(
             tleData,
             satelliteId,
-            _observer.Lat,
-            _observer.Lng,
-            _observer.AltMeters,
+            _observer.Lat!.Value,
+            _observer.Lng!.Value,
+            _observer.AltMeters!.Value,
             now,
             now.AddDays(7),
-            _observer.MinElevationDeg)
+            _observer.MinElevationDeg!.Value)
             // A pass already in progress at "now" comes back with its AOS clamped to the window
             // start, so its times are wrong. It isn't upcoming either, so it is left alone.
             .Where(pr => pr.AOS > now)
