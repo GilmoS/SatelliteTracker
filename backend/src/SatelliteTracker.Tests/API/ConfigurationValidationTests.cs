@@ -154,6 +154,17 @@ public class ConfigurationValidationTests
         Assert.DoesNotContain("sattrakk-db", result.FailureMessage, StringComparison.OrdinalIgnoreCase);
     }
 
+    // The recommended connection strings documented in CLAUDE.md ("Required configuration").
+    [Theory]
+    [InlineData("Host=localhost;Port=5435;Database=satellite_tracker;Username=satellite_user;Password=placeholder;SSL Mode=Disable;Timeout=15;Command Timeout=30;Keepalive=30;Maximum Pool Size=20")]
+    [InlineData("Host=sattrakk-db.postgres.database.azure.com;Port=5432;Database=satellite_tracker;Username=satellite_user;Password=placeholder;SSL Mode=VerifyFull;Timeout=15;Command Timeout=30;Keepalive=30;Maximum Pool Size=20")]
+    public void DatabaseOptionsValidator_AcceptsRecommendedConnectionStrings(string connectionString)
+    {
+        var result = new DatabaseOptionsValidator().Validate(null, new DatabaseOptions { DefaultConnection = connectionString });
+
+        Assert.True(result.Succeeded, result.FailureMessage);
+    }
+
     [Fact]
     public void AzureHostWithoutVerifyFull_FailsStartup_WithoutEchoingValue()
     {
