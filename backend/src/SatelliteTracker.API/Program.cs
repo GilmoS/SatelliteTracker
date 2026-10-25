@@ -21,9 +21,10 @@ var builder = WebApplication.CreateBuilder(args);
 // refuses to start if any is missing or invalid — see AddValidatedConfiguration.
 builder.Services.AddValidatedConfiguration();
 
-// Database context
+// Database context, retrying transient failures (see DatabaseRetryPolicy). Connection behavior
+// (SSL, timeouts, keepalive, pool size) comes from the connection string only.
 builder.Services.AddDbContext<AppDbContext>((sp, options) =>
-    options.UseNpgsql(sp.GetRequiredService<IOptions<DatabaseOptions>>().Value.DefaultConnection));
+    options.UseAppNpgsql(sp.GetRequiredService<IOptions<DatabaseOptions>>().Value.DefaultConnection));
 
 // Repositories
 builder.Services.AddScoped<ISatelliteRepository, SatelliteRepository>();
