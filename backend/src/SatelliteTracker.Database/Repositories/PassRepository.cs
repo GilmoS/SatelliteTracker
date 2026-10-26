@@ -208,63 +208,28 @@ public class PassRepository : IPassRepository
 
     // Upserts a satellite's upcoming passes by (SatelliteId, OrbitNumber) in one transaction —
     // see IPassRepository.UpsertUpcomingAsync for the full semantics.
+    //
+    // The transaction runs inside the execution strategy (DatabaseRetryPolicy), so a transient
+    // failure replays the whole unit: read, diff and write, against whatever is committed by then.
+    // Replaying is safe, even after a commit whose acknowledgement was lost: the second run finds
+    // the passes the first one wrote, sets them to the same values and has nothing left to delete.
+    // The returned counts describe the last attempt only.
     public async Task<Result<PassUpsertResult>> UpsertUpcomingAsync(Guid satelliteId, DateTime now, IReadOnlyList<Pass> computed)
     {
         try
         {
-            await using var transaction = await _context.Database.BeginTransactionAsync();
-
-            var upcoming = await _context.Passes
-                .Where(p => p.SatelliteId == satelliteId && p.Aos >= now)
-                .ToDictionaryAsync(p => p.OrbitNumber);
-
-            // Orbits already owned by a past/in-progress row: out of this job's scope.
-            var computedOrbits = computed.Select(p => p.OrbitNumber).ToList();
-            var pastOrbits = (await _context.Passes
-                .Where(p => p.SatelliteId == satelliteId && p.Aos < now && computedOrbits.Contains(p.OrbitNumber))
-                .Select(p => p.OrbitNumber)
-                .ToListAsync()).ToHashSet();
-
-            int inserted = 0, updated = 0, skippedPast = 0;
-            var kept = new HashSet<int>();
-
-            foreach (var pass in computed)
+            var attempt = 0;
+            var counts = await _context.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
             {
-                if (pastOrbits.Contains(pass.OrbitNumber))
-                {
-                    skippedPast++;
-                    continue;
-                }
+                // A replay must start from the database, not from the failed attempt's tracked
+                // (modified, added or deleted) passes.
+                if (attempt++ > 0)
+                    _context.ChangeTracker.Clear();
 
-                if (upcoming.TryGetValue(pass.OrbitNumber, out var existing))
-                {
-                    existing.Aos = pass.Aos;
-                    existing.Los = pass.Los;
-                    existing.MaxElevation = pass.MaxElevation;
-                    existing.AosAzimuth = pass.AosAzimuth;
-                    existing.LosAzimuth = pass.LosAzimuth;
-                    existing.DurationSec = pass.DurationSec;
-                    existing.TleId = pass.TleId;
-                    existing.CalculatedAt = pass.CalculatedAt;
-                    kept.Add(pass.OrbitNumber);
-                    updated++;
-                }
-                else
-                {
-                    _context.Passes.Add(pass);
-                    inserted++;
-                }
-            }
+                return await UpsertUpcomingInTransactionAsync(satelliteId, now, computed);
+            });
 
-            // Upcoming passes the new computation no longer predicts won't happen; deleting them
-            // cascades their notes, subscriptions and notification logs, which is intended.
-            var vanished = upcoming.Values.Where(p => !kept.Contains(p.OrbitNumber)).ToList();
-            _context.Passes.RemoveRange(vanished);
-
-            await _context.SaveChangesAsync();
-            await transaction.CommitAsync();
-
-            return Result<PassUpsertResult>.Success(new PassUpsertResult(inserted, updated, vanished.Count, skippedPast));
+            return Result<PassUpsertResult>.Success(counts);
         }
         catch (Exception ex)
         {
@@ -273,6 +238,63 @@ public class PassRepository : IPassRepository
             _context.ChangeTracker.Clear();
             return Result<PassUpsertResult>.Failure(ex.Message);
         }
+    }
+
+    private async Task<PassUpsertResult> UpsertUpcomingInTransactionAsync(Guid satelliteId, DateTime now, IReadOnlyList<Pass> computed)
+    {
+        await using var transaction = await _context.Database.BeginTransactionAsync();
+
+        var upcoming = await _context.Passes
+            .Where(p => p.SatelliteId == satelliteId && p.Aos >= now)
+            .ToDictionaryAsync(p => p.OrbitNumber);
+
+        // Orbits already owned by a past/in-progress row: out of this job's scope.
+        var computedOrbits = computed.Select(p => p.OrbitNumber).ToList();
+        var pastOrbits = (await _context.Passes
+            .Where(p => p.SatelliteId == satelliteId && p.Aos < now && computedOrbits.Contains(p.OrbitNumber))
+            .Select(p => p.OrbitNumber)
+            .ToListAsync()).ToHashSet();
+
+        int inserted = 0, updated = 0, skippedPast = 0;
+        var kept = new HashSet<int>();
+
+        foreach (var pass in computed)
+        {
+            if (pastOrbits.Contains(pass.OrbitNumber))
+            {
+                skippedPast++;
+                continue;
+            }
+
+            if (upcoming.TryGetValue(pass.OrbitNumber, out var existing))
+            {
+                existing.Aos = pass.Aos;
+                existing.Los = pass.Los;
+                existing.MaxElevation = pass.MaxElevation;
+                existing.AosAzimuth = pass.AosAzimuth;
+                existing.LosAzimuth = pass.LosAzimuth;
+                existing.DurationSec = pass.DurationSec;
+                existing.TleId = pass.TleId;
+                existing.CalculatedAt = pass.CalculatedAt;
+                kept.Add(pass.OrbitNumber);
+                updated++;
+            }
+            else
+            {
+                _context.Passes.Add(pass);
+                inserted++;
+            }
+        }
+
+        // Upcoming passes the new computation no longer predicts won't happen; deleting them
+        // cascades their notes, subscriptions and notification logs, which is intended.
+        var vanished = upcoming.Values.Where(p => !kept.Contains(p.OrbitNumber)).ToList();
+        _context.Passes.RemoveRange(vanished);
+
+        await _context.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        return new PassUpsertResult(inserted, updated, vanished.Count, skippedPast);
     }
 
     public async Task<Result<int>> DeleteAosBeforeAsync(DateTime cutoff)

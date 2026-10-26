@@ -124,6 +124,61 @@ public class ConfigurationValidationTests
         Assert.DoesNotContain("SENTINEL", result.FailureMessage);
     }
 
+    private const string AzureSslRule = "must set SSL Mode=VerifyFull when Host is an Azure Database for PostgreSQL server";
+
+    [Theory]
+    [InlineData("Host=sattrakk-db.postgres.database.azure.com;Database=db;Username=user;SSL Mode=VerifyFull", true)]
+    [InlineData("Host=SATTRAKK-DB.Postgres.Database.Azure.COM;Database=db;Username=user;SSL Mode=VerifyFull", true)]
+    [InlineData("Host=sattrakk-db.postgres.database.azure.com;Database=db;Username=user;SSL Mode=Require", false)]
+    [InlineData("Host=sattrakk-db.postgres.database.azure.com;Database=db;Username=user;SSL Mode=Prefer", false)]
+    [InlineData("Host=sattrakk-db.postgres.database.azure.com;Database=db;Username=user;SSL Mode=Disable", false)]
+    [InlineData("Host=sattrakk-db.postgres.database.azure.com;Database=db;Username=user;SSL Mode=VerifyCA", false)]
+    [InlineData("Host=sattrakk-db.postgres.database.azure.com;Database=db;Username=user", false)]
+    [InlineData("Host=SATTRAKK-DB.POSTGRES.DATABASE.AZURE.COM;Database=db;Username=user;SSL Mode=Disable", false)]
+    [InlineData("Host=localhost,sattrakk-db.postgres.database.azure.com:5432;Database=db;Username=user;SSL Mode=Disable", false)]
+    [InlineData("Host=localhost;Database=db;Username=user;SSL Mode=Disable", true)]
+    [InlineData("Host=postgres;Database=db;Username=user;SSL Mode=Disable", true)]
+    [InlineData("Host=postgres.database.azure.com.example.org;Database=db;Username=user;SSL Mode=Disable", true)]
+    public void DatabaseOptionsValidator_AzureHostRequiresVerifyFull(string connectionString, bool valid)
+    {
+        var result = new DatabaseOptionsValidator().Validate(null, new DatabaseOptions { DefaultConnection = connectionString });
+
+        if (valid)
+        {
+            Assert.True(result.Succeeded, result.FailureMessage);
+            return;
+        }
+
+        Assert.True(result.Failed);
+        Assert.Contains($"ConnectionStrings:DefaultConnection {AzureSslRule}", result.FailureMessage);
+        Assert.DoesNotContain("sattrakk-db", result.FailureMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // The recommended connection strings documented in CLAUDE.md ("Required configuration").
+    [Theory]
+    [InlineData("Host=localhost;Port=5435;Database=satellite_tracker;Username=satellite_user;Password=placeholder;SSL Mode=Disable;Timeout=15;Command Timeout=30;Keepalive=30;Maximum Pool Size=20")]
+    [InlineData("Host=sattrakk-db.postgres.database.azure.com;Port=5432;Database=satellite_tracker;Username=satellite_user;Password=placeholder;SSL Mode=VerifyFull;Timeout=15;Command Timeout=30;Keepalive=30;Maximum Pool Size=20")]
+    public void DatabaseOptionsValidator_AcceptsRecommendedConnectionStrings(string connectionString)
+    {
+        var result = new DatabaseOptionsValidator().Validate(null, new DatabaseOptions { DefaultConnection = connectionString });
+
+        Assert.True(result.Succeeded, result.FailureMessage);
+    }
+
+    [Fact]
+    public void AzureHostWithoutVerifyFull_FailsStartup_WithoutEchoingValue()
+    {
+        const string connectionString =
+            "Host=sattrakk-db.postgres.database.azure.com;Database=sattrakk;Username=sattrakk_app;Password=SENTINEL-PW-5e2b;SSL Mode=Disable";
+
+        var message = StartupFailure(new() { ["ConnectionStrings:DefaultConnection"] = connectionString });
+
+        Assert.Contains(AzureSslRule, message);
+        Assert.DoesNotContain("SENTINEL", message);
+        Assert.DoesNotContain("sattrakk-db", message);
+        AssertNoConfiguredSecret(message);
+    }
+
     [Fact]
     public void FirebaseOptionsValidator_RejectsNonServiceAccountCredential()
     {
