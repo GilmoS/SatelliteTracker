@@ -67,7 +67,7 @@ key and the broken rule, never the value.
 
 | Key | Purpose | Validation rule | Local source |
 |-----|---------|-----------------|--------------|
-| `ConnectionStrings:DefaultConnection` | Postgres (`DatabaseOptions`) | Required; parses with `NpgsqlConnectionStringBuilder` and has `Host`, `Database`, `Username` | user-secrets |
+| `ConnectionStrings:DefaultConnection` | Postgres (`DatabaseOptions`) | Required; parses with `NpgsqlConnectionStringBuilder` and has `Host`, `Database`, `Username`; a `Host` ending in `.postgres.database.azure.com` (any case) needs `SSL Mode=VerifyFull` | user-secrets |
 | `N2YO:ApiKey` | N2YO API key (`N2YoOptions`) | Required, non-empty | user-secrets |
 | `Firebase:ServiceAccountJson` | FCM service-account key, as **JSON content**, not a path (`FirebaseOptions`) | Required; must parse into a service-account credential (`FirebaseOptionsValidator`) | user-secrets |
 | `Admin:ApiKey` | `X-Admin-Key` value for `api/admin/*` (`AdminOptions`) | Required, at least 32 characters | user-secrets |
@@ -79,7 +79,7 @@ key and the broken rule, never the value.
 Local setup (placeholders, never real values in docs or commits):
 
 ```bash
-dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Host=localhost;Port=5435;Database=satellite_tracker;Username=satellite_user;Password=<your-local-password>" --project backend/src/SatelliteTracker.API
+dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Host=localhost;Port=5435;Database=satellite_tracker;Username=satellite_user;Password=<your-local-password>;SSL Mode=Disable;Timeout=15;Command Timeout=30;Keepalive=30;Maximum Pool Size=20" --project backend/src/SatelliteTracker.API
 dotnet user-secrets set "N2YO:ApiKey" "<your-n2yo-api-key>" --project backend/src/SatelliteTracker.API
 dotnet user-secrets set "Admin:ApiKey" "<random-string-of-at-least-32-chars>" --project backend/src/SatelliteTracker.API   # e.g. from: openssl rand -hex 32
 dotnet user-secrets set "Firebase:ServiceAccountJson" "$(cat <path-to-service-account.json>)" --project backend/src/SatelliteTracker.API
@@ -87,6 +87,36 @@ dotnet user-secrets set "Firebase:ServiceAccountJson" "$(cat <path-to-service-ac
 # dotnet user-secrets set "Firebase:ServiceAccountJson" (Get-Content <path-to-service-account.json> -Raw) --project backend/src/SatelliteTracker.API
 dotnet user-secrets list --project backend/src/SatelliteTracker.API   # check which keys are set
 ```
+
+#### Connection string — recommended parameters (I2.3, 2026-10-25)
+
+All connection behavior lives in the connection string, never in C#. Recommended values:
+
+```text
+Local: Host=localhost;Port=5435;Database=satellite_tracker;Username=satellite_user;Password=<your-local-password>;SSL Mode=Disable;Timeout=15;Command Timeout=30;Keepalive=30;Maximum Pool Size=20
+Azure: Host=<server-name>.postgres.database.azure.com;Port=5432;Database=<database>;Username=<user>;Password=<password>;SSL Mode=VerifyFull;Timeout=15;Command Timeout=30;Keepalive=30;Maximum Pool Size=20
+```
+
+- `SSL Mode`: `Disable` for the local container (no TLS). `VerifyFull` for Azure: TLS, with the
+  certificate chain checked and the certificate checked to be issued for that host. Startup
+  enforces `VerifyFull` for `*.postgres.database.azure.com`.
+- `Timeout=15`: seconds to wait while opening a connection before giving up.
+- `Command Timeout=30`: seconds a single SQL command may run before it is cancelled.
+- `Keepalive=30`: after 30 s of inactivity Npgsql sends a keepalive, so a connection silently
+  dropped (failover, NAT idle timeout) is detected instead of hanging.
+- `Maximum Pool Size=20`: most connections this process opens at once (default 100). Keeps the app
+  well under the server's connection limit.
+
+**Retries are code, not configuration.** `DatabaseRetryPolicy` (`SatelliteTracker.Database`)
+registers EF Core `EnableRetryOnFailure` with 6 retries and a 6 s maximum delay, the same in every
+environment. A transient fault (restart, maintenance, network blip) replays the operation. A DB
+call that keeps failing gives up after about 25 s and returns a `Result` failure as before.
+Startup still never connects, so the API starts with the DB down and recovers when it comes back.
+Any code that opens its own transaction must run the whole unit inside
+`Database.CreateExecutionStrategy().ExecuteAsync(...)` (EF throws otherwise) and must be safe to
+replay. See `PassRepository.UpsertUpcomingAsync`, the only one today. Tests use SQLite, which
+keeps EF's non-retrying strategy. `ExecutionStrategyReplayTests` covers replays with a retrying
+test strategy. The manual outage checks are in `docs/infra/i2.3-db-resilience-checklist.md`.
 
 - **Startup validation checks shape only.** It never connects to Postgres, FCM or N2YO;
   reachability belongs to readiness health checks (a later task).
@@ -322,6 +352,10 @@ index (`IX_Passes_SatelliteId_OrbitNumber`, migration `AddPassNaturalKeyIndex`) 
     subscriptions and notification logs cascade with it, which is intentional because that pass
     will no longer happen. This also runs when the computed set is empty.
   - **Atomic:** if anything fails, nothing is committed.
+  - **Replayed on transient faults:** the transaction runs inside the execution strategy, and a
+    retry first clears the change tracker so it starts from the committed state. A replay after a
+    lost commit acknowledgement finds its own rows and updates them to the same values, so it
+    creates no duplicates.
 - **Scope boundary: `Aos < now` is never touched.** Past and in-progress passes are never modified
   or deleted by the calculation.
   - A pass already in progress at the window start comes back from `PassPredictor` with its AOS
@@ -435,6 +469,9 @@ outcome:
   `Firebase:ServiceAccountJson` (see "Required configuration").
 - **At-most-once on crash**: a row left `Pending` by a crash mid-send is never retried — re-sending
   it could duplicate a notification that actually went out.
+- **Same on a lost DB acknowledgement**: if the claim insert or `TryClaimRetryAsync` committed but
+  the reply was lost, the execution strategy's replay finds the row already claimed and reports
+  `false`, so that threshold is not sent and the row stays `Pending`. Never sent twice.
 - Migration `PassNotificationRetry` backfills pre-existing rows as `Sent` with one attempt.
 
 `PATCH /api/passes/{id}/notify` is fully implemented (Milestone E, Step 1.3) —
