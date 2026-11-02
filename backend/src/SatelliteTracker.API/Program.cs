@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
 using SatelliteTracker.API.Authentication;
 using SatelliteTracker.API.Configuration;
+using SatelliteTracker.API.HealthChecks;
 using SatelliteTracker.API.Http;
 using SatelliteTracker.API.Jobs;
 using SatelliteTracker.API.Services;
@@ -70,6 +71,9 @@ builder.Services.AddHostedService<PassCalculationJob>();
 builder.Services.AddHostedService<PassNotificationJob>();
 builder.Services.AddHostedService<PassRetentionJob>();
 
+// Health checks behind /health/ready and /health/details
+builder.Services.AddAppHealthChecks();
+
 // Caching
 builder.Services.AddMemoryCache();
 
@@ -108,6 +112,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();   
 }
 
+app.UseHealthProbes();
 app.UseCors("DevFrontend");
 app.UseAuthentication();
 app.UseAuthorization();
