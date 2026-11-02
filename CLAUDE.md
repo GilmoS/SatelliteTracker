@@ -119,7 +119,7 @@ keeps EF's non-retrying strategy. `ExecutionStrategyReplayTests` covers replays 
 test strategy. The manual outage checks are in `docs/infra/i2.3-db-resilience-checklist.md`.
 
 - **Startup validation checks shape only.** It never connects to Postgres, FCM or N2YO;
-  reachability belongs to readiness health checks (a later task).
+  reachability belongs to `/health/ready` (see "Health checks").
 - **Read settings only through `IOptions<T>`**, never `IConfiguration["..."]`. Sections are bound
   with `BindConfiguration`, so adding a provider later (Azure Key Vault) needs no code change.
 - **Firebase is initialized at startup** by `FirebaseAppInitializer` (an `IHostedService`
@@ -688,7 +688,7 @@ Modules/{ModuleName}/
 
 ## API Conventions
 
-- All endpoints prefixed with `/api`
+- All endpoints prefixed with `/api`, except `/health/*` (see "Health checks")
 - All times in UTC (display conversion on client)
 - Response format: JSON
 - Real-time endpoints (/satellites/{id}/position, /satellites/{id}/track) do NOT hit DB — go
@@ -698,6 +698,72 @@ Modules/{ModuleName}/
 - /satellites/{id}/orbit works from DB (the latest TleRecord) + SGP4, not N2YO, even though it
   sits in RealTimeController — see "Full-orbit ground track" above
 - All other endpoints work from DB only
+
+---
+
+## Health checks (I2.4)
+
+| Endpoint | Consumer | Auth | Runs | Response |
+|----------|----------|------|------|----------|
+| `GET /health/live` | Docker, inside the VM | none | no checks | `Healthy`, 200 if the process can answer |
+| `GET /health/ready` | external uptime monitor, through Caddy | none | all checks | one word: `Healthy` 200, `Degraded` 200, `Unhealthy` 503; `Cache-Control: no-store` |
+| `GET /health/details` | a person, through an SSH tunnel | `X-Admin-Key` | all checks | JSON below; 503 when `Unhealthy`, else 200; `Cache-Control: no-store` |
+
+```json
+{ "status": "Degraded", "checks": [
+  { "name": "tle-freshness", "status": "Degraded", "durationMs": 2.1,
+    "reason": "latest TLE for EROS C3 is 7h old" } ] }
+```
+
+| Check | How | On failure |
+|-------|-----|------------|
+| `database` | `SELECT 1` | Unhealthy |
+| `tle-freshness` | every active satellite's latest `TleRecord.FetchedAt` is newer than 5 h | Degraded |
+| `pass-freshness` | `MAX(Pass.CalculatedAt)` over all passes is newer than 3 h | Degraded |
+| `fcm` | get an access token from the Firebase credential; no message is sent | Degraded |
+
+- **Limits live in `HealthCheckPolicy`:** 3 s per check. Freshness is derived from the job intervals
+  (two missed runs + 1 h): `TleUpdateJob.Interval` 2 h gives 5 h, `PassCalculationJob.Interval` 1 h
+  gives 3 h. Code constants, the same in every environment.
+- **Health checks bypass the EF retry strategy, on purpose.** `NpgsqlHealthDatabaseProbe` uses a raw
+  `NpgsqlConnection` from the same connection string (so the same pool) with a 3 s command timeout.
+  A health check answers "right now"; the retry strategy would keep trying for about 25 s. This is
+  the one exception to the I2.3 rule and to the repository pattern, so don't copy it elsewhere. Its
+  table and column names aren't tied to the EF model by anything else, so
+  `HealthProbeImplementationTests` runs the SQL against the EF schema on SQLite.
+- **The 3 s limit is enforced by `BoundedHealthCheck`, not by the registration timeout.**
+  `HealthCheckRegistration.Timeout` only cancels a token and the framework still awaits the check, so
+  a call that ignores the token would hang the endpoint. `WaitAsync` makes the limit hard.
+- **No exception text in any response.** The framework copies an uncaught exception's message into a
+  report entry's description. `BoundedHealthCheck` catches everything, logs it and returns a reason
+  written by our code; `HealthController` also refuses to show the description of any entry that
+  carries an exception.
+- **`live` and `ready` run before authentication.** `UseHealthProbes()` is called ahead of
+  `UseAuthentication()` because `ApiKeyAuthenticationHandler` looks up a sent `X-Api-Key` in the
+  database through the retry strategy, and a probe must never wait on that.
+- **`details` is a controller action** (`HealthController`), because `RequireAdminKeyAttribute` is an
+  MVC filter and can't guard a mapped health endpoint. It is hidden from the OpenAPI document. Caddy
+  will also block it later.
+- **N2YO is never called by a health check** (quota): `tle-freshness` covers it passively, since
+  `FetchedAt` is written on every successful fetch. Key Vault isn't checked either: secrets are read
+  once at startup.
+- **The FCM token is cached by the credential** for about an hour (`FirebaseFcmTokenProbe` is a
+  singleton), so probes don't call Google each time. A revoked key or an outage shows up at the next
+  token refresh, which is also when real sends would start failing. It must stay scoped and called
+  with no `authUri`, or the credential won't contact Google at all.
+
+Known limits of `pass-freshness`:
+
+- It reads one `MAX` over all satellites, so one satellite's calculation failing while another
+  succeeds isn't Degraded. `tle-freshness` is the per-satellite check.
+- A run that predicts no passes at all writes no `CalculatedAt`, so it looks like a missed run. Not a
+  real case for satellites that pass over Israel daily.
+- On an empty database, `PassCalculationJob`'s startup run finishes before the first TLE fetch and
+  fails with "No TLE record found", so `ready` says `Degraded` until the next hourly run. Only a brand
+  new database does this.
+
+**For the Dockerfile task:** the ASP.NET runtime image has no `curl` or `wget`, so a Docker
+`HEALTHCHECK` can't simply call `/health/live`. How to probe has to be decided there.
 
 ---
 
