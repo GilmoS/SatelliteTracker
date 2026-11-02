@@ -10,10 +10,10 @@ namespace SatelliteTracker.TLEService.Jobs;
 public class TleUpdateJob : BackgroundService
 {
     
+    public static readonly TimeSpan Interval = TimeSpan.FromHours(2); // Interval between TLE updates
+
     private readonly ILogger<TleUpdateJob> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
-
-    private static readonly TimeSpan Interval = TimeSpan.FromHours(2); // Interval between TLE updates
 
     // Constructor that initializes the dependencies for the TLE update job, including the TLE service, satellite repository, TLE repository, and logger.
     public TleUpdateJob(ILogger<TleUpdateJob> logger, IServiceScopeFactory scopeFactory)
