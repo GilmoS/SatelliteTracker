@@ -5,6 +5,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>63efaca2-0cb3-42a9-92c9-311f5871e0fe</UserSecretsId>
+    <!-- Workstation GC: the VM has ~1 GiB RAM, and Server GC reserves far more per heap. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
   </PropertyGroup>
 
   <ItemGroup>
