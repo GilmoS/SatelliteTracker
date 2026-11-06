@@ -1,4 +1,6 @@
 using FirebaseAdmin;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using SatelliteTracker.API.Configuration;
 using SatelliteTracker.Tests.API.Infrastructure;
 using Xunit;
@@ -98,6 +100,102 @@ public class ConfigurationValidationTests
         Assert.Contains("Observer:Lng must be between -180 and 180", message);
         Assert.DoesNotContain(shortAdminKey, message);
         AssertNoConfiguredSecret(message);
+    }
+
+    // ── ForwardedHeaders and RateLimiting (I2.5) ────────────────────────────
+
+    [Fact]
+    public void InvalidKnownProxyEntries_FailStartup_NamingEachEntry()
+    {
+        var message = StartupFailure(new()
+        {
+            ["ForwardedHeaders:KnownProxies:0"] = "172.30.0.10",
+            ["ForwardedHeaders:KnownProxies:1"] = "172.30.0.0/24",
+            ["ForwardedHeaders:KnownProxies:2"] = "caddy"
+        });
+
+        Assert.Contains("ForwardedHeaders:KnownProxies:1 must be a single IP address", message);
+        Assert.Contains("ForwardedHeaders:KnownProxies:2 must be a single IP address", message);
+        Assert.DoesNotContain("ForwardedHeaders:KnownProxies:0", message);
+        AssertNoConfiguredSecret(message);
+    }
+
+    [Fact]
+    public void InvalidRateLimits_FailStartup_ListingEveryKey()
+    {
+        var message = StartupFailure(new()
+        {
+            ["RateLimiting:Tester:TokenLimit"] = "0",
+            ["RateLimiting:Anonymous:TokensPerPeriod"] = "-5",
+            ["RateLimiting:Register:WindowSeconds"] = null
+        });
+
+        Assert.Contains("RateLimiting:Tester:TokenLimit must be a positive integer", message);
+        Assert.Contains("RateLimiting:Anonymous:TokensPerPeriod must be a positive integer", message);
+        Assert.Contains("RateLimiting:Register:WindowSeconds is required", message);
+        AssertNoConfiguredSecret(message);
+    }
+
+    [Fact]
+    public void NonIntegerRateLimit_FailsStartup_NamingTheKey()
+    {
+        var message = StartupFailure(new() { ["RateLimiting:Register:PermitLimit"] = "ten" });
+
+        Assert.Contains("RateLimiting:Register:PermitLimit", message);
+        AssertNoConfiguredSecret(message);
+    }
+
+    [Fact]
+    public void DefaultSettings_TrustNoProxy_AndUseTheDocumentedLimits()
+    {
+        using var factory = new CustomWebApplicationFactory();
+
+        var proxies = factory.Services.GetRequiredService<IOptions<TrustedProxyOptions>>().Value;
+        var limits = factory.Services.GetRequiredService<IOptions<RateLimitingOptions>>().Value;
+
+        Assert.Empty(proxies.KnownProxies);
+        // Smooth refill, one step per second: 60/min for a tester, 120/min per IP.
+        Assert.Equal((60, 1, 1), (limits.Tester.TokenLimit, limits.Tester.TokensPerPeriod, limits.Tester.ReplenishmentPeriodSeconds));
+        Assert.Equal((120, 2, 1), (limits.Anonymous.TokenLimit, limits.Anonymous.TokensPerPeriod, limits.Anonymous.ReplenishmentPeriodSeconds));
+        Assert.Equal((10, 3600), (limits.Register.PermitLimit, limits.Register.WindowSeconds));
+    }
+
+    [Theory]
+    [InlineData("172.30.0.10", true)]
+    [InlineData(" 172.30.0.10 ", true)]
+    [InlineData("::1", true)]
+    [InlineData("fd00:abcd::10", true)]
+    [InlineData("", false)]
+    [InlineData("10", false)]                 // IPAddress.TryParse reads this as 0.0.0.10
+    [InlineData("172.30.0", false)]           // ...and this as 172.30.0.0
+    [InlineData("172.30.0.0/24", false)]
+    [InlineData("256.1.1.1", false)]
+    [InlineData("10.0.0.1:80", false)]
+    [InlineData("[::1]:80", false)]
+    [InlineData("caddy", false)]
+    public void TrustedProxyOptions_AcceptsOnlySingleAddresses(string entry, bool valid)
+    {
+        Assert.Equal(valid, TrustedProxyOptions.TryParseProxy(entry, out _));
+
+        var result = new TrustedProxyOptionsValidator().Validate(null, new TrustedProxyOptions { KnownProxies = [entry] });
+        Assert.Equal(valid, result.Succeeded);
+    }
+
+    [Fact]
+    public void RateLimitingOptionsValidator_RequiresEveryValue()
+    {
+        var result = new RateLimitingOptionsValidator().Validate(null, new RateLimitingOptions());
+
+        Assert.True(result.Failed);
+        foreach (var key in new[]
+                 {
+                     "Tester:TokenLimit", "Tester:TokensPerPeriod", "Tester:ReplenishmentPeriodSeconds",
+                     "Anonymous:TokenLimit", "Anonymous:TokensPerPeriod", "Anonymous:ReplenishmentPeriodSeconds",
+                     "Register:PermitLimit", "Register:WindowSeconds"
+                 })
+        {
+            Assert.Contains($"RateLimiting:{key} is required", result.FailureMessage);
+        }
     }
 
     // ── Validators in isolation ─────────────────────────────────────────────

@@ -43,6 +43,17 @@ public static class ConfigurationServiceCollectionExtensions
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<DatabaseOptions>, DatabaseOptionsValidator>();
 
+        // Optional: an empty list (the default) trusts no proxy. Each entry must be an IP address.
+        services.AddOptions<TrustedProxyOptions>()
+            .BindConfiguration(TrustedProxyOptions.SectionName)
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<TrustedProxyOptions>, TrustedProxyOptionsValidator>();
+
+        services.AddOptions<RateLimitingOptions>()
+            .BindConfiguration(RateLimitingOptions.SectionName)
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<RateLimitingOptions>, RateLimitingOptionsValidator>();
+
         return services;
     }
 }

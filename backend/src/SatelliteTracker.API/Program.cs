@@ -6,6 +6,7 @@ using SatelliteTracker.API.Configuration;
 using SatelliteTracker.API.HealthChecks;
 using SatelliteTracker.API.Http;
 using SatelliteTracker.API.Jobs;
+using SatelliteTracker.API.RateLimiting;
 using SatelliteTracker.API.Services;
 using SatelliteTracker.Database;
 using SatelliteTracker.Database.Common;
@@ -62,6 +63,12 @@ builder.Services
     .AddScheme<ApiKeyAuthenticationOptions, ApiKeyAuthenticationHandler>(ApiKeyAuthenticationOptions.SchemeName, _ => { });
 builder.Services.AddAuthorization();
 
+// Behind Caddy: trust X-Forwarded-For/-Proto only from ForwardedHeaders:KnownProxies (exact IPs).
+builder.Services.AddTrustedForwardedHeaders();
+
+// Per-tester / per-IP limits and the register policy, from the RateLimiting section.
+builder.Services.AddAppRateLimiting();
+
 // Calendar sync (ICS MVP; see OutlookServiceCollectionExtensions to swap to Graph)
 builder.Services.AddOutlookServiceModule();
 
@@ -106,15 +113,27 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+// Order matters (see "Proxy & rate limiting" in CLAUDE.md):
+// 1. ForwardedHeaders first, so everything after it sees the real client IP and scheme.
+// 2. Health probes before authentication and the limiter: live/ready never touch the DB and are
+//    never rate limited.
+// 3. Routing before the limiter, so endpoint policies ([EnableRateLimiting]) are visible to it.
+// 4. Authentication before the limiter: the tester partition is the authenticated identity.
+// 5. The limiter before authorization, so excess requests get 429 before any authorization work,
+//    and unauthenticated callers are limited per IP instead of only getting 401.
+app.UseForwardedHeaders();
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
-    app.UseSwaggerUI();   
+    app.UseSwaggerUI();
 }
 
 app.UseHealthProbes();
+app.UseRouting();
 app.UseCors("DevFrontend");
 app.UseAuthentication();
+app.UseRateLimiter();
 app.UseAuthorization();
 app.MapControllers();
 app.Run();

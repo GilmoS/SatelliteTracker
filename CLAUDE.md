@@ -75,6 +75,10 @@ key and the broken rule, never the value.
 | `Observer:Lng` | Ground station longitude | Required, −180 to 180 | `appsettings.json` |
 | `Observer:AltMeters` | Ground station altitude | Required, −500 to 9000 | `appsettings.json` |
 | `Observer:MinElevationDeg` | Minimum pass elevation | Required, 0 to 90 | `appsettings.json` |
+| `ForwardedHeaders:KnownProxies` | Exact reverse-proxy IPs (`TrustedProxyOptions`) | Optional (empty = trust none); each entry a single IP | `appsettings.json` / env |
+| `RateLimiting:*` | Rate limits (`RateLimitingOptions`) | Required, positive integers | `appsettings.json` |
+
+The last two are described in "Proxy & rate limiting".
 
 Local setup (placeholders, never real values in docs or commits):
 
@@ -764,6 +768,107 @@ Known limits of `pass-freshness`:
 
 **For the Dockerfile task:** the ASP.NET runtime image has no `curl` or `wget`, so a Docker
 `HEALTHCHECK` can't simply call `/health/live`. How to probe has to be decided there.
+
+---
+
+## Proxy & rate limiting (I2.5)
+
+In production the API runs behind Caddy in a Docker network on an Azure VM. Android reaches it
+only through Caddy, and many testers may share one public IP (corporate NAT).
+
+### Trust model: forwarded headers
+
+- `X-Forwarded-For` and `X-Forwarded-Proto` are applied **only when the TCP peer is one of the
+  exact addresses in `ForwardedHeaders:KnownProxies`** (Caddy's fixed IP). From any other peer the
+  request is served normally, but the headers are ignored and `RemoteIpAddress` stays the TCP
+  peer. Configured by `AddTrustedForwardedHeaders()` (`SatelliteTracker.API.Http`).
+- **Exact IPs, never a range.** Trusting the whole Docker subnet would let any other container on
+  it (or anything that gets onto it) claim an arbitrary client IP, and pick a fresh rate limit
+  bucket per request. Only Caddy itself can vouch for the client address.
+- The framework defaults (loopback in `KnownProxies`/`KnownNetworks`) are cleared.
+  `ForwardLimit = 1`: only the right-most `X-Forwarded-For` entry, the one Caddy appended, is used.
+  Everything to its left was sent by the client and can be forged.
+- **An empty list (the default, for local `dotnet run`) turns header processing off**
+  (`ForwardedHeaders.None`). This matters: with both `KnownProxies` and `KnownNetworks` empty,
+  `ForwardedHeadersMiddleware` skips the known-proxy check and trusts **every** peer. Don't
+  "simplify" this away; `ForwardedHeadersTests` and
+  `RateLimitingTests.WithNoProxyConfigured_RotatingXForwardedFor_DoesNotEscapeTheIpBucket` cover it.
+- An IPv4-mapped IPv6 peer (`::ffff:a.b.c.d`) matches the IPv4 entry.
+
+### Partitions (built-in ASP.NET Core `RateLimiter`, `AddAppRateLimiting()` in `SatelliteTracker.API.RateLimiting`)
+
+| Partition | Key | Algorithm | Default |
+|-----------|-----|-----------|---------|
+| Authenticated tester | `ApiKeyId` claim set by `ApiKeyAuthenticationHandler` | Token bucket | 60 tokens, +1 every second (60/min) |
+| Not authenticated (no key, unknown key, inactive key) | client IP (after forwarded headers) | Token bucket | 120 tokens, +2 every second (120/min) |
+| `POST /api/auth/register` (endpoint policy `register`, **in addition to** the global limiter) | client IP | Fixed window | 10 per 3600 s |
+| `/health/live`, `/health/ready` | — | no limit | — |
+
+- **The fake-key rule:** the tester partition is keyed by the *authenticated* identity, never by
+  the raw `X-Api-Key` header. A random, unknown or inactive key fails authentication and falls into
+  its IP's partition. Keying by the header would give every fake key a fresh bucket, so rotating
+  keys would bypass every limit. A tester's bucket follows them across IPs.
+- `/health/details` **is** limited (IP partition, unless the caller also sends a valid tester key).
+- **Smooth refill, not a step per minute** (decided 2026-11-06): the buckets refill every second,
+  so a client that drains its burst waits about 1 s (`Retry-After: 1`), not up to a minute. The
+  per-minute rates are unchanged.
+- Rejection: `429`, `Retry-After` in whole seconds (both limiters provide it), body
+  `{"error":"rate_limited"}`. No queueing (`QueueLimit = 0`).
+- State is in memory, single instance by design: a restart resets every bucket.
+- **Known cost, accepted at our scale (decided 2026-11-06):** the limiter runs after authentication,
+  so every request with a fake key still costs one SHA-256 plus one indexed `ApiKey` lookup in
+  Postgres before it is limited. That is the price of partitioning on the verified identity. If
+  fake-key floods ever load the DB, the answer is a coarse per-IP limiter *before* authentication
+  (in addition to this one), not keying on the raw header.
+- **IPv6 is partitioned per full address.** One IPv6 subscriber normally holds a whole /64 and can
+  pick any address in it, so per-address buckets are weak against IPv6 clients. Grouping per /64
+  would be the fix. It only matters if Caddy is reachable over IPv6. Not done.
+
+### Middleware order (`Program.cs`)
+
+`UseForwardedHeaders` → (Swagger, dev only) → `UseHealthProbes` → `UseRouting` → `UseCors` →
+`UseAuthentication` → `UseRateLimiter` → `UseAuthorization` → `MapControllers`.
+
+1. **ForwardedHeaders first**: everything after it, the limiter's IP partition included, must see
+   the real client IP. Run later, the limiter would key every request on Caddy's address and all
+   clients would share one bucket.
+2. **Health probes** answer before authentication and the limiter (see "Health checks"). The
+   limiter also exempts their paths itself, in case of a reorder.
+3. **Routing before the limiter**, so the `[EnableRateLimiting]` endpoint policy is visible to it.
+4. **Authentication before the limiter**: the tester partition needs the authenticated identity.
+   Before authentication, every request would look anonymous and testers behind one NAT would
+   share an IP bucket.
+5. **The limiter before authorization**: excess requests get `429` before any authorization work,
+   and callers that will fail authorization are still counted.
+
+### Config keys
+
+| Key | Default (`appsettings.json`) | Validation (startup) |
+|-----|------------------------------|----------------------|
+| `ForwardedHeaders:KnownProxies` | `[]` | every entry a single IP (full dotted-quad IPv4 or IPv6; no CIDR, host name or port) — `TrustedProxyOptionsValidator` |
+| `RateLimiting:Tester:TokenLimit` / `TokensPerPeriod` / `ReplenishmentPeriodSeconds` | 60 / 1 / 1 | required, positive integer — `RateLimitingOptionsValidator` |
+| `RateLimiting:Anonymous:TokenLimit` / `TokensPerPeriod` / `ReplenishmentPeriodSeconds` | 120 / 2 / 1 | required, positive integer |
+| `RateLimiting:Register:PermitLimit` / `WindowSeconds` | 10 / 3600 | required, positive integer |
+
+- Set a proxy from the environment with an index: `ForwardedHeaders__KnownProxies__0=172.30.0.10`.
+  A plain `ForwardedHeaders__KnownProxies=...` (no index) is not bound to the list and would
+  silently trust nobody.
+- **For the Docker compose task:** give Caddy a **fixed IP in a fixed compose subnet** and put that
+  IP in `ForwardedHeaders:KnownProxies`. A dynamic IP would change on recreate, and the API would
+  then see every client as Caddy's address.
+
+### Backlog
+
+- **Declare `429` in the OpenAPI contract.** `openapi/sattrakk-api.json` doesn't list `429` on any
+  endpoint yet. Add it (with `Retry-After`) and regenerate the file. Android handles any status code
+  generically today, so nothing is broken in the meantime.
+
+### Tests
+
+`ForwardedHeadersTests` and `RateLimitingTests` boot the real host. TestServer leaves
+`RemoteIpAddress` null, so `TestPeerStartupFilter` (`Tests/API/Infrastructure/TestPeer.cs`) sets the
+TCP peer from a test-only header ahead of all app middleware, and `ConnectionEchoController` (added
+only by `WithTestPeer()`) echoes what the app saw.
 
 ---
 
