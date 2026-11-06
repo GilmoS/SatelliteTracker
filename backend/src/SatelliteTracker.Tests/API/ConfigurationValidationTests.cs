@@ -154,8 +154,9 @@ public class ConfigurationValidationTests
         var limits = factory.Services.GetRequiredService<IOptions<RateLimitingOptions>>().Value;
 
         Assert.Empty(proxies.KnownProxies);
-        Assert.Equal((60, 60, 60), (limits.Tester.TokenLimit, limits.Tester.TokensPerPeriod, limits.Tester.ReplenishmentPeriodSeconds));
-        Assert.Equal((120, 120, 60), (limits.Anonymous.TokenLimit, limits.Anonymous.TokensPerPeriod, limits.Anonymous.ReplenishmentPeriodSeconds));
+        // Smooth refill, one step per second: 60/min for a tester, 120/min per IP.
+        Assert.Equal((60, 1, 1), (limits.Tester.TokenLimit, limits.Tester.TokensPerPeriod, limits.Tester.ReplenishmentPeriodSeconds));
+        Assert.Equal((120, 2, 1), (limits.Anonymous.TokenLimit, limits.Anonymous.TokensPerPeriod, limits.Anonymous.ReplenishmentPeriodSeconds));
         Assert.Equal((10, 3600), (limits.Register.PermitLimit, limits.Register.WindowSeconds));
     }
 

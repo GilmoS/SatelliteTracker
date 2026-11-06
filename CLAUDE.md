@@ -799,8 +799,8 @@ only through Caddy, and many testers may share one public IP (corporate NAT).
 
 | Partition | Key | Algorithm | Default |
 |-----------|-----|-----------|---------|
-| Authenticated tester | `ApiKeyId` claim set by `ApiKeyAuthenticationHandler` | Token bucket | 60 tokens, +60 every 60 s |
-| Not authenticated (no key, unknown key, inactive key) | client IP (after forwarded headers) | Token bucket | 120 tokens, +120 every 60 s |
+| Authenticated tester | `ApiKeyId` claim set by `ApiKeyAuthenticationHandler` | Token bucket | 60 tokens, +1 every second (60/min) |
+| Not authenticated (no key, unknown key, inactive key) | client IP (after forwarded headers) | Token bucket | 120 tokens, +2 every second (120/min) |
 | `POST /api/auth/register` (endpoint policy `register`, **in addition to** the global limiter) | client IP | Fixed window | 10 per 3600 s |
 | `/health/live`, `/health/ready` | — | no limit | — |
 
@@ -809,11 +809,20 @@ only through Caddy, and many testers may share one public IP (corporate NAT).
   its IP's partition. Keying by the header would give every fake key a fresh bucket, so rotating
   keys would bypass every limit. A tester's bucket follows them across IPs.
 - `/health/details` **is** limited (IP partition, unless the caller also sends a valid tester key).
+- **Smooth refill, not a step per minute** (decided 2026-11-06): the buckets refill every second,
+  so a client that drains its burst waits about 1 s (`Retry-After: 1`), not up to a minute. The
+  per-minute rates are unchanged.
 - Rejection: `429`, `Retry-After` in whole seconds (both limiters provide it), body
   `{"error":"rate_limited"}`. No queueing (`QueueLimit = 0`).
 - State is in memory, single instance by design: a restart resets every bucket.
-- The limiter runs after authentication, so a request with a fake key still costs one
-  `ApiKey` hash lookup before it is limited. That is the price of partitioning on the verified identity.
+- **Known cost, accepted at our scale (decided 2026-11-06):** the limiter runs after authentication,
+  so every request with a fake key still costs one SHA-256 plus one indexed `ApiKey` lookup in
+  Postgres before it is limited. That is the price of partitioning on the verified identity. If
+  fake-key floods ever load the DB, the answer is a coarse per-IP limiter *before* authentication
+  (in addition to this one), not keying on the raw header.
+- **IPv6 is partitioned per full address.** One IPv6 subscriber normally holds a whole /64 and can
+  pick any address in it, so per-address buckets are weak against IPv6 clients. Grouping per /64
+  would be the fix. It only matters if Caddy is reachable over IPv6. Not done.
 
 ### Middleware order (`Program.cs`)
 
@@ -837,8 +846,8 @@ only through Caddy, and many testers may share one public IP (corporate NAT).
 | Key | Default (`appsettings.json`) | Validation (startup) |
 |-----|------------------------------|----------------------|
 | `ForwardedHeaders:KnownProxies` | `[]` | every entry a single IP (full dotted-quad IPv4 or IPv6; no CIDR, host name or port) — `TrustedProxyOptionsValidator` |
-| `RateLimiting:Tester:TokenLimit` / `TokensPerPeriod` / `ReplenishmentPeriodSeconds` | 60 / 60 / 60 | required, positive integer — `RateLimitingOptionsValidator` |
-| `RateLimiting:Anonymous:TokenLimit` / `TokensPerPeriod` / `ReplenishmentPeriodSeconds` | 120 / 120 / 60 | required, positive integer |
+| `RateLimiting:Tester:TokenLimit` / `TokensPerPeriod` / `ReplenishmentPeriodSeconds` | 60 / 1 / 1 | required, positive integer — `RateLimitingOptionsValidator` |
+| `RateLimiting:Anonymous:TokenLimit` / `TokensPerPeriod` / `ReplenishmentPeriodSeconds` | 120 / 2 / 1 | required, positive integer |
 | `RateLimiting:Register:PermitLimit` / `WindowSeconds` | 10 / 3600 | required, positive integer |
 
 - Set a proxy from the environment with an index: `ForwardedHeaders__KnownProxies__0=172.30.0.10`.
@@ -847,6 +856,12 @@ only through Caddy, and many testers may share one public IP (corporate NAT).
 - **For the Docker compose task:** give Caddy a **fixed IP in a fixed compose subnet** and put that
   IP in `ForwardedHeaders:KnownProxies`. A dynamic IP would change on recreate, and the API would
   then see every client as Caddy's address.
+
+### Backlog
+
+- **Declare `429` in the OpenAPI contract.** `openapi/sattrakk-api.json` doesn't list `429` on any
+  endpoint yet. Add it (with `Retry-After`) and regenerate the file. Android handles any status code
+  generically today, so nothing is broken in the meantime.
 
 ### Tests
 

@@ -53,6 +53,26 @@ public class RateLimitingTests : IDisposable
     }
 
     [Fact]
+    public async Task DefaultTesterLimit_RefillsEverySecond_SoRetryAfterIsOneSecond()
+    {
+        var (factory, client) = Create();
+        var key = await SeedApiKeyAsync(factory);
+
+        // 60-token burst; a token may refill during the loop, so allow a little slack.
+        HttpResponseMessage? rejected = null;
+        for (var i = 0; i < 80 && rejected is null; i++)
+        {
+            var response = await SendAsync(client, TesterEndpoint, ClientIp, key);
+            if (response.StatusCode == HttpStatusCode.TooManyRequests) rejected = response;
+            else response.Dispose();
+        }
+
+        Assert.NotNull(rejected);
+        Assert.Equal("1", rejected!.Headers.GetValues("Retry-After").Single());
+        await AssertRateLimitedAsync(rejected);
+    }
+
+    [Fact]
     public async Task TesterBucket_FollowsTheTester_AcrossIps()
     {
         var (factory, client) = Create(Limits(testerTokens: 2));
