@@ -34,11 +34,17 @@ dotnet test backend/src/<TestProject>/<TestProject>.csproj
 # Run a single test by name
 dotnet test --filter "FullyQualifiedName~TestMethodName"
 
-# Add a new EF Core migration
-dotnet ef migrations add <MigrationName> --project backend/src/SatelliteTracker.Database --startup-project backend/src/SatelliteTracker.API
+# EF Core tools: run from backend/, where the tool manifest pins dotnet-ef 9.0.4
+cd backend && dotnet tool restore
 
-# Apply migrations
-dotnet ef database update --project backend/src/SatelliteTracker.Database --startup-project backend/src/SatelliteTracker.API
+# Add a new EF Core migration (from backend/)
+dotnet ef migrations add <MigrationName> --project src/SatelliteTracker.Database --startup-project src/SatelliteTracker.API
+
+# List migrations without contacting a database (from backend/)
+dotnet ef migrations list --project src/SatelliteTracker.Database --startup-project src/SatelliteTracker.API --no-connect
+
+# Apply migrations (from backend/): the connection string must be passed explicitly
+dotnet ef database update --project src/SatelliteTracker.Database --startup-project src/SatelliteTracker.API --connection "<connection-string>"
 ```
 
 ### Local secrets — none in the repo
@@ -54,8 +60,15 @@ No secrets live in tracked files, local dev credentials included.
   reads it as `${POSTGRES_PASSWORD}`. Create it with `cp .env.example .env` and set the same
   password you use in the connection string.
 
-The `dotnet ef` commands need `--startup-project` pointing at the API, or EF fails with "Unable to
-create a 'DbContext'" because it can't find the connection string.
+The `dotnet ef` commands create `AppDbContext` through `DesignTimeDbContextFactory`
+(`SatelliteTracker.Database`), never through the API's `Program.cs`, so they need no secrets and
+never read user-secrets. Its connection string is a placeholder (no password, host
+`design-time.invalid`, which never resolves). Commands that only need the model (`migrations add`,
+`remove --force`, `bundle`) never connect. Commands that do connect (`database update`,
+`migrations list` without `--no-connect`, `migrations remove` without `--force`) need
+`--connection "<connection-string>"`, or they fail on the placeholder host. See "Docker images".
+Run them from `backend/`: from the repo root, `dotnet ef` resolves to whatever global version is
+installed, not the pinned 9.0.4.
 
 ### Required configuration — the API refuses to start without it (I2.2, 2026-10-15)
 
@@ -766,8 +779,56 @@ Known limits of `pass-freshness`:
   fails with "No TLE record found", so `ready` says `Degraded` until the next hourly run. Only a brand
   new database does this.
 
-**For the Dockerfile task:** the ASP.NET runtime image has no `curl` or `wget`, so a Docker
-`HEALTHCHECK` can't simply call `/health/live`. How to probe has to be decided there.
+The Docker images have no `HEALTHCHECK` (decided in I2.6): Caddy actively checks `/health/live`.
+See "Docker images".
+
+---
+
+## Docker images (I2.6)
+
+One multi-stage `backend/Dockerfile` (build context `backend/`) produces two images, picked with
+`--target`:
+
+| Target | Base | Contains | Runs |
+|--------|------|----------|------|
+| `api` | `mcr.microsoft.com/dotnet/aspnet:9.0` (Debian) | framework-dependent Release publish of the API | permanently: `dotnet SatelliteTracker.API.dll`, port 8080, user `app` (UID 1654) |
+| `migrator` | `mcr.microsoft.com/dotnet/runtime-deps:9.0` (Debian) | only `efbundle`, a self-contained `linux-x64` EF Core migration bundle | once per deploy, applies pending migrations, exits; user `app` |
+
+```bash
+docker build --platform linux/amd64 --target api      -t sattrakk-api:local      backend/
+docker build --platform linux/amd64 --target migrator -t sattrakk-migrator:local backend/
+docker run --rm sattrakk-migrator:local --connection "<connection-string>"   # apply migrations
+```
+
+- **Always pass `--platform linux/amd64`.** The VM is x64. Apple Silicon Macs build ARM images by
+  default, which would not run there (the bundle is `linux-x64` either way, but the base layers
+  would be ARM). A plain build without `--target` produces `api` (the last stage).
+- **Stages:** `build` (SDK) restores and copies the source once. `publish-api` and `bundle` build on
+  it, so a `--target` only runs the stage it needs. The `.sln` and every `.csproj` are copied and
+  restored before the rest of the source, so a code-only change reuses the cached restore. Adding a
+  project means adding its `.csproj` `COPY` line to the Dockerfile.
+- **No `HEALTHCHECK`:** Caddy actively checks `/health/live`. The aspnet image also has no `curl` or
+  `wget` to run one.
+- **Configuration is supplied at run time only.** No secret, connection string or `ENV` with a
+  secret is in any stage; `appsettings.Development.json` is excluded by `.dockerignore`.
+  `ASPNETCORE_ENVIRONMENT` is not set, so the API runs as `Production`. Started with no config, the
+  API container exits within seconds with the I2.2 error listing every missing key. How config
+  reaches the containers (compose, Key Vault) is a later task.
+- **Why `DesignTimeDbContextFactory` exists:** without it, the EF tools build the API host to get
+  `AppDbContext`, which needs the validated configuration, and the build stage has no secrets.
+  The factory gives the tools a placeholder connection string; creating a bundle never connects.
+  The bundle uses the Database project as its own startup project, so it contains none of the API.
+  It uses the same `UseAppNpgsql` (provider + retry policy) as the API.
+- **The migrator always needs `--connection`.** Without it, the bundle falls back to the factory's
+  placeholder and fails with "Name or service not known". Re-running it on an up-to-date database
+  is a no-op.
+- **Workstation GC** (`<ServerGarbageCollection>false</ServerGarbageCollection>` in the API csproj):
+  the VM has about 1 GiB RAM.
+- `dotnet-ef` is pinned in `backend/.config/dotnet-tools.json` at the EF Core package version
+  (9.0.4); bump both together.
+- Base images are pinned to the `9.0` tag only; digest pinning and Dependabot come later.
+- **CI:** the `docker` job in `ci.yml` builds both targets for `linux/amd64` with Buildx and the
+  GitHub Actions cache (one scope per target). It never pushes or logs in to a registry.
 
 ---
 
@@ -903,7 +964,8 @@ findings from that run:
 | feature/\*  | One feature per branch         |
 | fix/\*      | Bug fixes                      |
 
-CI runs on GitHub Actions. Backend `ci.yml` (restore → build → test) runs on pushes to
+CI runs on GitHub Actions. Backend `ci.yml` has two parallel jobs, `build` (restore → build →
+test) and `docker` (builds the `api` and `migrator` images, no push; see "Docker images"). It runs on pushes to
 `develop`/`main` and on PRs targeting `develop`/`main`, **only when the change touches
 `backend/**` or `.github/workflows/ci.yml`**:
 

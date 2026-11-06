@@ -32,3 +32,36 @@ jobs:
 
       - name: Test
         run:  dotnet test ./backend/SatelliteTracker.sln --no-build --verbosity normal
+
+  # Builds both Docker images (backend/Dockerfile) to catch a broken image early. Build only:
+  # nothing is pushed and there is no registry login. Each target has its own GitHub Actions
+  # cache scope, so one build's cache export doesn't replace the other's.
+  docker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build api image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          target: api
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Build migrator image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          target: migrator
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=migrator
+          cache-to: type=gha,mode=max,scope=migrator
