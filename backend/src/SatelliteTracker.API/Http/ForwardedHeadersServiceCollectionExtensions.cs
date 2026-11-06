@@ -19,7 +19,6 @@ public static class ForwardedHeadersServiceCollectionExtensions
         services.AddOptions<ForwardedHeadersOptions>()
             .Configure<IOptions<TrustedProxyOptions>>((options, proxies) =>
             {
-                options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
                 options.ForwardLimit = 1;
                 options.KnownNetworks.Clear();
                 options.KnownProxies.Clear();
@@ -29,6 +28,13 @@ public static class ForwardedHeadersServiceCollectionExtensions
                     if (TrustedProxyOptions.TryParseProxy(entry, out var address))
                         options.KnownProxies.Add(address!);
                 }
+
+                // With both KnownProxies and KnownNetworks empty, ForwardedHeadersMiddleware skips
+                // the known-proxy check altogether and trusts the headers from EVERY peer. So an
+                // empty list must turn header processing off, not leave it on with nothing trusted.
+                options.ForwardedHeaders = options.KnownProxies.Count == 0
+                    ? ForwardedHeaders.None
+                    : ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
             });
 
         return services;
