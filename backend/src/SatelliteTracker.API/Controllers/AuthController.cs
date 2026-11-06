@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using SatelliteTracker.API.RateLimiting;
 using SatelliteTracker.API.DTOs;
 using SatelliteTracker.Database.Entities;
 using SatelliteTracker.Database.Repositories;
@@ -25,7 +27,9 @@ public class AuthController : BaseController
     // POST api/auth/register
     // Does NOT create a UserSettings row — that happens later, the first time Android sends an
     // FCM token (Milestone E, Step 1.4).
+    // Per client IP, on top of the global limiter (see RateLimitingServiceCollectionExtensions).
     [HttpPost("register")]
+    [EnableRateLimiting(RateLimitPolicies.Register)]
     [ProducesResponseType(typeof(RegisterResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ErrorResponseDto), StatusCodes.Status409Conflict)]
