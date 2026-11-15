@@ -2,3 +2,5 @@
 # checkout with core.autocrlf (a CRLF shebang line breaks the script).
 *.sh       text eol=lf
 Caddyfile  text eol=lf
+# SQL run through psql inside Linux containers: LF, so backslash commands never see a trailing \r.
+*.sql      text eol=lf

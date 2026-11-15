@@ -2,6 +2,10 @@
 # a local Postgres, secrets from files in ./secrets, and the site address.
 # Use it through ./local.sh (it also sets IMAGE_TAG=local).
 #
+# Database roles (I2.8, see db/README.md): the migrator connects as sattrakk_migrator (owns the
+# schema), the api as sattrakk_app (data only). The container superuser satellite_user stands in for
+# the Azure server admin and is used only by the init script.
+#
 # Compose merges overlays by key but APPENDS lists (ports, networks, secrets, ...), so never
 # repeat a base list field here.
 
@@ -16,6 +20,10 @@ services:
       - Firebase__ServiceAccountJson
       - Admin__ApiKey
       - ConnectionStrings__DefaultConnection
+    depends_on:
+      # Merged with the base's depends_on (a map): api waits for the migrator AND db-grants.
+      db-grants:
+        condition: service_completed_successfully
 
   migrator:
     build:
@@ -42,8 +50,17 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
     secrets:
       - postgres_password
+      # Read once by the init script below to set the role passwords.
+      - migrator_db_password
+      - app_db_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Runs once on a fresh volume: 01 as superuser, role passwords, 02 as sattrakk_migrator.
+      # Only this script goes into initdb.d: the image runs every *.sql there as the superuser,
+      # and 02 must run as sattrakk_migrator.
+      - ./db/local/initdb-roles.sh:/docker-entrypoint-initdb.d/10-sattrakk-roles.sh:ro
+      - ./db/01-roles-admin.sql:/sattrakk-db/01-roles-admin.sql:ro
+      - ./db/02-default-privileges-migrator.sql:/sattrakk-db/02-default-privileges-migrator.sql:ro
     # Internal network only: no published port.
     networks:
       - internal
@@ -55,6 +72,28 @@ services:
       timeout: 3s
       retries: 20
       start_period: 10s
+
+  # One-shot, after the migrator and before the api, on every `up`: re-applies 02 as
+  # sattrakk_migrator, so the __EFMigrationsHistory SELECT-only restriction is in place once the
+  # migrator has created the table (local equivalent of Azure runbook step 5). Idempotent.
+  db-grants:
+    image: postgres:16
+    restart: "no"
+    mem_limit: 64m
+    command: ["sh", "/sattrakk-db/apply-grants.sh"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: satellite_tracker
+    secrets:
+      - migrator_db_password
+    volumes:
+      - ./db/local/apply-grants.sh:/sattrakk-db/apply-grants.sh:ro
+      - ./db/02-default-privileges-migrator.sql:/sattrakk-db/02-default-privileges-migrator.sql:ro
+    networks:
+      - internal
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
 
 # One file per secret, mounted at /run/secrets/<name>. Names of the API's secrets are its config
 # keys with "__" for ":". See secrets/README.md.
@@ -71,6 +110,10 @@ secrets:
     file: ./secrets/migrator_connection_string
   postgres_password:
     file: ./secrets/postgres_password
+  migrator_db_password:
+    file: ./secrets/migrator_db_password
+  app_db_password:
+    file: ./secrets/app_db_password
 
 volumes:
   postgres_data:
