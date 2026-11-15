@@ -1,0 +1,19 @@
+# SatTrakk public entry point. The site address comes from the environment (SITE_ADDRESS), set by
+# the overlay: "localhost" locally (Caddy's internal CA), the real domain on Azure.
+#
+# No HSTS yet: it comes with the real domain.
+
+{$SITE_ADDRESS} {
+	# Operator-only endpoints are never served publicly. They stay reachable directly on
+	# 127.0.0.1:8080 (an SSH tunnel on the VM). The API matches routes case-insensitively and
+	# accepts a trailing slash; Caddy's path matcher is case-insensitive too.
+	@operatorOnly path /api/admin /api/admin/* /health/details /health/details/*
+	respond @operatorOnly 404
+
+	reverse_proxy api:8080 {
+		# Active health check: an api that stops answering is taken out within ~10 s (clients get
+		# 503) and put back as soon as /health/live answers again.
+		health_uri /health/live
+		health_interval 10s
+	}
+}
