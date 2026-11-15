@@ -1,5 +1,6 @@
 using FirebaseAdmin;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SatelliteTracker.API.Configuration;
 using SatelliteTracker.Tests.API.Infrastructure;
@@ -302,8 +303,9 @@ public class ConfigurationValidationTests
 
     // ── Helpers ─────────────────────────────────────────────────────────────
 
-    // Boots the host with the overrides applied and returns the full startup failure, inner
-    // exceptions included, so the assertions see everything an operator would.
+    // Boots the host with the overrides applied and returns what an operator would see: the one
+    // critical message Program logs before exiting with code 1 (see HostRunner), plus whatever
+    // the factory threw when the entry point returned without starting the host.
     private static string StartupFailure(Dictionary<string, string?> overrides)
     {
         using var factory = new CustomWebApplicationFactory(overrides);
@@ -311,7 +313,9 @@ public class ConfigurationValidationTests
         var ex = Record.Exception(() => factory.CreateClient());
 
         Assert.NotNull(ex);
-        return ex.ToString();
+        var critical = Assert.Single(factory.Logs.Entries, e => e.Level == LogLevel.Critical);
+        Assert.Equal(HostRunner.LoggerCategory, critical.Category);
+        return critical.Message + Environment.NewLine + ex;
     }
 
     // None of the valid settings the factory configured may show up in a failure message.

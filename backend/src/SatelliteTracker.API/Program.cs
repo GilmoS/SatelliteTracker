@@ -140,7 +140,10 @@ app.UseAuthentication();
 app.UseRateLimiter();
 app.UseAuthorization();
 app.MapControllers();
-app.Run();
+
+// Like app.Run(), but a configuration validation failure at startup logs one critical message
+// listing the failed settings and exits with code 1 (see HostRunner).
+return await HostRunner.RunAsync(app);
 
 // Exposed so SatelliteTracker.Tests can boot the real host via WebApplicationFactory<Program>.
 public partial class Program { }
