@@ -90,7 +90,11 @@ longer throws, `WebApplicationFactory` can't surface the message as an exception
 
 **Secret files (I2.7):** `builder.AddSecretFiles()` reads `/run/secrets` (Docker Compose secrets)
 with the key-per-file provider: file `N2YO__ApiKey` → key `N2YO:ApiKey`, one trailing newline
-trimmed. Added **last**, so a secret file overrides `appsettings*.json` and every other source.
+trimmed. Added **last**, so a secret file overrides `appsettings*.json` and every other source,
+**environment variables and command line included** (decided 2026-11-15, on purpose, against the
+usual .NET order): the secret file is the single source of truth, and a stray or leftover
+environment variable can't silently shadow a real key. Don't move it before the environment
+variables. To override a secret, edit the file and `up -d --force-recreate` the service.
 Optional: nothing changes when the folder doesn't exist. A file that is listed but can't be opened
 (permissions, a bind mount whose source is gone) is skipped and reported by `SecretFilesValidator`
 ("Secret file … exists but cannot be read"), so it also ends in exit code 1, not a crash during
