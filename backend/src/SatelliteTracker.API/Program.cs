@@ -19,6 +19,10 @@ using SatelliteTracker.TLEService.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Secret files (Docker Compose secrets in /run/secrets, e.g. N2YO__ApiKey -> N2YO:ApiKey). Added
+// last, so they override appsettings*.json and every other source. Absent outside a container.
+builder.Configuration.AddSecretFiles();
+
 // Typed, validated settings (N2YO, Firebase, Admin, Observer, connection string). The host
 // refuses to start if any is missing or invalid — see AddValidatedConfiguration.
 builder.Services.AddValidatedConfiguration();
