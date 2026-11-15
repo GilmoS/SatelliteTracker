@@ -2,6 +2,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Configuration.Json;
 using Microsoft.Extensions.Configuration.KeyPerFile;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using SatelliteTracker.API.Configuration;
 using SatelliteTracker.Tests.API.Infrastructure;
 using Xunit;
@@ -78,6 +80,55 @@ public sealed class SecretFilesConfigurationTests : IDisposable
     }
 
     [Fact]
+    public void UnreadableFile_IsSkipped_AndReported_InsteadOfThrowing()
+    {
+        WriteSecret("N2YO__ApiKey", "n2yo-from-file");
+        WriteSecret("Admin__ApiKey", "admin-from-file");
+        var reported = new List<string>();
+
+        // An exclusive lock makes the file listed but unopenable, like a secret the app user has
+        // no permission for, or a bind mount whose source file is missing.
+        using (LockExclusively("N2YO__ApiKey"))
+        {
+            var config = new ConfigurationBuilder().AddSecretFiles(_directory, reported.Add).Build();
+
+            Assert.Null(config["N2YO:ApiKey"]);
+            Assert.Equal("admin-from-file", config["Admin:ApiKey"]);
+        }
+
+        Assert.Equal(["N2YO__ApiKey"], reported);
+    }
+
+    [Fact]
+    public async Task UnreadableFile_FailsStartupValidation_WithExitCode1()
+    {
+        WriteSecret("N2YO__ApiKey", "n2yo-from-file");
+        var logs = new CapturingLoggerProvider();
+        int exitCode;
+
+        using (LockExclusively("N2YO__ApiKey"))
+        {
+            var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+            {
+                EnvironmentName = "Testing",
+                DisableDefaults = true
+            });
+            builder.Logging.ClearProviders().AddProvider(logs);
+            builder.AddSecretFiles(_directory);
+            builder.Services.AddValidatedConfiguration();
+            using var host = builder.Build();
+
+            exitCode = await HostRunner.RunAsync(host);
+        }
+
+        Assert.Equal(1, exitCode);
+        var critical = Assert.Single(logs.Entries, e => e.Level == LogLevel.Critical);
+        Assert.Contains("N2YO__ApiKey (N2YO:ApiKey) exists but cannot be read", critical.Message);
+        Assert.Contains("N2YO:ApiKey is required", critical.Message);
+        Assert.DoesNotContain("n2yo-from-file", critical.Message);
+    }
+
+    [Fact]
     public void RealHost_ReadsRunSecrets_AfterEveryAppsettingsFile()
     {
         using var factory = new CustomWebApplicationFactory();
@@ -93,4 +144,7 @@ public sealed class SecretFilesConfigurationTests : IDisposable
 
     private void WriteSecret(string name, string content) =>
         File.WriteAllText(Path.Combine(_directory, name), content);
+
+    private FileStream LockExclusively(string name) =>
+        new(Path.Combine(_directory, name), FileMode.Open, FileAccess.Read, FileShare.None);
 }
