@@ -874,6 +874,7 @@ The production-like Docker Compose stack. The root `docker-compose.yml` (dev Pos
 | `deploy/Caddyfile` | Site `{$SITE_ADDRESS}`; `/api/admin`, `/api/admin/*`, `/health/details`, `/health/details/*` → `respond 404`; `reverse_proxy api:8080` with active check `/health/live` every 10 s; no HSTS yet |
 | `deploy/local.sh` | `docker compose -f compose.yaml -f compose.local.yaml "$@"`, with `IMAGE_TAG` defaulting to `local` |
 | `deploy/secrets/` | Git-ignored, one file per secret; only `README.md` (the file names) is committed |
+| `deploy/db/` | Least-privilege DB role scripts, local init/grants scripts, `verify-roles.sh`, Azure runbook (see "Database roles") |
 
 ```bash
 deploy/local.sh up -d --build      # build both images, start postgres → migrator → api → caddy
@@ -883,8 +884,9 @@ deploy/local.sh down               # add -v to also delete the local database an
 ```
 
 - **Order on every `up`:** postgres healthy (`pg_isready` over TCP; the only healthcheck in the
-  stack) → `migrator` runs and must exit 0 (`service_completed_successfully`) → `api` → `caddy`.
-  `start api` runs the migrator again too. No Docker `HEALTHCHECK` on api or caddy.
+  stack) → `migrator` runs and must exit 0 (`service_completed_successfully`) → locally,
+  `db-grants` (one-shot, re-applies the DB role grants; see "Database roles") must exit 0 → `api` →
+  `caddy`. `start api` runs the migrator again too. No Docker `HEALTHCHECK` on api or caddy.
 - **Network:** `internal`, subnet `172.30.0.0/24`, Caddy at `172.30.0.10`, the only address in
   `ForwardedHeaders:KnownProxies`. Postgres has no published port.
 - **Ports:** Caddy `80`, `443` TCP and `443/udp` (80 redirects to HTTPS). UDP 443 carries HTTP/3
@@ -904,10 +906,11 @@ deploy/local.sh down               # add -v to also delete the local database an
 - **Secrets:** compose `secrets:` with `file:` sources, mounted at `/run/secrets/<name>`, declared
   in the overlay (the base names none). API files are named after config keys:
   `N2YO__ApiKey`, `Firebase__ServiceAccountJson`, `Admin__ApiKey`,
-  `ConnectionStrings__DefaultConnection`. Plus `migrator_connection_string` (migrator only) and
-  `postgres_password` (`POSTGRES_PASSWORD_FILE`). The API reads every file mounted into its
-  `/run/secrets`, so each service lists only its own. Locally the migrator uses the app's DB user;
-  separate roles come later.
+  `ConnectionStrings__DefaultConnection` (user `sattrakk_app`). Plus `migrator_connection_string`
+  (migrator only, user `sattrakk_migrator`), `postgres_password` (`POSTGRES_PASSWORD_FILE`, the
+  superuser) and `migrator_db_password` / `app_db_password` (postgres init script; the first also
+  `db-grants`). The API reads every file mounted into its `/run/secrets`, so each service lists
+  only its own.
 - **Overlays contain only differences.** Compose appends lists (`ports`, `secrets`, `networks`), so
   never repeat a base list field in an overlay. Use `!override` if one must be replaced.
 - **Replacing a secret file needs `up -d --force-recreate <service>`**: a plain `up` or `restart`
@@ -925,6 +928,41 @@ deploy/local.sh down               # add -v to also delete the local database an
   is to be added. Forwarded-header handling is checked through the rate limiter's per-IP partition
   (`RateLimitingTests`, `ForwardedHeadersTests`).
 - An Azure overlay is a later task.
+
+### Database roles — least privilege (I2.8, 2026-11-15)
+
+The migrator and the API use different Postgres roles. Full details, the reasons for the split and
+the Azure runbook are in `deploy/db/README.md`.
+
+| Role | Rights | Connection limit |
+|------|--------|------------------|
+| `sattrakk_migrator` | `CONNECT`, `USAGE` + `CREATE` on schema `public`, **owns** every table (DDL) | 3 |
+| `sattrakk_app` | `CONNECT`, `USAGE` on `public`; tables `SELECT/INSERT/UPDATE/DELETE`, sequences `USAGE/SELECT`; `__EFMigrationsHistory` `SELECT` only. No `CREATE`, `TRUNCATE`, `REFERENCES`, `TRIGGER` | 25 (pool max 20) |
+
+- `PUBLIC` has no privilege on the database. Both SQL files use `current_database()` and contain
+  **no passwords**.
+- **Split by who runs it:** `deploy/db/01-roles-admin.sql` as the admin (roles, limits, database
+  and schema privileges); `deploy/db/02-default-privileges-migrator.sql` as `sattrakk_migrator`
+  (default privileges, grants on existing objects, the `__EFMigrationsHistory` restriction, skipped
+  while that table doesn't exist). Both idempotent. Reason: the Azure Flexible Server admin isn't a
+  superuser, and since Postgres 16 `CREATEROLE` only gives it `ADMIN OPTION` on roles it creates,
+  so it can't act as the migrator, set its default privileges or grant on its tables.
+- **The app never runs DDL.** Any future change that needs the API to create or alter objects at
+  runtime (e.g. `Database.Migrate()` in `Program.cs`, `CREATE TEMP TABLE`) fails with
+  `permission denied`. Schema changes go through migrations only.
+- **Local stack:** `deploy/db/local/initdb-roles.sh` is mounted into the postgres container's
+  `/docker-entrypoint-initdb.d/` and runs once on a fresh volume: 01 as superuser `satellite_user`,
+  passwords from `/run/secrets/migrator_db_password` and `app_db_password`, then 02 as
+  `sattrakk_migrator`. The one-shot `db-grants` service re-runs 02 after the migrator on every `up`
+  (only then does `__EFMigrationsHistory` exist). The superuser is used by nothing else.
+- **A pre-I2.8 local volume must be recreated** (`deploy/local.sh down -v`): its tables are owned by
+  `satellite_user`, and the init script never runs on an existing volume.
+- **Check:** `deploy/db/verify-roles.sh` (local stack) prints PASS/FAIL for app DDL denied, app DML
+  allowed, history read-only, default privileges, connection limits and idempotent re-runs.
+- **Azure:** manual runbook (`deploy/db/README.md`): admin runs 01 → admin `\password` both roles →
+  migrator runs 02 → first migration → migrator runs 02 again, before the API starts.
+- The dev database used by `dotnet run` (root `docker-compose.yml`) is unchanged and still uses
+  `satellite_user` for everything.
 
 ---
 
