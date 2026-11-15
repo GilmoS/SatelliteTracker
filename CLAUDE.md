@@ -954,7 +954,8 @@ the Azure runbook are in `deploy/db/README.md`.
   `/docker-entrypoint-initdb.d/` and runs once on a fresh volume: 01 as superuser `satellite_user`,
   passwords from `/run/secrets/migrator_db_password` and `app_db_password`, then 02 as
   `sattrakk_migrator`. The one-shot `db-grants` service re-runs 02 after the migrator on every `up`
-  (only then does `__EFMigrationsHistory` exist). The superuser is used by nothing else.
+  (only then does `__EFMigrationsHistory` exist). Kept by decision (2026-11-15) instead of a manual
+  local step; don't remove it. The superuser is used by nothing else.
 - **A pre-I2.8 local volume must be recreated** (`deploy/local.sh down -v`): its tables are owned by
   `satellite_user`, and the init script never runs on an existing volume.
 - **Check:** `deploy/db/verify-roles.sh` (local stack) prints PASS/FAIL for app DDL denied, app DML
