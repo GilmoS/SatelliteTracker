@@ -1,0 +1,74 @@
+# SatTrakk deployment stack: BASE, identical in every environment.
+#
+# Never run this file alone. An environment overlay adds what differs (image source, database,
+# secrets, site address); locally that is compose.local.yaml, through ./local.sh.
+#
+#   caddy    -> public entry point (80/443), TLS, reverse proxy to api:8080
+#   api      -> the API, reachable from the host only on 127.0.0.1:8080 (SSH tunnel on the VM)
+#   migrator -> applies pending EF Core migrations, then exits; runs before api on every `up`
+#
+# No Docker HEALTHCHECK on purpose: Caddy actively checks /health/live (see Caddyfile).
+# No secret appears here. Overlays mount them as files in /run/secrets (see secrets/README.md).
+
+name: sattrakk
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    mem_limit: 128m
+    ports:
+      - "80:80"
+      - "443:443"
+      # HTTP/3 (QUIC) runs over UDP. Caddy enables it by default and advertises it with Alt-Svc.
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and the ACME account. Must persist: losing them means re-issuing on every
+      # recreate, which runs into Let's Encrypt rate limits.
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      internal:
+        # Fixed, and the only address the API trusts for X-Forwarded-For/-Proto (see api below).
+        ipv4_address: 172.30.0.10
+    depends_on:
+      api:
+        condition: service_started
+
+  api:
+    image: sattrakk-api:${IMAGE_TAG:?IMAGE_TAG must be set}
+    # Locally: restarted forever (with backoff). The Azure overlay will override this with a
+    # limited "on-failure:N", so an API that exits 1 on bad config stops instead of looping.
+    restart: unless-stopped
+    mem_limit: 512m
+    ports:
+      # Loopback only: the public path is through Caddy.
+      - "127.0.0.1:8080:8080"
+    environment:
+      # Must match caddy's ipv4_address. Indexed form: a plain ForwardedHeaders__KnownProxies
+      # would not bind to the list and would trust nobody.
+      ForwardedHeaders__KnownProxies__0: 172.30.0.10
+    networks:
+      - internal
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+
+  migrator:
+    image: sattrakk-migrator:${IMAGE_TAG:?IMAGE_TAG must be set}
+    # One-shot. The image's entrypoint reads the connection string from
+    # /run/secrets/migrator_connection_string and runs the migration bundle.
+    restart: "no"
+    networks:
+      - internal
+
+networks:
+  internal:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -59,6 +59,8 @@ No secrets live in tracked files, local dev credentials included.
 - **Local Postgres password** lives in a git-ignored `.env` next to `docker-compose.yml`, which
   reads it as `${POSTGRES_PASSWORD}`. Create it with `cp .env.example .env` and set the same
   password you use in the connection string.
+- **Compose stack secrets** (`deploy/`, I2.7) are files in the git-ignored `deploy/secrets/`; the
+  committed `deploy/secrets/README.md` lists the file names. See "Deployment stack".
 
 The `dotnet ef` commands create `AppDbContext` through `DesignTimeDbContextFactory`
 (`SatelliteTracker.Database`), never through the API's `Program.cs`, so they need no secrets and
@@ -77,6 +79,27 @@ bound to a typed options class and validated with `ValidateOnStart()` in
 `AddValidatedConfiguration()` (`SatelliteTracker.API.Configuration`). A missing or invalid value
 stops the host before it serves anything, with one error that lists **every** failure, naming the
 key and the broken rule, never the value.
+
+**Exit code 1 (I2.7):** `Program` ends with `HostRunner.RunAsync(app)` instead of `app.Run()`. It
+runs the startup validator itself before starting the host, logs ONE critical message
+(`SatelliteTracker.API.Startup`) listing every failed setting, and returns exit code 1, instead of
+the host's "Hosting failed to start" stack traces and a runtime crash code (139 in the container).
+Anything thrown outside that validation step keeps its default behavior. Because `Program` no
+longer throws, `WebApplicationFactory` can't surface the message as an exception:
+`CustomWebApplicationFactory.Logs` captures it, and `ConfigurationValidationTests` read it there.
+
+**Secret files (I2.7):** `builder.AddSecretFiles()` reads `/run/secrets` (Docker Compose secrets)
+with the key-per-file provider: file `N2YO__ApiKey` → key `N2YO:ApiKey`, one trailing newline
+trimmed. Added **last**, so a secret file overrides `appsettings*.json` and every other source,
+**environment variables and command line included** (decided 2026-11-15, on purpose, against the
+usual .NET order): the secret file is the single source of truth, and a stray or leftover
+environment variable can't silently shadow a real key. Don't move it before the environment
+variables. To override a secret, edit the file and `up -d --force-recreate` the service.
+Optional: nothing changes when the folder doesn't exist. A file that is listed but can't be opened
+(permissions, a bind mount whose source is gone) is skipped and reported by `SecretFilesValidator`
+("Secret file … exists but cannot be read"), so it also ends in exit code 1, not a crash during
+configuration loading. The provider opens files before its `IgnoreCondition` runs, which is why
+unreadable files are filtered in a wrapping file provider instead.
 
 | Key | Purpose | Validation rule | Local source |
 |-----|---------|-----------------|--------------|
@@ -792,13 +815,20 @@ One multi-stage `backend/Dockerfile` (build context `backend/`) produces two ima
 | Target | Base | Contains | Runs |
 |--------|------|----------|------|
 | `api` | `mcr.microsoft.com/dotnet/aspnet:9.0` (Debian) | framework-dependent Release publish of the API | permanently: `dotnet SatelliteTracker.API.dll`, port 8080, user `app` (UID 1654) |
-| `migrator` | `mcr.microsoft.com/dotnet/runtime-deps:9.0` (Debian) | only `efbundle`, a self-contained `linux-x64` EF Core migration bundle | once per deploy, applies pending migrations, exits; user `app` |
+| `migrator` | `mcr.microsoft.com/dotnet/runtime-deps:9.0` (Debian) | `efbundle`, a self-contained `linux-x64` EF Core migration bundle, and its wrapper `migrator-entrypoint.sh` | once per deploy, applies pending migrations, exits; user `app` |
 
 ```bash
 docker build --platform linux/amd64 --target api      -t sattrakk-api:local      backend/
 docker build --platform linux/amd64 --target migrator -t sattrakk-migrator:local backend/
 docker run --rm sattrakk-migrator:local --connection "<connection-string>"   # apply migrations
 ```
+
+The migrator's entrypoint is `backend/docker/migrator-entrypoint.sh` (I2.7). With arguments it
+passes them to `efbundle` unchanged (the `docker run` above). Without arguments (how compose runs
+it) it reads the connection string from `MIGRATOR_CONNECTION_FILE`, default
+`/run/secrets/migrator_connection_string`, strips CR/LF, and runs `efbundle --connection`. A
+missing or empty file exits 1 with a message. `*.sh` is forced to LF in `.gitattributes`, since a
+Windows checkout with `core.autocrlf` would otherwise break the shebang.
 
 - **Always pass `--platform linux/amd64`.** The VM is x64. Apple Silicon Macs build ARM images by
   default, which would not run there (the bundle is `linux-x64` either way, but the base layers
@@ -812,16 +842,16 @@ docker run --rm sattrakk-migrator:local --connection "<connection-string>"   # a
 - **Configuration is supplied at run time only.** No secret, connection string or `ENV` with a
   secret is in any stage; `appsettings.Development.json` is excluded by `.dockerignore`.
   `ASPNETCORE_ENVIRONMENT` is not set, so the API runs as `Production`. Started with no config, the
-  API container exits within seconds with the I2.2 error listing every missing key. How config
-  reaches the containers (compose, Key Vault) is a later task.
+  API container exits with code 1 within seconds, logging one critical message listing every
+  missing key. Compose supplies config as secret files; see "Deployment stack".
 - **Why `DesignTimeDbContextFactory` exists:** without it, the EF tools build the API host to get
   `AppDbContext`, which needs the validated configuration, and the build stage has no secrets.
   The factory gives the tools a placeholder connection string; creating a bundle never connects.
   The bundle uses the Database project as its own startup project, so it contains none of the API.
   It uses the same `UseAppNpgsql` (provider + retry policy) as the API.
-- **The migrator always needs `--connection`.** Without it, the bundle falls back to the factory's
-  placeholder and fails with "Name or service not known". Re-running it on an up-to-date database
-  is a no-op.
+- **The bundle always needs `--connection`** (the wrapper supplies it from the secret file).
+  Without it, the bundle falls back to the factory's placeholder and fails with "Name or service
+  not known". Re-running it on an up-to-date database is a no-op.
 - **Workstation GC** (`<ServerGarbageCollection>false</ServerGarbageCollection>` in the API csproj):
   the VM has about 1 GiB RAM.
 - `dotnet-ef` is pinned in `backend/.config/dotnet-tools.json` at the EF Core package version
@@ -829,6 +859,72 @@ docker run --rm sattrakk-migrator:local --connection "<connection-string>"   # a
 - Base images are pinned to the `9.0` tag only; digest pinning and Dependabot come later.
 - **CI:** the `docker` job in `ci.yml` builds both targets for `linux/amd64` with Buildx and the
   GitHub Actions cache (one scope per target). It never pushes or logs in to a registry.
+
+---
+
+## Deployment stack — `deploy/` (I2.7)
+
+The production-like Docker Compose stack. The root `docker-compose.yml` (dev Postgres for
+`dotnet run`) is separate and unchanged.
+
+| File | Role |
+|------|------|
+| `deploy/compose.yaml` | **Base, identical in every environment:** `caddy`, `api`, `migrator`, network `internal`, limits. Project name `sattrakk`. |
+| `deploy/compose.local.yaml` | **Local overlay, differences only:** `build` from `../backend` (native, no `--platform`), `postgres:16`, secrets from files, `SITE_ADDRESS=localhost` |
+| `deploy/Caddyfile` | Site `{$SITE_ADDRESS}`; `/api/admin`, `/api/admin/*`, `/health/details`, `/health/details/*` → `respond 404`; `reverse_proxy api:8080` with active check `/health/live` every 10 s; no HSTS yet |
+| `deploy/local.sh` | `docker compose -f compose.yaml -f compose.local.yaml "$@"`, with `IMAGE_TAG` defaulting to `local` |
+| `deploy/secrets/` | Git-ignored, one file per secret; only `README.md` (the file names) is committed |
+
+```bash
+deploy/local.sh up -d --build      # build both images, start postgres → migrator → api → caddy
+deploy/local.sh ps
+curl -k https://localhost/health/ready
+deploy/local.sh down               # add -v to also delete the local database and Caddy's certificates
+```
+
+- **Order on every `up`:** postgres healthy (`pg_isready` over TCP; the only healthcheck in the
+  stack) → `migrator` runs and must exit 0 (`service_completed_successfully`) → `api` → `caddy`.
+  `start api` runs the migrator again too. No Docker `HEALTHCHECK` on api or caddy.
+- **Network:** `internal`, subnet `172.30.0.0/24`, Caddy at `172.30.0.10`, the only address in
+  `ForwardedHeaders:KnownProxies`. Postgres has no published port.
+- **Ports:** Caddy `80`, `443` TCP and `443/udp` (80 redirects to HTTPS). UDP 443 carries HTTP/3
+  (QUIC), which Caddy enables by default and advertises with `Alt-Svc: h3=":443"`. Decided
+  2026-11-15. Clients without UDP fall back to HTTP/2 over TCP. The Azure NSG must allow
+  UDP 443 too. The API only `127.0.0.1:8080` (an SSH tunnel on the VM). That is where
+  `/health/details` and `api/admin/*` stay reachable.
+- **Limits:** api `mem_limit: 512m`, caddy `128m`, local postgres `512m`. `restart: unless-stopped`
+  except the migrator (`"no"`). Locally, an API that exits 1 on bad config is restarted by Docker
+  with backoff and logs the same message each time.
+- **Azure restart policy (decided 2026-11-15, for the Azure overlay task):** the Azure overlay
+  overrides the api's `restart` with a limited `on-failure:N`, so an API that keeps exiting 1 on bad
+  config stops after N attempts instead of looping. `restart` is a scalar, so the overlay value
+  replaces the base. N is to be chosen in that task. Caddy stays `unless-stopped`.
+- **Caddy volumes:** `caddy_data` (`/data`: certificates, ACME account) **must persist**;
+  `caddy_config` holds `/config`.
+- **Secrets:** compose `secrets:` with `file:` sources, mounted at `/run/secrets/<name>`, declared
+  in the overlay (the base names none). API files are named after config keys:
+  `N2YO__ApiKey`, `Firebase__ServiceAccountJson`, `Admin__ApiKey`,
+  `ConnectionStrings__DefaultConnection`. Plus `migrator_connection_string` (migrator only) and
+  `postgres_password` (`POSTGRES_PASSWORD_FILE`). The API reads every file mounted into its
+  `/run/secrets`, so each service lists only its own. Locally the migrator uses the app's DB user;
+  separate roles come later.
+- **Overlays contain only differences.** Compose appends lists (`ports`, `secrets`, `networks`), so
+  never repeat a base list field in an overlay. Use `!override` if one must be replaced.
+- **Replacing a secret file needs `up -d --force-recreate <service>`**: a plain `up` or `restart`
+  keeps the old bind mount. If a secret file is missing when a container is created, Docker Desktop
+  creates an empty **directory** with that name on the host; delete it before putting the file
+  back. The API skips directories, so it reports the key as missing.
+- **Caddy blocks paths case-insensitively and after normalization.** Checked through Caddy: mixed
+  case, `%61dmin`, `/./`, `/x/../` and trailing-slash variants all get 404.
+- **Verified locally on 2026-11-15** (PR for I2.7): migrator exit 0, `ready` Degraded with dummy
+  secrets (database Healthy; no TLE/passes because the N2YO key is fake; FCM token request fails
+  with the fake service account), forged `X-Forwarded-For` ignored, missing N2YO secret → exit 1,
+  Caddy 502/503 while the API is stopped and back within ~6 s, and an `--http3-only` request over
+  UDP 443 answered with HTTP/3 200.
+- **No client-address request log** (decided 2026-11-15): the API doesn't log client IPs, and none
+  is to be added. Forwarded-header handling is checked through the rate limiter's per-IP partition
+  (`RateLimitingTests`, `ForwardedHeadersTests`).
+- An Azure overlay is a later task.
 
 ---
 
@@ -914,9 +1010,10 @@ only through Caddy, and many testers may share one public IP (corporate NAT).
 - Set a proxy from the environment with an index: `ForwardedHeaders__KnownProxies__0=172.30.0.10`.
   A plain `ForwardedHeaders__KnownProxies=...` (no index) is not bound to the list and would
   silently trust nobody.
-- **For the Docker compose task:** give Caddy a **fixed IP in a fixed compose subnet** and put that
-  IP in `ForwardedHeaders:KnownProxies`. A dynamic IP would change on recreate, and the API would
-  then see every client as Caddy's address.
+- **Compose (I2.7):** Caddy has the fixed IP `172.30.0.10` in the fixed subnet `172.30.0.0/24`, and
+  `deploy/compose.yaml` sets `ForwardedHeaders__KnownProxies__0=172.30.0.10` on the API. Change both
+  together. A dynamic IP would change on recreate, and the API would then see every client as
+  Caddy's address.
 
 ### Backlog
 

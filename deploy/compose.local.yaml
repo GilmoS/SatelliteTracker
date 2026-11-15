@@ -1,0 +1,76 @@
+# LOCAL overlay for compose.yaml. Only the differences from the base: images built from source,
+# a local Postgres, secrets from files in ./secrets, and the site address.
+# Use it through ./local.sh (it also sets IMAGE_TAG=local).
+#
+# Compose merges overlays by key but APPENDS lists (ports, networks, secrets, ...), so never
+# repeat a base list field here.
+
+services:
+  api:
+    build:
+      context: ../backend
+      target: api
+    secrets:
+      # The API reads every file in /run/secrets as a setting, so it gets only its own four.
+      - N2YO__ApiKey
+      - Firebase__ServiceAccountJson
+      - Admin__ApiKey
+      - ConnectionStrings__DefaultConnection
+
+  migrator:
+    build:
+      context: ../backend
+      target: migrator
+    secrets:
+      - migrator_connection_string
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  caddy:
+    environment:
+      # Caddy issues a certificate from its own internal CA for localhost: use curl -k.
+      SITE_ADDRESS: localhost
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    mem_limit: 512m
+    environment:
+      POSTGRES_DB: satellite_tracker
+      POSTGRES_USER: satellite_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # Internal network only: no published port.
+    networks:
+      - internal
+    # The only healthcheck in the stack: the migrator waits for it. Over TCP (-h 127.0.0.1)
+    # because the first-run init server listens on the Unix socket only, and must not count.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U satellite_user -d satellite_tracker"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+# One file per secret, mounted at /run/secrets/<name>. Names of the API's secrets are its config
+# keys with "__" for ":". See secrets/README.md.
+secrets:
+  N2YO__ApiKey:
+    file: ./secrets/N2YO__ApiKey
+  Firebase__ServiceAccountJson:
+    file: ./secrets/Firebase__ServiceAccountJson
+  Admin__ApiKey:
+    file: ./secrets/Admin__ApiKey
+  ConnectionStrings__DefaultConnection:
+    file: ./secrets/ConnectionStrings__DefaultConnection
+  migrator_connection_string:
+    file: ./secrets/migrator_connection_string
+  postgres_password:
+    file: ./secrets/postgres_password
+
+volumes:
+  postgres_data:

@@ -19,6 +19,11 @@ using SatelliteTracker.TLEService.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Secret files (Docker Compose secrets in /run/secrets, e.g. N2YO__ApiKey -> N2YO:ApiKey). Added
+// last, so they override appsettings*.json and every other source. Absent outside a container.
+// An unreadable secret file fails startup validation instead of crashing here.
+builder.AddSecretFiles();
+
 // Typed, validated settings (N2YO, Firebase, Admin, Observer, connection string). The host
 // refuses to start if any is missing or invalid — see AddValidatedConfiguration.
 builder.Services.AddValidatedConfiguration();
@@ -136,7 +141,10 @@ app.UseAuthentication();
 app.UseRateLimiter();
 app.UseAuthorization();
 app.MapControllers();
-app.Run();
+
+// Like app.Run(), but a configuration validation failure at startup logs one critical message
+// listing the failed settings and exits with code 1 (see HostRunner).
+return await HostRunner.RunAsync(app);
 
 // Exposed so SatelliteTracker.Tests can boot the real host via WebApplicationFactory<Program>.
 public partial class Program { }

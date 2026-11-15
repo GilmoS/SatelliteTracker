@@ -64,9 +64,12 @@ RUN dotnet ef migrations bundle \
 FROM mcr.microsoft.com/dotnet/runtime-deps:9.0 AS migrator
 WORKDIR /app
 COPY --from=bundle /out/migrator/efbundle ./efbundle
+# The wrapper reads the connection string from a secret file when run without arguments (compose),
+# and passes any arguments straight to the bundle (docker run ... --connection "<...>").
+COPY --chmod=755 docker/migrator-entrypoint.sh ./migrator-entrypoint.sh
 # Built-in non-root user (APP_UID is defined by the .NET base images).
 USER $APP_UID
-ENTRYPOINT ["./efbundle"]
+ENTRYPOINT ["./migrator-entrypoint.sh"]
 
 # ---------------------------------------------------------------------------------------------
 # api: the long-running API. Last stage, so a build without --target produces this image.

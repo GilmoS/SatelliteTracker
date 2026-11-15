@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using SatelliteTracker.Database;
 using SatelliteTracker.PassService.Services;
 using SatelliteTracker.TLEService.Jobs;
@@ -47,6 +48,10 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
         _connection.Open();
     }
 
+    // Everything the host logged. A startup configuration failure is reported here (one critical
+    // entry from HostRunner), not as an exception: Program returns exit code 1 instead of throwing.
+    public CapturingLoggerProvider Logs { get; } = new();
+
     // A valid configuration. None of these are real credentials; the Firebase service account is
     // built at runtime around a freshly generated RSA key, so no private key is ever committed.
     public static IReadOnlyDictionary<string, string?> TestSettings { get; } = new Dictionary<string, string?>
@@ -60,6 +65,8 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
+
+        builder.ConfigureLogging(logging => logging.AddProvider(Logs));
 
         builder.ConfigureAppConfiguration((_, config) =>
         {
