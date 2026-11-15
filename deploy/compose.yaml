@@ -20,6 +20,8 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      # HTTP/3 (QUIC) runs over UDP. Caddy enables it by default and advertises it with Alt-Svc.
+      - "443:443/udp"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # Certificates and the ACME account. Must persist: losing them means re-issuing on every
@@ -36,6 +38,8 @@ services:
 
   api:
     image: sattrakk-api:${IMAGE_TAG:?IMAGE_TAG must be set}
+    # Locally: restarted forever (with backoff). The Azure overlay will override this with a
+    # limited "on-failure:N", so an API that exits 1 on bad config stops instead of looping.
     restart: unless-stopped
     mem_limit: 512m
     ports:

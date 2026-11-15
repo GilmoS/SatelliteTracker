@@ -883,11 +883,18 @@ deploy/local.sh down               # add -v to also delete the local database an
   `start api` runs the migrator again too. No Docker `HEALTHCHECK` on api or caddy.
 - **Network:** `internal`, subnet `172.30.0.0/24`, Caddy at `172.30.0.10`, the only address in
   `ForwardedHeaders:KnownProxies`. Postgres has no published port.
-- **Ports:** Caddy `80`/`443` (80 redirects to HTTPS). The API only `127.0.0.1:8080` (an SSH tunnel
-  on the VM). That is where `/health/details` and `api/admin/*` stay reachable.
+- **Ports:** Caddy `80`, `443` TCP and `443/udp` (80 redirects to HTTPS). UDP 443 carries HTTP/3
+  (QUIC), which Caddy enables by default and advertises with `Alt-Svc: h3=":443"`. Decided
+  2026-11-15. Clients without UDP fall back to HTTP/2 over TCP. The Azure NSG must allow
+  UDP 443 too. The API only `127.0.0.1:8080` (an SSH tunnel on the VM). That is where
+  `/health/details` and `api/admin/*` stay reachable.
 - **Limits:** api `mem_limit: 512m`, caddy `128m`, local postgres `512m`. `restart: unless-stopped`
-  except the migrator (`"no"`). An API that exits 1 on bad config is restarted by Docker with
-  backoff and logs the same message each time.
+  except the migrator (`"no"`). Locally, an API that exits 1 on bad config is restarted by Docker
+  with backoff and logs the same message each time.
+- **Azure restart policy (decided 2026-11-15, for the Azure overlay task):** the Azure overlay
+  overrides the api's `restart` with a limited `on-failure:N`, so an API that keeps exiting 1 on bad
+  config stops after N attempts instead of looping. `restart` is a scalar, so the overlay value
+  replaces the base. N is to be chosen in that task. Caddy stays `unless-stopped`.
 - **Caddy volumes:** `caddy_data` (`/data`: certificates, ACME account) **must persist**;
   `caddy_config` holds `/config`.
 - **Secrets:** compose `secrets:` with `file:` sources, mounted at `/run/secrets/<name>`, declared
@@ -908,7 +915,11 @@ deploy/local.sh down               # add -v to also delete the local database an
 - **Verified locally on 2026-11-15** (PR for I2.7): migrator exit 0, `ready` Degraded with dummy
   secrets (database Healthy; no TLE/passes because the N2YO key is fake; FCM token request fails
   with the fake service account), forged `X-Forwarded-For` ignored, missing N2YO secret → exit 1,
-  Caddy 502/503 while the API is stopped and back within ~6 s.
+  Caddy 502/503 while the API is stopped and back within ~6 s, and an `--http3-only` request over
+  UDP 443 answered with HTTP/3 200.
+- **No client-address request log** (decided 2026-11-15): the API doesn't log client IPs, and none
+  is to be added. Forwarded-header handling is checked through the rate limiter's per-IP partition
+  (`RateLimitingTests`, `ForwardedHeadersTests`).
 - An Azure overlay is a later task.
 
 ---
